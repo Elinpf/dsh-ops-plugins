@@ -262,17 +262,23 @@ function apply(ctx: any, _config: Record<string, never>): void {
       const projection = agent.session.projections?.faceOf?.('todo_tree')?.getSnapshot?.()
       const currentTree: TreeState | null = projection ?? null
 
+      // The event we will append and the locally-folded result.
+      // We compute the return value from the local fold, NOT from re-reading
+      // the projection — session.append is synchronous but the projection's
+      // eager fold may not have run yet, so getSnapshot() could return stale state.
+      let eventType: string = ''
+      let eventData: Record<string, unknown> = {}
+
       switch (args.action as TodoTreeAction) {
         case 'create_tree': {
           if (currentTree) throw new Error('todo_tree: tree already exists')
           if (!args.root_title) throw new Error('todo_tree: root_title is required for create_tree')
           if (!args.goal_title) throw new Error('todo_tree: goal_title is required for create_tree')
-          const rootId = 'root'
-          const goalId = 'goal'
-          agent.session.append('todo_tree/create', {
-            turn, root_id: rootId, root_title: args.root_title,
-            goal_id: goalId, goal_title: args.goal_title,
-          })
+          eventType = 'todo_tree/create'
+          eventData = {
+            turn, root_id: 'root', root_title: args.root_title,
+            goal_id: 'goal', goal_title: args.goal_title,
+          }
           break
         }
 
@@ -285,10 +291,11 @@ function apply(ctx: any, _config: Record<string, never>): void {
           if (!parent) throw new Error(`todo_tree: parent node "${args.parent_id}" not found`)
           const nodeId = generateId()
           const kind = args.action === 'add_milestone' ? 'milestone' : 'step'
-          agent.session.append('todo_tree/add', {
+          eventType = 'todo_tree/add'
+          eventData = {
             turn, node_id: nodeId, parent_id: args.parent_id,
             title: args.title, kind, branch: args.branch ?? false,
-          })
+          }
           break
         }
 
@@ -309,7 +316,8 @@ function apply(ctx: any, _config: Record<string, never>): void {
           const eventMap: Record<string, string> = {
             start: 'todo_tree/start', complete: 'todo_tree/complete', abandon: 'todo_tree/abandon',
           }
-          agent.session.append(eventMap[args.action], { turn, node_id: args.node_id })
+          eventType = eventMap[args.action]
+          eventData = { turn, node_id: args.node_id }
           break
         }
 
@@ -322,9 +330,8 @@ function apply(ctx: any, _config: Record<string, never>): void {
           if (!canTransition(goal.status, 'resolved')) {
             throw new Error(`todo_tree: goal is "${goal.status}", cannot resolve`)
           }
-          agent.session.append('todo_tree/resolve', {
-            turn, goal_id: goal.id, summary: args.summary,
-          })
+          eventType = 'todo_tree/resolve'
+          eventData = { turn, goal_id: goal.id, summary: args.summary }
           break
         }
 
@@ -334,7 +341,8 @@ function apply(ctx: any, _config: Record<string, never>): void {
           if (!args.detail) throw new Error('todo_tree: detail is required for note')
           const node = currentTree.nodes.find((n) => n.id === args.node_id)
           if (!node) throw new Error(`todo_tree: node "${args.node_id}" not found`)
-          agent.session.append('todo_tree/note', { turn, node_id: args.node_id, detail: args.detail })
+          eventType = 'todo_tree/note'
+          eventData = { turn, node_id: args.node_id, detail: args.detail }
           break
         }
 
@@ -342,8 +350,12 @@ function apply(ctx: any, _config: Record<string, never>): void {
           throw new Error(`todo_tree: unknown action "${args.action}"`)
       }
 
-      // Read the updated tree from the projection after the append
-      const updated = agent.session.projections?.faceOf?.('todo_tree')?.getSnapshot?.() ?? null
+      // Append the event to the session log
+      agent.session.append(eventType, eventData)
+
+      // Compute the return value by folding the event locally — the projection's
+      // eager fold may not have run yet, so we cannot rely on getSnapshot().
+      const updated = foldEvent(currentTree, { type: eventType, data: eventData })
       return { tree: updated, summary: buildSummary(updated) }
     },
 
