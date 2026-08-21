@@ -705,11 +705,14 @@ function apply(ctx: any, _config: Record<string, never>): void {
     '- When resolved: `resolve` with a summary.',
   ].join('\n')
 
-  ctx.systemPrompt.section({
-    name: 'tool:todo_tree',
-    order: 240,
-    text: staticText,
-  })
+  const systemPrompt = ctx.get('systemPrompt')
+  if (systemPrompt !== undefined) {
+    systemPrompt.section({
+      name: 'tool:todo_tree',
+      order: 240,
+      text: staticText,
+    })
+  }
 
   // Inject reminder directly into the conversation flow via agent/pre-step.
   // systemPrompt.section is only re-read at prompt assembly (background noise);
