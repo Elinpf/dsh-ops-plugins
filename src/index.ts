@@ -540,46 +540,85 @@ function apply(ctx: any, _config: Record<string, never>): void {
   }))
 
   // ── System prompt section ──────────────────────────────────────────────────
+  // Static documentation (always present)
+  const staticText = [
+    '## todo_tree — Investigation Tree',
+    '',
+    'Use `todo_tree` to maintain an investigation tree for the current incident response.',
+    'Unlike a flat todo list, the tree records the full exploration trail — dead ends stay visible, branches show parallel paths.',
+    '',
+    '### Actions',
+    '- `create_tree` — Create the tree with a root problem and a final goal. Call this once at the start.',
+    '- `add_step` — Add a concrete step as a child of an existing node. Set `branch=true` for a side path. Optional `id` for a semantic id (e.g. "ceph-full"); omit for auto n1/n2/...',
+    '- `add_milestone` — Add a milestone. Same params as add_step.',
+    '- `start` — Mark a node as in_progress.',
+    '- `complete` — Mark a node as done (can skip start — pending also transitions to done directly).',
+    '- `abandon` — Mark a node as a dead end (it stays on the tree; you can re-explore later).',
+    '- `reopen` — Reactivate an abandoned (dead_end) node back to in_progress.',
+    '- `resolve` — Mark the final goal as resolved. Requires a `summary`.',
+    '- `note` — Add detail text to a node.',
+    '- `view` — Retrieve the full tree with all details (titles, notes, summaries, turns). Optional `status_filter` to show only one status (e.g. status_filter="in_progress").',
+    '',
+    '### Output format',
+    'Each call returns a compact tree: id + status + title, one line per node.',
+    'Status: pending, in_progress, done, dead_end, resolved.',
+    'New nodes from add_step/add_milestone are marked with *.',
+    'Use `view` to see full details (notes, summaries, turns).',
+    '',
+    '### Discipline',
+    '- **Every 3 turns of investigation, at least 1 todo_tree update.**',
+    '- **Waiting loops**: use `note` to record observations even when "nothing changed" (e.g. "Pod still ContainerCreating after 3min").',
+    '- **Unexpected branches**: when an investigation leads somewhere unplanned, immediately `add_step` with `branch=true` to record the new direction.',
+    '- **Dead ends are valuable**: `abandon` them — the full exploration trail is the record.',
+    '- **Don\'t forget**: if you lose track of what a node id means, call `view`.',
+    '',
+    '### Lifecycle',
+    '- At the start of an incident: `create_tree` with the problem and the goal.',
+    '- Before investigating: `add_step` for each concrete check.',
+    '- When a path doesn\'t work: `abandon` it.',
+    '- When resolved: `resolve` with a summary.',
+  ].join('\n')
+
   ctx.systemPrompt.section({
     name: 'tool:todo_tree',
     order: 240,
-    text: [
-      '## todo_tree — Investigation Tree',
-      '',
-      'Use `todo_tree` to maintain an investigation tree for the current incident response.',
-      'Unlike a flat todo list, the tree records the full exploration trail — dead ends stay visible, branches show parallel paths.',
-      '',
-      '### Actions',
-      '- `create_tree` — Create the tree with a root problem and a final goal. Call this once at the start.',
-      '- `add_step` — Add a concrete step as a child of an existing node. Set `branch=true` for a side path. Optional `id` for a semantic id (e.g. "ceph-full"); omit for auto n1/n2/...',
-      '- `add_milestone` — Add a milestone. Same params as add_step.',
-      '- `start` — Mark a node as in_progress.',
-      '- `complete` — Mark a node as done (can skip start — pending also transitions to done directly).',
-      '- `abandon` — Mark a node as a dead end (it stays on the tree; you can re-explore later).',
-      '- `reopen` — Reactivate an abandoned (dead_end) node back to in_progress.',
-      '- `resolve` — Mark the final goal as resolved. Requires a `summary`.',
-      '- `note` — Add detail text to a node.',
-      '- `view` — Retrieve the full tree with all details (titles, notes, summaries, turns). Optional `status_filter` to show only one status (e.g. status_filter="in_progress").',
-      '',
-      '### Output format',
-      'Each call returns a compact tree: id + status + title, one line per node.',
-      'Status: pending, in_progress, done, dead_end, resolved.',
-      'New nodes from add_step/add_milestone are marked with *.',
-      'Use `view` to see full details (notes, summaries, turns).',
-      '',
-      '### Discipline',
-      '- **Every 3 turns of investigation, at least 1 todo_tree update.**',
-      '- **Waiting loops**: use `note` to record observations even when "nothing changed" (e.g. "Pod still ContainerCreating after 3min").',
-      '- **Unexpected branches**: when an investigation leads somewhere unplanned, immediately `add_step` with `branch=true` to record the new direction.',
-      '- **Dead ends are valuable**: `abandon` them — the full exploration trail is the record.',
-      '- **Don\'t forget**: if you lose track of what a node id means, call `view`.',
-      '',
-      '### Lifecycle',
-      '- At the start of an incident: `create_tree` with the problem and the goal.',
-      '- Before investigating: `add_step` for each concrete check.',
-      '- When a path doesn\'t work: `abandon` it.',
-      '- When resolved: `resolve` with a summary.',
-    ].join('\n'),
+    text: staticText,
+  })
+
+  // Dynamic reminder section — evaluated at each prompt assembly.
+  // Checks if the agent has gone N turns without a todo_tree update.
+  ctx.systemPrompt.section({
+    name: 'tool:todo_tree:reminder',
+    order: 241,
+    text: (context: any) => {
+      const agent = context?.agent
+      if (!agent) return ''
+      const events = agent.session?.events
+      if (!events || events.length === 0) return ''
+
+      // Find the current turn number and the last turn where todo_tree was called
+      let currentTurn = 0
+      let lastTodoTreeTurn = 0
+
+      for (const ev of events) {
+        if (ev.type === 'turn/start') {
+          currentTurn = ev.data?.turn ?? 0
+        }
+        if (ev.type === 'tool/call' && ev.data?.name === 'todo_tree') {
+          lastTodoTreeTurn = currentTurn
+        }
+      }
+
+      // Only remind if tree exists but hasn't been touched in 3+ turns
+      const hasTree = events.some(
+        (e: any) => e.type === 'todo_tree/create'
+      )
+      if (!hasTree || lastTodoTreeTurn === 0) return ''
+      if (currentTurn - lastTodoTreeTurn < 3) return ''
+
+      const gap = currentTurn - lastTodoTreeTurn
+      return `[REMINDER] You haven't updated todo_tree in ${gap} turns. Call \`todo_tree view\` to check current state, then \`note\` or \`add_step\` to record your progress.`
+    },
   })
 }
 
