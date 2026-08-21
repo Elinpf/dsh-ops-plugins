@@ -58,6 +58,24 @@ function generateId(): string {
   return 'n' + nodeCounter
 }
 
+/** Generate a slug from a title (e.g. "Check Ceph storage" → "check-ceph-storage").
+ *  If the slug already exists in the tree, append a numeric suffix. */
+function slugify(title: string, existingIds: Set<string>): string {
+  let slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+  if (!slug) slug = 'node'
+  // Ensure uniqueness
+  let result = slug
+  let suffix = 2
+  while (existingIds.has(result)) {
+    result = `${slug}-${suffix++}`
+  }
+  return result
+}
+
 // ── Turn extraction (02) ─────────────────────────────────────────────────────
 
 /** Extract the current turn number from the agent's session events. */
@@ -416,18 +434,19 @@ function apply(ctx: any, _config: Record<string, never>): void {
       parent_id: { type: 'string', description: 'Parent node id (add_step/add_milestone only).' },
       title: { type: 'string', description: 'Node title (add_step/add_milestone only).' },
       branch: { type: 'boolean', description: 'Branch to a new lane (add_step/add_milestone only, default false).' },
-      id: { type: 'string', description: 'REQUIRED semantic id for the new node (e.g. "ceph-full", "pg-stuck"). Use kebab-case. No auto-generation — you must name it.' },
+      id: { type: 'string', description: 'Semantic id for the new node (e.g. "ceph-full"). If omitted, auto-generated from title slug (e.g. "Check Ceph" → "check-ceph").' },
       titles: { type: 'array', items: { type: 'string' }, description: 'Array of titles to add multiple siblings at once (batch mode).' },
-      ids: { type: 'array', items: { type: 'string' }, description: 'REQUIRED when using titles. Array of semantic ids, one per title. Each must be kebab-case and descriptive.' },
+      ids: { type: 'array', items: { type: 'string' }, description: 'Array of semantic ids, one per title. If omitted, auto-generated from each title.' },
 
       // start / complete / abandon / reopen / note
       node_id: { type: 'string', description: 'Target node id (start/complete/abandon/reopen/note only).' },
+      node_ids: { type: 'array', items: { type: 'string' }, description: 'Array of node ids for batch mode (start/complete/abandon/reopen/note). Use instead of node_id to update multiple nodes at once.' },
 
       // resolve / complete (optional on complete)
       summary: { type: 'string', description: 'How the goal/node was resolved. Required for resolve. Optional for complete — records what was found/fixed.' },
 
       // note
-      detail: { type: 'string', description: 'Detail text (note only).' },
+      detail: { type: 'string', description: 'Detail text (note only), or array of details matching node_ids array for batch.' },
 
       // view
       status_filter: { type: 'string', enum: ['pending', 'in_progress', 'done', 'dead_end', 'resolved'], description: 'Filter view to nodes of one status (view only, optional). If omitted, shows all.' },
@@ -494,22 +513,23 @@ function apply(ctx: any, _config: Record<string, never>): void {
           const titles: string[] = Array.isArray(args.titles) ? args.titles : [args.title]
           if (titles.length === 0 || !titles[0]) throw new Error('todo_tree: title is required')
 
-          // Semantic id is REQUIRED — no auto-generation.
-          // This forces the agent to name each node meaningfully (e.g. "ceph-full"
-          // instead of "n5"), making the tree self-documenting.
-          const ids: string[] = Array.isArray(args.ids) ? args.ids : args.id ? [args.id] : []
-          if (ids.length !== titles.length) {
-            throw new Error(`todo_tree: ids array must have exactly ${titles.length} entry(ies) to match titles. Semantic ids are required — no auto-generation.`)
+          // Semantic id: if provided (id or ids array), use it.
+          // If not provided, auto-generate from title slug (e.g. "Check Ceph" → "check-ceph").
+          const providedIds: (string | undefined)[] = Array.isArray(args.ids)
+            ? args.ids
+            : args.id ? [args.id] : Array(titles.length).fill(undefined)
+          if (providedIds.length !== titles.length) {
+            throw new Error(`todo_tree: ids array must have exactly ${titles.length} entry(ies) to match titles.`)
           }
 
           let tree: TreeState | null = currentTree
+          const existingIds = new Set(currentTree.nodes.map((n) => n.id))
           const addedIds: string[] = []
           for (let i = 0; i < titles.length; i++) {
             const t = titles[i]
-            const nodeId = ids[i]
-            if (!nodeId || typeof nodeId !== 'string' || nodeId.trim() === '') {
-              throw new Error('todo_tree: each node requires a semantic id (e.g. "ceph-full", "pg-stuck"). Auto-generation is disabled.')
-            }
+            // Use provided id, or auto-generate from title slug
+            const nodeId = providedIds[i] || slugify(t, existingIds)
+            existingIds.add(nodeId)
             if (tree!.nodes.some((n) => n.id === nodeId)) {
               throw new Error(`todo_tree: node id "${nodeId}" already exists`)
             }
@@ -531,27 +551,34 @@ function apply(ctx: any, _config: Record<string, never>): void {
         case 'abandon':
         case 'reopen': {
           if (!currentTree) throw new Error('todo_tree: no tree')
-          if (!args.node_id) throw new Error('todo_tree: node_id is required')
-          const node = currentTree.nodes.find((n) => n.id === args.node_id)
-          if (!node) throw new Error(`todo_tree: node "${args.node_id}" not found`)
+          if (!args.node_id && !args.node_ids) throw new Error('todo_tree: node_id (or node_ids array) is required')
           const targetStatus: NodeStatus =
             args.action === 'start' || args.action === 'reopen' ? 'in_progress'
             : args.action === 'complete' ? 'done'
             : 'dead_end'
-          if (!canTransition(node.status, targetStatus)) {
-            throw new Error(`todo_tree: cannot transition from "${node.status}" to "${targetStatus}"`)
-          }
+
+          // Batch mode: node_ids array to update multiple nodes at once
+          const nodeIds: string[] = Array.isArray(args.node_ids) ? args.node_ids : [args.node_id]
           const eventMap: Record<string, string> = {
             start: 'todo_tree/start', complete: 'todo_tree/complete',
             abandon: 'todo_tree/abandon', reopen: 'todo_tree/start',
           }
-          eventType = eventMap[args.action]
-          eventData = { turn, node_id: args.node_id }
-          // complete can optionally carry a summary of what was found/fixed
-          if (args.action === 'complete' && args.summary) {
-            eventData.summary = args.summary
+          const evType = eventMap[args.action]
+
+          let tree: TreeState | null = currentTree
+          for (const nid of nodeIds) {
+            const node = tree!.nodes.find((n) => n.id === nid)
+            if (!node) throw new Error(`todo_tree: node "${nid}" not found`)
+            if (!canTransition(node.status, targetStatus)) {
+              throw new Error(`todo_tree: cannot transition "${nid}" from "${node.status}" to "${targetStatus}"`)
+            }
+            const evData: Record<string, unknown> = { turn, node_id: nid }
+            if (args.action === 'complete' && args.summary) evData.summary = args.summary
+            agent.session.append(evType, evData)
+            tree = foldEvent(tree, { type: evType, data: evData })
           }
-          break
+          const result: any = { tree, summary: buildSummary(tree) }
+          return result
         }
 
         case 'resolve': {
@@ -570,13 +597,28 @@ function apply(ctx: any, _config: Record<string, never>): void {
 
         case 'note': {
           if (!currentTree) throw new Error('todo_tree: no tree')
-          if (!args.node_id) throw new Error('todo_tree: node_id is required')
+          if (!args.node_id && !args.node_ids) throw new Error('todo_tree: node_id (or node_ids array) is required')
           if (!args.detail) throw new Error('todo_tree: detail is required for note')
-          const node = currentTree.nodes.find((n) => n.id === args.node_id)
-          if (!node) throw new Error(`todo_tree: node "${args.node_id}" not found`)
-          eventType = 'todo_tree/note'
-          eventData = { turn, node_id: args.node_id, detail: args.detail }
-          break
+
+          // Batch mode: node_ids and detail can be arrays
+          const nodeIds: string[] = Array.isArray(args.node_ids) ? args.node_ids : [args.node_id]
+          const details: string[] = Array.isArray(args.detail) ? args.detail : Array(nodeIds.length).fill(args.detail)
+          if (details.length !== nodeIds.length) {
+            throw new Error('todo_tree: detail array must match node_id array length')
+          }
+
+          let tree: TreeState | null = currentTree
+          for (let i = 0; i < nodeIds.length; i++) {
+            const nid = nodeIds[i]
+            const det = details[i]
+            const node = tree!.nodes.find((n) => n.id === nid)
+            if (!node) throw new Error(`todo_tree: node "${nid}" not found`)
+            const evData = { turn, node_id: nid, detail: det }
+            agent.session.append('todo_tree/note', evData)
+            tree = foldEvent(tree, { type: 'todo_tree/note', data: evData })
+          }
+          const result: any = { tree, summary: buildSummary(tree) }
+          return result
         }
 
         case 'view': {
@@ -632,7 +674,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
     '',
     '### Actions',
     '- `create_tree` — Create the tree with a root problem and a final goal. Call this once at the start.',
-    '- `add_step` — Add a step under a parent. REQUIRES a semantic `id` (e.g. "ceph-full", "pg-stuck"). Use kebab-case. For batch mode, pass titles+ids arrays.',
+    '- `add_step` — Add a step under a parent. Optional `id` for semantic id (e.g. "ceph-full"); if omitted, auto-generated from title. Batch: pass titles+ids arrays. node_id params for start/complete/abandon/reopen/note also accept arrays for batch updates.',
     '- `add_milestone` — Add a milestone. Same params as add_step.',
     '- `start` — Mark a node as in_progress.',
     '- `complete` — Mark a node as done (can skip start). Optional `summary` to record what was found/fixed.',
