@@ -343,9 +343,9 @@ function renderOutput(args: any, value: any): string {
   const action = args?.action
   if (action === 'view') return renderFull(value)
 
-  // Simple status changes and notes: return a short confirmation
+  // Simple status changes: return a short confirmation
   if (action === 'start' || action === 'complete' || action === 'abandon'
-      || action === 'reopen' || action === 'note') {
+      || action === 'reopen') {
     if (!value || !value.tree) return 'No tree — call create_tree first.'
     const summary = value.summary
     const parts: string[] = []
@@ -355,6 +355,22 @@ function renderOutput(args: any, value: any): string {
     if (c.pending) parts.push(`${c.pending} pending`)
     if (c.dead_end) parts.push(`${c.dead_end} dead_end`)
     if (value.tree.resolved) parts.push('resolved')
+    return parts.join(' | ')
+  }
+
+  // note: short confirmation + a gentle nudge to create sub-steps
+  // when the note might reveal a new investigation path
+  if (action === 'note') {
+    if (!value || !value.tree) return 'No tree — call create_tree first.'
+    const summary = value.summary
+    const parts: string[] = []
+    const c = summary?.counts || {}
+    if (c.done) parts.push(`${c.done} done`)
+    if (c.in_progress) parts.push(`${c.in_progress} in_progress`)
+    if (c.pending) parts.push(`${c.pending} pending`)
+    if (c.dead_end) parts.push(`${c.dead_end} dead_end`)
+    if (value.tree.resolved) parts.push('resolved')
+    parts.push('[TIP] If this note reveals a new investigation path, add_step to track it.]')
     return parts.join(' | ')
   }
 
@@ -398,11 +414,11 @@ function apply(ctx: any, _config: Record<string, never>): void {
 
       // add_step / add_milestone
       parent_id: { type: 'string', description: 'Parent node id (add_step/add_milestone only).' },
-      title: { type: 'string', description: 'Node title (add_step/add_milestone only). For batch mode, pass multiple title/title1/title2/... params instead.' },
+      title: { type: 'string', description: 'Node title (add_step/add_milestone only).' },
       branch: { type: 'boolean', description: 'Branch to a new lane (add_step/add_milestone only, default false).' },
-      id: { type: 'string', description: 'Custom semantic id for the new node (add_step/add_milestone only, optional). If omitted, auto-generates n1/n2/...' },
-      titles: { type: 'array', items: { type: 'string' }, description: 'Array of titles to add multiple siblings at once (add_step/add_milestone only, optional). Use instead of title for batch mode.' },
-      ids: { type: 'array', items: { type: 'string' }, description: 'Array of custom ids matching titles array (add_step/add_milestone only, optional).' },
+      id: { type: 'string', description: 'REQUIRED semantic id for the new node (e.g. "ceph-full", "pg-stuck"). Use kebab-case. No auto-generation — you must name it.' },
+      titles: { type: 'array', items: { type: 'string' }, description: 'Array of titles to add multiple siblings at once (batch mode).' },
+      ids: { type: 'array', items: { type: 'string' }, description: 'REQUIRED when using titles. Array of semantic ids, one per title. Each must be kebab-case and descriptive.' },
 
       // start / complete / abandon / reopen / note
       node_id: { type: 'string', description: 'Target node id (start/complete/abandon/reopen/note only).' },
@@ -475,21 +491,25 @@ function apply(ctx: any, _config: Record<string, never>): void {
           const kind = args.action === 'add_milestone' ? 'milestone' : 'step'
 
           // Batch mode: titles array adds multiple siblings at once.
-          // e.g. titles: ["Check logs", "Check metrics", "Check events"]
           const titles: string[] = Array.isArray(args.titles) ? args.titles : [args.title]
           if (titles.length === 0 || !titles[0]) throw new Error('todo_tree: title is required')
 
-          // Custom ids: if ids array is provided, it should match titles length
-          const ids: (string | undefined)[] = Array.isArray(args.ids)
-            ? args.ids
-            : Array(titles.length).fill(args.id)
+          // Semantic id is REQUIRED — no auto-generation.
+          // This forces the agent to name each node meaningfully (e.g. "ceph-full"
+          // instead of "n5"), making the tree self-documenting.
+          const ids: string[] = Array.isArray(args.ids) ? args.ids : args.id ? [args.id] : []
+          if (ids.length !== titles.length) {
+            throw new Error(`todo_tree: ids array must have exactly ${titles.length} entry(ies) to match titles. Semantic ids are required — no auto-generation.`)
+          }
 
           let tree: TreeState | null = currentTree
           const addedIds: string[] = []
           for (let i = 0; i < titles.length; i++) {
             const t = titles[i]
-            const customId = ids[i]
-            const nodeId = customId || generateId()
+            const nodeId = ids[i]
+            if (!nodeId || typeof nodeId !== 'string' || nodeId.trim() === '') {
+              throw new Error('todo_tree: each node requires a semantic id (e.g. "ceph-full", "pg-stuck"). Auto-generation is disabled.')
+            }
             if (tree!.nodes.some((n) => n.id === nodeId)) {
               throw new Error(`todo_tree: node id "${nodeId}" already exists`)
             }
@@ -612,7 +632,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
     '',
     '### Actions',
     '- `create_tree` — Create the tree with a root problem and a final goal. Call this once at the start.',
-    '- `add_step` — Add a step under a parent. Optional `id` for semantic id (e.g. "ceph-full"). Title can be an array to add multiple siblings at once.',
+    '- `add_step` — Add a step under a parent. REQUIRES a semantic `id` (e.g. "ceph-full", "pg-stuck"). Use kebab-case. For batch mode, pass titles+ids arrays.',
     '- `add_milestone` — Add a milestone. Same params as add_step.',
     '- `start` — Mark a node as in_progress.',
     '- `complete` — Mark a node as done (can skip start). Optional `summary` to record what was found/fixed.',
@@ -634,6 +654,13 @@ function apply(ctx: any, _config: Record<string, never>): void {
     '- **Unexpected branches**: when an investigation leads somewhere unplanned, immediately `add_step` with `branch=true` to record the new direction.',
     '- **Dead ends are valuable**: `abandon` them — the full exploration trail is the record.',
     '- **Don\'t forget**: if you lose track of what a node id means, call `view`.',
+    '',
+    '### note vs add_step — the key distinction',
+    '- `note` is backward-looking: records what you found.',
+    '- `add_step` is forward-looking: structures what to investigate next.',
+    '- When a note contains "need to verify X" or "depends on Y" or "might be caused by Z",',
+    '  that is a NEW investigation path. Promote it: `add_step` with a semantic id.',
+    '- Do NOT let actionable follow-ups stay buried in note text.',
     '',
     '### Lifecycle',
     '- At the start of an incident: `create_tree` with the problem and the goal.',
