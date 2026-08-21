@@ -7,9 +7,8 @@
  * @module @deepseek-ai/dsh-ops-todo-tree
  */
 
-import { z } from '@deepseek-ai/schemastery'
+import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { HarnessError } from '@deepseek-ai/dsh-llm'
 
 // ── Types (import type so they erase at runtime) ─────────────────────────────
 
@@ -182,7 +181,7 @@ const TOOL_DESCRIPTION = [
 
 // ── Tool implementation ─────────────────────────────────────────────────────
 
-function apply(ctx: any, _config: z.infer<typeof Config>): void {
+function apply(ctx: any, _config: Record<string, never>): void {
   // ── Register session projection (09) ──────────────────────────────────────
   ctx.inject(['sessionProjections'], (pctx: any) => {
     pctx.sessionProjections.register({
@@ -223,7 +222,17 @@ function apply(ctx: any, _config: z.infer<typeof Config>): void {
       detail: { type: 'string', description: 'Detail text (note only).' },
     },
 
-    async execute(args: any, exec: any): Promise<TodoTreeResult> {
+    output: {
+      schema: { type: 'json' },
+      render: (_args: any, value: any) => [{
+        type: 'text',
+        text: value?.summary
+          ? `${value.summary.total} nodes | ${value.summary.counts?.in_progress || 0} in progress | ${value.summary.counts?.done || 0} done | ${value.summary.counts?.dead_end || 0} dead ends${value.summary.warning ? ' | ⚠ ' + value.summary.warning : ''}`
+          : 'No tree',
+      }],
+    },
+
+    async execute(args: any, exec: any): Promise<any> {
       const agent = exec.agent
       if (!agent) throw new Error('todo_tree requires an owning agent session')
       const turn = currentTurn(exec)

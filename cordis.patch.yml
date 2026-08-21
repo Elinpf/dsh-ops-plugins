@@ -1,0 +1,8 @@
+# ops-todo-tree: investigation tree plugin (host + client)
+# The host row loads lib/index.js (tool + projection + systemPrompt).
+# The client row loads lib/client.js (conversation.view tab UI).
+- insert:
+    - id: ops-todo-tree
+      name: '@deepseek-ai/dsh-ops-todo-tree'
+    - id: ops-todo-tree-client
+      name: '@deepseek-ai/dsh-ops-todo-tree/client'

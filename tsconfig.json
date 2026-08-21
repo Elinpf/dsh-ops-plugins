@@ -5,7 +5,7 @@
     "moduleResolution": "bundler",
     "lib": ["ES2022"],
     "rootDir": "src",
-    "outDir": "lib/types",
+    "outDir": "lib",
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
@@ -18,6 +18,6 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "lib", "tests", "client"]
+  "include": ["src/index.ts", "src/invariant.ts", "src/types.ts"],
+  "exclude": ["node_modules", "lib", "tests", "src/client.ts"]
 }
