@@ -10,6 +10,7 @@
 import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 
 // ── Types (import type so they erase at runtime) ─────────────────────────────
 
@@ -24,7 +25,7 @@ import type {
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
 const name = 'ops-todo-tree'
-const inject = ['tools', 'systemPrompt']
+const inject = ['tools']
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
@@ -110,11 +111,11 @@ function foldEvent(state: TreeState | null, event: any): TreeState | null {
     case 'todo_tree/create': {
       nodes.push({
         id: data.root_id, title: data.root_title, status: 'goal',
-        parent: null, turns: [data.turn], detail: null, summary: null,
+        parent: null, turns: [data.turn], summary: null, caused_by: [],
       })
       nodes.push({
         id: data.goal_id, title: data.goal_title, status: 'goal',
-        parent: data.root_id, turns: [data.turn], detail: null, summary: null,
+        parent: data.root_id, turns: [data.turn], summary: null, caused_by: [],
       })
       return { nodes, resolved: false }
     }
@@ -123,7 +124,7 @@ function foldEvent(state: TreeState | null, event: any): TreeState | null {
       nodes.push({
         id: data.node_id, title: data.title,
         status: data.kind === 'milestone' ? 'goal' : 'pending',
-        parent: data.parent_id, turns: [data.turn], detail: null, summary: null,
+        parent: data.parent_id, turns: [data.turn], summary: null, caused_by: [],
       })
       return state ? { ...state, nodes } : { nodes, resolved: false }
     }
@@ -147,6 +148,14 @@ function foldEvent(state: TreeState | null, event: any): TreeState | null {
         n.summary = data.summary
       })
       return updated ? { ...updated, resolved: true } : state
+    }
+
+    case 'todo_tree/link': {
+      return updateNode(state, data.node_id, data.turn, (n) => {
+        if (!n.caused_by.includes(data.caused_by)) {
+          n.caused_by = [...n.caused_by, data.caused_by]
+        }
+      })
     }
 
     default:
@@ -202,7 +211,7 @@ const TOOL_DESCRIPTION = [
   'Create the tree at the start, plan milestones for investigation phases, add steps as you investigate, ',
   'complete steps with a summary of findings, abandon steps that are no longer relevant, ',
   'and resolve when the incident is resolved. ',
-  'Actions: create_tree, add_milestone, add_step, start, complete, abandon, reopen, resolve, view. ',
+  'Actions: create_tree, add_milestone, add_step, start, complete, abandon, reopen, resolve, link, view. ',
   'Use branch=true on add_step when exploring a side path. ',
   'Batch: pass titles+ids arrays to add_step, node_ids array to start/complete/abandon. ',
   'The tree persists for the session and helps you stay oriented.',
@@ -216,8 +225,8 @@ const treeNodeSchema = zod.object({
   status: zod.enum(['goal', 'pending', 'in_progress', 'done', 'dead_end', 'resolved']),
   parent: zod.string().nullable(),
   turns: zod.array(zod.number()),
-  detail: zod.string().nullable(),
   summary: zod.string().nullable(),
+  caused_by: zod.array(zod.string()),
 })
 
 const treeStateSchema = zod.object({
@@ -341,6 +350,9 @@ function renderFull(value: any): string {
 
     // Summary on separate indented line (from complete/resolve)
     const indent = prefix + (isLast ? '    ' : '│   ')
+    if (node.caused_by.length > 0) {
+      lines.push(`${indent}← caused_by: ${node.caused_by.join(', ')}`)
+    }
     if (node.summary) {
       lines.push(`${indent}summary: ${node.summary}`)
     }
@@ -415,7 +427,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
     parameters: {
       action: { type: 'string', enum: [
         'create_tree', 'add_step', 'add_milestone',
-        'start', 'complete', 'abandon', 'reopen', 'resolve', 'view',
+        'start', 'complete', 'abandon', 'reopen', 'resolve', 'link', 'view',
       ], description: 'The action to perform.' },
 
       // create_tree
@@ -430,12 +442,15 @@ function apply(ctx: any, _config: Record<string, never>): void {
       titles: { type: 'array', items: { type: 'string' }, description: 'Array of titles to add multiple siblings at once (batch mode).' },
       ids: { type: 'array', items: { type: 'string' }, description: 'Array of semantic ids, one per title. If omitted, auto-generated from each title.' },
 
-      // start / complete / abandon / reopen / note
-      node_id: { type: 'string', description: 'Target node id (start/complete/abandon/reopen/note only).' },
-      node_ids: { type: 'array', items: { type: 'string' }, description: 'Array of node ids for batch mode (start/complete/abandon/reopen/note). Use instead of node_id to update multiple nodes at once.' },
+      // start / complete / abandon / reopen / link
+      node_id: { type: 'string', description: 'Target node id (start/complete/abandon/reopen/link only).' },
+      node_ids: { type: 'array', items: { type: 'string' }, description: 'Array of node ids for batch mode (start/complete/abandon/reopen). Use instead of node_id to update multiple nodes at once.' },
 
       // resolve / complete (optional on complete)
       summary: { type: 'string', description: 'How the goal/node was resolved. Required for resolve. Optional for complete — records what was found/fixed.' },
+
+      // link
+      caused_by: { type: 'string', description: 'Node id that is the root cause of node_id (link only). Expresses: "node_id is caused by caused_by".' },
 
       // view
       status_filter: { type: 'string', enum: ['pending', 'in_progress', 'done', 'dead_end', 'resolved'], description: 'Filter view to nodes of one status (view only, optional). If omitted, shows all.' },
@@ -584,6 +599,22 @@ function apply(ctx: any, _config: Record<string, never>): void {
           break
         }
 
+        case 'link': {
+          if (!currentTree) throw new Error('todo_tree: no tree')
+          if (!args.node_id) throw new Error('todo_tree: node_id is required for link')
+          if (!args.caused_by) throw new Error('todo_tree: caused_by is required for link')
+          const node = currentTree.nodes.find((n) => n.id === args.node_id)
+          if (!node) throw new Error(`todo_tree: node "${args.node_id}" not found`)
+          const target = currentTree.nodes.find((n) => n.id === args.caused_by)
+          if (!target) throw new Error(`todo_tree: node "${args.caused_by}" not found`)
+          if (node.caused_by.includes(args.caused_by)) {
+            return { tree: currentTree, summary: buildSummary(currentTree) }
+          }
+          eventType = 'todo_tree/link'
+          eventData = { turn, node_id: args.node_id, caused_by: args.caused_by }
+          break
+        }
+
         case 'view': {
           // No event to append — just return the current tree in full format.
           // If status_filter is set, only include nodes matching that status
@@ -644,7 +675,8 @@ function apply(ctx: any, _config: Record<string, never>): void {
     '- `abandon` — Mark a step as no longer needed. This includes dead ends (didn\'t work) AND changed circumstances (situation shifted, this check is no longer relevant). The step stays on the tree for the record. Accepts node_ids array for batch.',
     '- `reopen` — Reactivate an abandoned (dead_end) node back to in_progress.',
     '- `resolve` — Mark the final goal as resolved. Requires a `summary`.',
-    '- `view` — Retrieve the full tree with summaries. Optional `status_filter` to show only one status.',
+    '- `link` — Connect a causal edge: `node_id` is caused by `caused_by`. Use when one symptom\'s root cause is another node (e.g. cred-broker is caused_by postgres). The tree keeps its parent structure; link adds a causal edge on top.',
+    '- `view` — Retrieve the full tree with summaries and causal edges. Optional `status_filter` to show only one status.',
     '',
     '### Tree structure',
     'root (problem) → milestone (fixed phase anchor) → step (flexible investigation path).',
@@ -679,44 +711,52 @@ function apply(ctx: any, _config: Record<string, never>): void {
     text: staticText,
   })
 
-  // Dynamic reminder section — evaluated at each prompt assembly.
-  // Checks if the agent has gone N steps without a todo_tree update.
-  // Uses step/start (not turn/start) because a single turn can contain
-  // many steps — counting by turn misses long investigation runs.
-  ctx.systemPrompt.section({
-    name: 'tool:todo_tree:reminder',
-    order: 241,
-    text: (context: any) => {
-      const agent = context?.agent
-      if (!agent) return ''
-      const events = agent.session?.events
-      if (!events || events.length === 0) return ''
+  // Inject reminder directly into the conversation flow via agent/pre-step.
+  // systemPrompt.section is only re-read at prompt assembly (background noise);
+  // agent/pre-step inserts a visible user-role message that the model sees each step.
+  // This is the mechanism used by time-context, repeat-tool-reminder, and plan-mode.
+  ctx.on('agent/pre-step', async (payload: any, next: any) => {
+    const decision = await next()
+    if (decision.kind === 'reject') return decision
 
-      // Track the current step number and the last step where todo_tree was called.
-      // step/start events carry { turn, step } — step increments within each turn.
-      let currentStep = 0
-      let lastTodoTreeStep = 0
+    const agent = payload?.agent
+    if (!agent) return decision
+    const events = agent.session?.events
+    if (!events || events.length === 0) return decision
 
-      for (const ev of events) {
-        if (ev.type === 'step/start') {
-          currentStep = (ev.data?.turn ?? 0) * 1000 + (ev.data?.step ?? 0)
-        }
-        if (ev.type === 'tool/call' && ev.data?.name === 'todo_tree') {
-          lastTodoTreeStep = currentStep
-        }
+    // Count steps since last todo_tree call using step/start events.
+    let currentStep = 0
+    let lastTodoTreeStep = 0
+    let hasTree = false
+
+    for (const ev of events) {
+      if (ev.type === 'step/start') {
+        currentStep = (ev.data?.turn ?? 0) * 1000 + (ev.data?.step ?? 0)
       }
+      if (ev.type === 'tool/call' && ev.data?.name === 'todo_tree') {
+        lastTodoTreeStep = currentStep
+      }
+      if (ev.type === 'todo_tree/create') {
+        hasTree = true
+      }
+    }
 
-      // Only remind if tree exists but hasn't been touched in 5+ steps
-      const hasTree = events.some(
-        (e: any) => e.type === 'todo_tree/create'
-      )
-      if (!hasTree || lastTodoTreeStep === 0) return ''
-      if (currentStep - lastTodoTreeStep < 5) return ''
+    if (!hasTree || lastTodoTreeStep === 0) return decision
+    const gap = currentStep - lastTodoTreeStep
+    if (gap < 5) return decision
 
-      const gap = currentStep - lastTodoTreeStep
-      return `[REMINDER] You haven't updated todo_tree in ${gap} steps. Call \`todo_tree view\` to check current state, then \`note\` or \`add_step\` to record your progress.`
-    },
-  })
+    const text = `[REMINDER] You haven't updated todo_tree in ${gap} steps. Call \`todo_tree view\` to check current state, then \`add_step\` or \`complete\` to record your progress.`
+    return {
+      kind: 'enter',
+      messages: [
+        ...decision.messages,
+        createUserMessage({
+          content: [{ type: 'text', text }],
+          source: { kind: 'plugin', plugin: name, form: 'notice', summary: `todo_tree idle ${gap} steps` },
+        }),
+      ],
+    }
+  }, { prepend: true })
 }
 
 export { Config, apply, inject, name }

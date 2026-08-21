@@ -35,10 +35,10 @@ export interface TreeNode {
   parent: string | null
   /** Turns that operated on this node. */
   turns: number[]
-  /** Expanded detail text (written by the `note` action). */
-  detail: string | null
-  /** Resolution summary (only on `resolved` nodes, written by `resolve`). */
+  /** Resolution summary (written by `complete` or `resolve`). */
   summary: string | null
+  /** Causal edges: other node ids that are the root cause of this node. */
+  caused_by: string[]
 }
 
 /**
@@ -100,11 +100,17 @@ export interface TodoTreeEventMap {
     goal_id: string
     summary: string
   }
+  /** Link a causal edge: node_id's root cause is caused_by_id. */
+  'todo_tree/link': {
+    turn: number
+    node_id: string
+    caused_by: string
+  }
 }
 
 // ── Tool action types ────────────────────────────────────────────────────────
 
-/** The 9 actions the `todo_tree` tool accepts. */
+/** The 10 actions the `todo_tree` tool accepts. */
 export type TodoTreeAction =
   | 'create_tree'
   | 'add_step'
@@ -114,6 +120,7 @@ export type TodoTreeAction =
   | 'abandon'
   | 'reopen'
   | 'resolve'
+  | 'link'
   | 'view'
 
 /**
