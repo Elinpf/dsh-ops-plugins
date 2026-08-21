@@ -199,35 +199,39 @@ const treeStateSchema = zod.object({
 
 const todoTreeProjectionSchema = zod.union([treeStateSchema, zod.null()])
 
-// ── Tree renderer (model-visible output) ─────────────────────────────────────
+// ── Tree renderers (model-visible output) ────────────────────────────────────
 
-/** Render the full tree as text so the model can see every node's id and status. */
-function renderTree(value: any): string {
-  if (!value || !value.tree || !value.tree.nodes || value.tree.nodes.length === 0) {
-    return 'No tree — call create_tree first.'
-  }
+/** Status → emoji for compact rendering. */
+const STATUS_EMOJI: Record<string, string> = {
+  pending: '○',
+  in_progress: '→',
+  done: '✓',
+  dead_end: '✗',
+  goal: '',
+  resolved: '✅',
+}
 
-  const tree: TreeState = value.tree
-  const summary = value.summary
-  const lines: string[] = []
+/** Sort children: in_progress first, then pending, done, dead_end; goal always last. */
+const STATUS_ORDER: Record<string, number> = {
+  in_progress: 0, pending: 1, done: 2, dead_end: 3, goal: 4, resolved: 5,
+}
 
-  // Summary line
-  if (summary) {
-    const parts = [
-      `${summary.total} nodes`,
-      `${summary.counts?.in_progress || 0} in_progress`,
-      `${summary.counts?.done || 0} done`,
-      `${summary.counts?.dead_end || 0} dead_end`,
-    ]
-    if (tree.resolved) parts.push('✅ RESOLVED')
-    if (summary.warning) parts.push('⚠ ' + summary.warning)
-    lines.push(parts.join(' | '))
-  }
+function sortChildren(nodes: TreeNode[]): TreeNode[] {
+  return [...nodes].sort((a, b) => {
+    // goal always last
+    const aIsGoal = a.id === 'goal' || (a.status === 'goal' && a.parent !== null)
+    const bIsGoal = b.id === 'goal' || (b.status === 'goal' && b.parent !== null)
+    if (aIsGoal && !bIsGoal) return 1
+    if (!aIsGoal && bIsGoal) return -1
+    return (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9)
+  })
+}
 
-  // Build child map for tree rendering
+/** Build child map and find root from a flat node list. */
+function buildTreeIndex(nodes: TreeNode[]) {
   const children: Record<string, TreeNode[]> = {}
   let root: TreeNode | null = null
-  for (const n of tree.nodes) {
+  for (const n of nodes) {
     if (n.parent === null) {
       root = n
     } else {
@@ -235,26 +239,85 @@ function renderTree(value: any): string {
       children[n.parent].push(n)
     }
   }
+  return { children, root }
+}
 
-  // Render tree with indentation
-  function renderNode(node: TreeNode, indent: string, isLast: boolean): void {
-    const prefix = indent + (isLast ? '└─ ' : '├─ ')
-    let line = `${prefix}[${node.status}] ${node.id}: ${node.title}`
-    if (node.detail) line += `  📝 ${node.detail}`
-    if (node.summary) line += `  ✅ ${node.summary}`
-    if (node.turns?.length) line += `  (turn ${node.turns.join(',')})`
-    lines.push(line)
+/**
+ * Compact render: markdown list, one line per node, id + emoji + title.
+ * No detail/summary/turns. New node marked with *.
+ */
+function renderCompact(value: any, newNodeId?: string): string {
+  if (!value || !value.tree || !value.tree.nodes || value.tree.nodes.length === 0) {
+    return 'No tree — call create_tree first.'
+  }
 
-    const kids = children[node.id] || []
-    const childIndent = indent + (isLast ? '   ' : '│  ')
-    for (let i = 0; i < kids.length; i++) {
-      renderNode(kids[i], childIndent, i === kids.length - 1)
+  const tree: TreeState = value.tree
+  const summary = value.summary
+  const { children, root } = buildTreeIndex(tree.nodes)
+  const lines: string[] = []
+
+  // Summary line
+  if (summary) {
+    const parts: string[] = []
+    const c = summary.counts || {}
+    if (c.done) parts.push(`${c.done}✓`)
+    if (c.in_progress) parts.push(`${c.in_progress}→`)
+    if (c.pending) parts.push(`${c.pending}○`)
+    if (c.dead_end) parts.push(`${c.dead_end}✗`)
+    if (tree.resolved) parts.push('✅resolved')
+    if (summary.warning) parts.push('⚠ ' + summary.warning)
+    if (parts.length > 0) {
+      lines.push(parts.join(' | '))
+      lines.push('')
     }
   }
 
-  if (root) {
-    renderNode(root, '', true)
+  function renderNode(node: TreeNode, indent: string): void {
+    const emoji = STATUS_EMOJI[node.status] || ''
+    const isNew = node.id === newNodeId ? '*' : ''
+    const emojiStr = emoji ? `${emoji} ` : ''
+    lines.push(`${indent}- ${isNew}${node.id}: ${emojiStr}${node.title}`)
+
+    const kids = sortChildren(children[node.id] || [])
+    for (const kid of kids) {
+      renderNode(kid, indent + '  ')
+    }
   }
+
+  if (root) renderNode(root, '')
+
+  return lines.join('\n')
+}
+
+/**
+ * Full render: includes detail (📝), summary (✅), and turns for each node.
+ * Used by the `view` action.
+ */
+function renderFull(value: any): string {
+  if (!value || !value.tree || !value.tree.nodes || value.tree.nodes.length === 0) {
+    return 'No tree — call create_tree first.'
+  }
+
+  const tree: TreeState = value.tree
+  const { children, root } = buildTreeIndex(tree.nodes)
+  const lines: string[] = []
+
+  function renderNode(node: TreeNode, indent: string): void {
+    const emoji = STATUS_EMOJI[node.status] || ''
+    const emojiStr = emoji ? `${emoji} ` : ''
+    let line = `${indent}- ${node.id}: ${emojiStr}${node.title}`
+    if (node.turns?.length) line += ` (turn ${node.turns.join(',')})`
+    if (node.detail) line += ` 📝 ${node.detail}`
+    if (node.summary) line += ` ✅ ${node.summary}`
+    lines.push(line)
+
+    const kids = sortChildren(children[node.id] || [])
+    for (const kid of kids) {
+      renderNode(kid, indent + '  ')
+    }
+  }
+
+  if (root) renderNode(root, '')
 
   return lines.join('\n')
 }
@@ -286,7 +349,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
     parameters: {
       action: { type: 'string', enum: [
         'create_tree', 'add_step', 'add_milestone',
-        'start', 'complete', 'abandon', 'resolve', 'note',
+        'start', 'complete', 'abandon', 'resolve', 'note', 'view',
       ], description: 'The action to perform.' },
 
       // create_tree
@@ -310,9 +373,9 @@ function apply(ctx: any, _config: Record<string, never>): void {
 
     output: {
       schema: { type: 'json' },
-      render: (_args: any, value: any) => [{
+      render: (args: any, value: any) => [{
         type: 'text',
-        text: renderTree(value),
+        text: args?.action === 'view' ? renderFull(value) : renderCompact(value, value?._newNodeId),
       }],
     },
 
@@ -341,6 +404,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
       // eager fold may not have run yet, so getSnapshot() could return stale state.
       let eventType: string = ''
       let eventData: Record<string, unknown> = {}
+      let newNodeId: string | undefined
 
       switch (args.action as TodoTreeAction) {
         case 'create_tree': {
@@ -363,6 +427,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
           const parent = currentTree.nodes.find((n) => n.id === args.parent_id)
           if (!parent) throw new Error(`todo_tree: parent node "${args.parent_id}" not found`)
           const nodeId = generateId()
+          newNodeId = nodeId
           const kind = args.action === 'add_milestone' ? 'milestone' : 'step'
           eventType = 'todo_tree/add'
           eventData = {
@@ -419,6 +484,11 @@ function apply(ctx: any, _config: Record<string, never>): void {
           break
         }
 
+        case 'view': {
+          // No event to append — just return the current tree in full format.
+          return { tree: currentTree, summary: buildSummary(currentTree) }
+        }
+
         default:
           throw new Error(`todo_tree: unknown action "${args.action}"`)
       }
@@ -429,7 +499,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
       // Compute the return value by folding the event locally — the projection's
       // eager fold may not have run yet, so we cannot rely on getSnapshot().
       const updated = foldEvent(currentTree, { type: eventType, data: eventData })
-      return { tree: updated, summary: buildSummary(updated) }
+      return { tree: updated, summary: buildSummary(updated), _newNodeId: newNodeId }
     },
 
     presentCall: (args: any) => ({
@@ -457,21 +527,32 @@ function apply(ctx: any, _config: Record<string, never>): void {
       '### Actions',
       '- `create_tree` — Create the tree with a root problem and a final goal. Call this once at the start.',
       '- `add_step` — Add a concrete step as a child of an existing node. Set `branch=true` for a side path.',
-      '- `add_milestone` — Add a milestone (more stable than a step, uses dashed connectors).',
+      '- `add_milestone` — Add a milestone (more stable than a step).',
       '- `start` — Mark a node as in_progress.',
       '- `complete` — Mark a node as done.',
       '- `abandon` — Mark a node as a dead end (it stays on the tree; you can re-explore later).',
-      '- `resolve` — Mark the final goal as resolved. Requires a `summary` of how it was achieved.',
+      '- `resolve` — Mark the final goal as resolved. Requires a `summary`.',
       '- `note` — Add detail text to a node.',
+      '- `view` — Retrieve the full tree with all details (titles, notes, summaries, turns). Use when you forget what a node id refers to.',
       '',
-      '### When to use',
+      '### Output format',
+      'Each call returns a compact tree: id + status emoji + title, one line per node.',
+      'Status: ○ pending, → in_progress, ✓ done, ✗ dead_end, ✅ resolved.',
+      'New nodes from add_step/add_milestone are marked with *.',
+      'Use `view` to see full details (notes, summaries, turns).',
+      '',
+      '### Discipline',
+      '- **Every 3 turns of investigation, at least 1 todo_tree update.**',
+      '- **Waiting loops**: use `note` to record observations even when "nothing changed" (e.g. "Pod still ContainerCreating after 3min").',
+      '- **Unexpected branches**: when an investigation leads somewhere unplanned, immediately `add_step` with `branch=true` to record the new direction.',
+      '- **Dead ends are valuable**: `abandon` them — the full exploration trail is the record.',
+      '- **Don\'t forget**: if you lose track of what a node id means, call `view`.',
+      '',
+      '### Lifecycle',
       '- At the start of an incident: `create_tree` with the problem and the goal.',
-      '- Before investigating: `add_step` for each concrete check you plan to do.',
-      '- When a path doesn\'t work: `abandon` it (it stays visible — dead ends are part of the record).',
-      '- When delegating to subagents: after receiving results, use `add_step` with `branch=true` to record what they found.',
-      '- When resolved: `resolve` with a summary of root cause and fix.',
-      '',
-      'Every call returns the full tree and a status summary. Use it to stay oriented.',
+      '- Before investigating: `add_step` for each concrete check.',
+      '- When a path doesn\'t work: `abandon` it.',
+      '- When resolved: `resolve` with a summary.',
     ].join('\n'),
   })
 }
