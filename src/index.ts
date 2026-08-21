@@ -375,7 +375,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
       schema: { type: 'json' },
       render: (args: any, value: any) => [{
         type: 'text',
-        text: args?.action === 'view' ? renderFull(value) : renderCompact(value, value?._newNodeId),
+        text: args?.action === 'view' ? renderFull(value) : renderCompact(value, value?.new_node),
       }],
     },
 
@@ -499,7 +499,9 @@ function apply(ctx: any, _config: Record<string, never>): void {
       // Compute the return value by folding the event locally — the projection's
       // eager fold may not have run yet, so we cannot rely on getSnapshot().
       const updated = foldEvent(currentTree, { type: eventType, data: eventData })
-      return { tree: updated, summary: buildSummary(updated), _newNodeId: newNodeId }
+      const result: any = { tree: updated, summary: buildSummary(updated) }
+      if (newNodeId) result.new_node = newNodeId
+      return result
     },
 
     presentCall: (args: any) => ({
