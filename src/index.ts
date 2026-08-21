@@ -110,7 +110,10 @@ function foldEvent(state: TreeState | null, event: any): TreeState | null {
         event.type === 'todo_tree/start' ? 'in_progress'
         : event.type === 'todo_tree/complete' ? 'done'
         : 'dead_end'
-      return updateNode(state, data.node_id, data.turn, (n) => { n.status = newStatus })
+      return updateNode(state, data.node_id, data.turn, (n) => {
+        n.status = newStatus
+        if (event.type === 'todo_tree/complete' && data.summary) n.summary = data.summary
+      })
     }
 
     case 'todo_tree/resolve': {
@@ -245,7 +248,7 @@ function buildTreeIndex(nodes: TreeNode[]) {
 }
 
 /**
- * Compact render: markdown list, one line per node, id + status + title.
+ * Compact render: tree characters, one line per node, id + status + title.
  * No detail/summary/turns. New node marked with *.
  */
 function renderCompact(value: any, newNodeId?: string): string {
@@ -274,19 +277,21 @@ function renderCompact(value: any, newNodeId?: string): string {
     }
   }
 
-  function renderNode(node: TreeNode, indent: string): void {
+  function renderNode(node: TreeNode, prefix: string, isLast: boolean): void {
     const label = STATUS_LABEL[node.status] || ''
     const isNew = node.id === newNodeId ? '*' : ''
     const labelStr = label ? `${label} ` : ''
-    lines.push(`${indent}- ${isNew}${node.id}: ${labelStr}${node.title}`)
+    const connector = isLast ? '└── ' : '├── '
+    lines.push(`${prefix}${connector}${isNew}${node.id}: ${labelStr}${node.title}`)
 
     const kids = sortChildren(children[node.id] || [])
-    for (const kid of kids) {
-      renderNode(kid, indent + '  ')
+    const childPrefix = prefix + (isLast ? '    ' : '│   ')
+    for (let i = 0; i < kids.length; i++) {
+      renderNode(kids[i], childPrefix, i === kids.length - 1)
     }
   }
 
-  if (root) renderNode(root, '')
+  if (root) renderNode(root, '', true)
 
   return lines.join('\n')
 }
@@ -304,22 +309,24 @@ function renderFull(value: any): string {
   const { children, root } = buildTreeIndex(tree.nodes)
   const lines: string[] = []
 
-  function renderNode(node: TreeNode, indent: string): void {
+  function renderNode(node: TreeNode, prefix: string, isLast: boolean): void {
     const label = STATUS_LABEL[node.status] || ''
     const labelStr = label ? `${label} ` : ''
-    let line = `${indent}- ${node.id}: ${labelStr}${node.title}`
+    const connector = isLast ? '└── ' : '├── '
+    let line = `${prefix}${connector}${node.id}: ${labelStr}${node.title}`
     if (node.turns?.length) line += ` (turn ${node.turns.join(',')})`
     if (node.detail) line += ` | note: ${node.detail}`
     if (node.summary) line += ` | resolved: ${node.summary}`
     lines.push(line)
 
     const kids = sortChildren(children[node.id] || [])
-    for (const kid of kids) {
-      renderNode(kid, indent + '  ')
+    const childPrefix = prefix + (isLast ? '    ' : '│   ')
+    for (let i = 0; i < kids.length; i++) {
+      renderNode(kids[i], childPrefix, i === kids.length - 1)
     }
   }
 
-  if (root) renderNode(root, '')
+  if (root) renderNode(root, '', true)
 
   return lines.join('\n')
 }
@@ -391,15 +398,17 @@ function apply(ctx: any, _config: Record<string, never>): void {
 
       // add_step / add_milestone
       parent_id: { type: 'string', description: 'Parent node id (add_step/add_milestone only).' },
-      title: { type: 'string', description: 'Node title (add_step/add_milestone only).' },
+      title: { type: 'string', description: 'Node title (add_step/add_milestone only). For batch mode, pass multiple title/title1/title2/... params instead.' },
       branch: { type: 'boolean', description: 'Branch to a new lane (add_step/add_milestone only, default false).' },
-      id: { type: 'string', description: 'Custom semantic id for the new node, e.g. "ceph-full" (add_step/add_milestone only, optional). If omitted, auto-generates n1/n2/...' },
+      id: { type: 'string', description: 'Custom semantic id for the new node (add_step/add_milestone only, optional). If omitted, auto-generates n1/n2/...' },
+      titles: { type: 'array', items: { type: 'string' }, description: 'Array of titles to add multiple siblings at once (add_step/add_milestone only, optional). Use instead of title for batch mode.' },
+      ids: { type: 'array', items: { type: 'string' }, description: 'Array of custom ids matching titles array (add_step/add_milestone only, optional).' },
 
       // start / complete / abandon / reopen / note
       node_id: { type: 'string', description: 'Target node id (start/complete/abandon/reopen/note only).' },
 
-      // resolve
-      summary: { type: 'string', description: 'How the goal was achieved (resolve only, required).' },
+      // resolve / complete (optional on complete)
+      summary: { type: 'string', description: 'How the goal/node was resolved. Required for resolve. Optional for complete — records what was found/fixed.' },
 
       // note
       detail: { type: 'string', description: 'Detail text (note only).' },
@@ -460,22 +469,41 @@ function apply(ctx: any, _config: Record<string, never>): void {
         case 'add_milestone': {
           if (!currentTree) throw new Error('todo_tree: no tree — call create_tree first')
           if (!args.parent_id) throw new Error('todo_tree: parent_id is required')
-          if (!args.title) throw new Error('todo_tree: title is required')
+          if (!args.title && !args.titles) throw new Error('todo_tree: title (or titles array) is required')
           const parent = currentTree.nodes.find((n) => n.id === args.parent_id)
           if (!parent) throw new Error(`todo_tree: parent node "${args.parent_id}" not found`)
-          // Allow custom semantic id (e.g. "ceph-full"), fallback to auto-generated n1/n2...
-          const nodeId = args.id || generateId()
-          if (currentTree.nodes.some((n) => n.id === nodeId)) {
-            throw new Error(`todo_tree: node id "${nodeId}" already exists`)
-          }
-          newNodeId = nodeId
           const kind = args.action === 'add_milestone' ? 'milestone' : 'step'
-          eventType = 'todo_tree/add'
-          eventData = {
-            turn, node_id: nodeId, parent_id: args.parent_id,
-            title: args.title, kind, branch: args.branch ?? false,
+
+          // Batch mode: titles array adds multiple siblings at once.
+          // e.g. titles: ["Check logs", "Check metrics", "Check events"]
+          const titles: string[] = Array.isArray(args.titles) ? args.titles : [args.title]
+          if (titles.length === 0 || !titles[0]) throw new Error('todo_tree: title is required')
+
+          // Custom ids: if ids array is provided, it should match titles length
+          const ids: (string | undefined)[] = Array.isArray(args.ids)
+            ? args.ids
+            : Array(titles.length).fill(args.id)
+
+          let tree: TreeState | null = currentTree
+          const addedIds: string[] = []
+          for (let i = 0; i < titles.length; i++) {
+            const t = titles[i]
+            const customId = ids[i]
+            const nodeId = customId || generateId()
+            if (tree!.nodes.some((n) => n.id === nodeId)) {
+              throw new Error(`todo_tree: node id "${nodeId}" already exists`)
+            }
+            const ev = { type: 'todo_tree/add', data: { turn, node_id: nodeId, parent_id: args.parent_id, title: t, kind, branch: (args.branch ?? false) && i === 0 } }
+            agent.session.append(ev.type, ev.data)
+            tree = foldEvent(tree, ev)
+            addedIds.push(nodeId)
           }
-          break
+          // Return with last added id marked as new (or all if multiple)
+          newNodeId = addedIds[addedIds.length - 1]
+          const result: any = { tree, summary: buildSummary(tree) }
+          if (addedIds.length === 1) result.new_node = addedIds[0]
+          else result.new_nodes = addedIds
+          return result
         }
 
         case 'start':
@@ -499,6 +527,10 @@ function apply(ctx: any, _config: Record<string, never>): void {
           }
           eventType = eventMap[args.action]
           eventData = { turn, node_id: args.node_id }
+          // complete can optionally carry a summary of what was found/fixed
+          if (args.action === 'complete' && args.summary) {
+            eventData.summary = args.summary
+          }
           break
         }
 
@@ -580,15 +612,15 @@ function apply(ctx: any, _config: Record<string, never>): void {
     '',
     '### Actions',
     '- `create_tree` — Create the tree with a root problem and a final goal. Call this once at the start.',
-    '- `add_step` — Add a concrete step as a child of an existing node. Set `branch=true` for a side path. Optional `id` for a semantic id (e.g. "ceph-full"); omit for auto n1/n2/...',
+    '- `add_step` — Add a step under a parent. Optional `id` for semantic id (e.g. "ceph-full"). Title can be an array to add multiple siblings at once.',
     '- `add_milestone` — Add a milestone. Same params as add_step.',
     '- `start` — Mark a node as in_progress.',
-    '- `complete` — Mark a node as done (can skip start — pending also transitions to done directly).',
+    '- `complete` — Mark a node as done (can skip start). Optional `summary` to record what was found/fixed.',
     '- `abandon` — Mark a node as a dead end (it stays on the tree; you can re-explore later).',
     '- `reopen` — Reactivate an abandoned (dead_end) node back to in_progress.',
     '- `resolve` — Mark the final goal as resolved. Requires a `summary`.',
     '- `note` — Add detail text to a node.',
-    '- `view` — Retrieve the full tree with all details (titles, notes, summaries, turns). Optional `status_filter` to show only one status (e.g. status_filter="in_progress").',
+    '- `view` — Retrieve the full tree with details. Optional `status_filter` to show only one status.',
     '',
     '### Output format',
     'Each call returns a compact tree: id + status + title, one line per node.',
