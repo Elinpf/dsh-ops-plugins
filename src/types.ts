@@ -110,7 +110,7 @@ export interface TodoTreeEventMap {
 
 // ── Tool action types ────────────────────────────────────────────────────────
 
-/** The 9 actions the `todo_tree` tool accepts. */
+/** The 10 actions the `todo_tree` tool accepts. */
 export type TodoTreeAction =
   | 'create_tree'
   | 'add_step'
@@ -118,6 +118,7 @@ export type TodoTreeAction =
   | 'start'
   | 'complete'
   | 'abandon'
+  | 'reopen'
   | 'resolve'
   | 'note'
   | 'view'

@@ -351,7 +351,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
     parameters: {
       action: { type: 'string', enum: [
         'create_tree', 'add_step', 'add_milestone',
-        'start', 'complete', 'abandon', 'resolve', 'note', 'view',
+        'start', 'complete', 'abandon', 'reopen', 'resolve', 'note', 'view',
       ], description: 'The action to perform.' },
 
       // create_tree
@@ -364,14 +364,17 @@ function apply(ctx: any, _config: Record<string, never>): void {
       branch: { type: 'boolean', description: 'Branch to a new lane (add_step/add_milestone only, default false).' },
       id: { type: 'string', description: 'Custom semantic id for the new node, e.g. "ceph-full" (add_step/add_milestone only, optional). If omitted, auto-generates n1/n2/...' },
 
-      // start / complete / abandon / note
-      node_id: { type: 'string', description: 'Target node id (start/complete/abandon/note only).' },
+      // start / complete / abandon / reopen / note
+      node_id: { type: 'string', description: 'Target node id (start/complete/abandon/reopen/note only).' },
 
       // resolve
       summary: { type: 'string', description: 'How the goal was achieved (resolve only, required).' },
 
       // note
       detail: { type: 'string', description: 'Detail text (note only).' },
+
+      // view
+      status_filter: { type: 'string', enum: ['pending', 'in_progress', 'done', 'dead_end', 'resolved'], description: 'Filter view to nodes of one status (view only, optional). If omitted, shows all.' },
     },
 
     output: {
@@ -446,20 +449,22 @@ function apply(ctx: any, _config: Record<string, never>): void {
 
         case 'start':
         case 'complete':
-        case 'abandon': {
+        case 'abandon':
+        case 'reopen': {
           if (!currentTree) throw new Error('todo_tree: no tree')
           if (!args.node_id) throw new Error('todo_tree: node_id is required')
           const node = currentTree.nodes.find((n) => n.id === args.node_id)
           if (!node) throw new Error(`todo_tree: node "${args.node_id}" not found`)
           const targetStatus: NodeStatus =
-            args.action === 'start' ? 'in_progress'
+            args.action === 'start' || args.action === 'reopen' ? 'in_progress'
             : args.action === 'complete' ? 'done'
             : 'dead_end'
           if (!canTransition(node.status, targetStatus)) {
             throw new Error(`todo_tree: cannot transition from "${node.status}" to "${targetStatus}"`)
           }
           const eventMap: Record<string, string> = {
-            start: 'todo_tree/start', complete: 'todo_tree/complete', abandon: 'todo_tree/abandon',
+            start: 'todo_tree/start', complete: 'todo_tree/complete',
+            abandon: 'todo_tree/abandon', reopen: 'todo_tree/start',
           }
           eventType = eventMap[args.action]
           eventData = { turn, node_id: args.node_id }
@@ -493,6 +498,17 @@ function apply(ctx: any, _config: Record<string, never>): void {
 
         case 'view': {
           // No event to append — just return the current tree in full format.
+          // If status_filter is set, only include nodes matching that status
+          // (plus the root and goal for context).
+          if (args.status_filter && currentTree) {
+            const filtered: TreeState = {
+              resolved: currentTree.resolved,
+              nodes: currentTree.nodes.filter((n) =>
+                n.parent === null || n.id === 'goal' || n.status === args.status_filter
+              ),
+            }
+            return { tree: filtered, summary: buildSummary(currentTree) }
+          }
           return { tree: currentTree, summary: buildSummary(currentTree) }
         }
 
@@ -540,9 +556,10 @@ function apply(ctx: any, _config: Record<string, never>): void {
       '- `start` — Mark a node as in_progress.',
       '- `complete` — Mark a node as done (can skip start — pending also transitions to done directly).',
       '- `abandon` — Mark a node as a dead end (it stays on the tree; you can re-explore later).',
+      '- `reopen` — Reactivate an abandoned (dead_end) node back to in_progress.',
       '- `resolve` — Mark the final goal as resolved. Requires a `summary`.',
       '- `note` — Add detail text to a node.',
-      '- `view` — Retrieve the full tree with all details (titles, notes, summaries, turns). Use when you forget what a node id refers to.',
+      '- `view` — Retrieve the full tree with all details (titles, notes, summaries, turns). Optional `status_filter` to show only one status (e.g. status_filter="in_progress").',
       '',
       '### Output format',
       'Each call returns a compact tree: id + status + title, one line per node.',
