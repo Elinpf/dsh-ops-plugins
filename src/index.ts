@@ -203,7 +203,12 @@ const todoTreeProjectionSchema = zod.union([treeStateSchema, zod.null()])
 
 function apply(ctx: any, _config: Record<string, never>): void {
   // ── Register session projection (09) ──────────────────────────────────────
+  // Store the registry reference so the tool's execute can read the current
+  // projection state via snapshot(session) — the host-side API (not faceOf,
+  // which is client-only).
+  let projectionRegistry: any = null
   ctx.inject(['sessionProjections'], (pctx: any) => {
+    projectionRegistry = pctx.sessionProjections
     pctx.sessionProjections.register({
       key: 'todo_tree',
       schema: todoTreeProjectionSchema,
@@ -258,9 +263,19 @@ function apply(ctx: any, _config: Record<string, never>): void {
       if (!agent) throw new Error('todo_tree requires an owning agent session')
       const turn = currentTurn(exec)
 
-      // Read current tree from projection (or from last event)
-      const projection = agent.session.projections?.faceOf?.('todo_tree')?.getSnapshot?.()
-      const currentTree: TreeState | null = projection ?? null
+      // Read current tree from the projection registry (host-side API).
+      // session.append() emits session/event synchronously, which drives
+      // the projection fold synchronously, so snapshot() reflects all
+      // previously-appended events.
+      let currentTree: TreeState | null = null
+      if (projectionRegistry) {
+        try {
+          const snap = projectionRegistry.snapshot(agent.session)
+          currentTree = snap?.values?.todo_tree ?? null
+        } catch {
+          currentTree = null
+        }
+      }
 
       // The event we will append and the locally-folded result.
       // We compute the return value from the local fold, NOT from re-reading
