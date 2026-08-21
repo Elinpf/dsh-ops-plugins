@@ -688,7 +688,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
     'Use `view` to see full details (notes, summaries, turns).',
     '',
     '### Discipline',
-    '- **Every 3 turns of investigation, at least 1 todo_tree update.**',
+    '- **Every 5 steps of investigation, at least 1 todo_tree update.**',
     '- **Waiting loops**: use `note` to record observations even when "nothing changed" (e.g. "Pod still ContainerCreating after 3min").',
     '- **Unexpected branches**: when an investigation leads somewhere unplanned, immediately `add_step` with `branch=true` to record the new direction.',
     '- **Dead ends are valuable**: `abandon` them — the full exploration trail is the record.',
@@ -715,7 +715,9 @@ function apply(ctx: any, _config: Record<string, never>): void {
   })
 
   // Dynamic reminder section — evaluated at each prompt assembly.
-  // Checks if the agent has gone N turns without a todo_tree update.
+  // Checks if the agent has gone N steps without a todo_tree update.
+  // Uses step/start (not turn/start) because a single turn can contain
+  // many steps — counting by turn misses long investigation runs.
   ctx.systemPrompt.section({
     name: 'tool:todo_tree:reminder',
     order: 241,
@@ -725,28 +727,29 @@ function apply(ctx: any, _config: Record<string, never>): void {
       const events = agent.session?.events
       if (!events || events.length === 0) return ''
 
-      // Find the current turn number and the last turn where todo_tree was called
-      let currentTurn = 0
-      let lastTodoTreeTurn = 0
+      // Track the current step number and the last step where todo_tree was called.
+      // step/start events carry { turn, step } — step increments within each turn.
+      let currentStep = 0
+      let lastTodoTreeStep = 0
 
       for (const ev of events) {
-        if (ev.type === 'turn/start') {
-          currentTurn = ev.data?.turn ?? 0
+        if (ev.type === 'step/start') {
+          currentStep = (ev.data?.turn ?? 0) * 1000 + (ev.data?.step ?? 0)
         }
         if (ev.type === 'tool/call' && ev.data?.name === 'todo_tree') {
-          lastTodoTreeTurn = currentTurn
+          lastTodoTreeStep = currentStep
         }
       }
 
-      // Only remind if tree exists but hasn't been touched in 3+ turns
+      // Only remind if tree exists but hasn't been touched in 5+ steps
       const hasTree = events.some(
         (e: any) => e.type === 'todo_tree/create'
       )
-      if (!hasTree || lastTodoTreeTurn === 0) return ''
-      if (currentTurn - lastTodoTreeTurn < 3) return ''
+      if (!hasTree || lastTodoTreeStep === 0) return ''
+      if (currentStep - lastTodoTreeStep < 5) return ''
 
-      const gap = currentTurn - lastTodoTreeTurn
-      return `[REMINDER] You haven't updated todo_tree in ${gap} turns. Call \`todo_tree view\` to check current state, then \`note\` or \`add_step\` to record your progress.`
+      const gap = currentStep - lastTodoTreeStep
+      return `[REMINDER] You haven't updated todo_tree in ${gap} steps. Call \`todo_tree view\` to check current state, then \`note\` or \`add_step\` to record your progress.`
     },
   })
 }
