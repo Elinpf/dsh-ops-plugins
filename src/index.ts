@@ -8,6 +8,7 @@
  */
 
 import z from '@deepseek-ai/schemastery'
+import { z as zod } from 'zod'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 
 // ── Types (import type so they erase at runtime) ─────────────────────────────
@@ -179,6 +180,25 @@ const TOOL_DESCRIPTION = [
   'The tree persists for the session and helps you stay oriented — every call returns the full tree and a status summary.',
 ].join('')
 
+// ── Projection schema (validates the view for client transport) ─────────────
+
+const treeNodeSchema = zod.object({
+  id: zod.string(),
+  title: zod.string(),
+  status: zod.enum(['goal', 'pending', 'in_progress', 'done', 'dead_end', 'resolved']),
+  parent: zod.string().nullable(),
+  turns: zod.array(zod.number()),
+  detail: zod.string().nullable(),
+  summary: zod.string().nullable(),
+})
+
+const treeStateSchema = zod.object({
+  nodes: zod.array(treeNodeSchema),
+  resolved: zod.boolean(),
+})
+
+const todoTreeProjectionSchema = zod.union([treeStateSchema, zod.null()])
+
 // ── Tool implementation ─────────────────────────────────────────────────────
 
 function apply(ctx: any, _config: Record<string, never>): void {
@@ -186,6 +206,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
   ctx.inject(['sessionProjections'], (pctx: any) => {
     pctx.sessionProjections.register({
       key: 'todo_tree',
+      schema: todoTreeProjectionSchema,
       init: () => null,
       apply: foldEvent,
       view: (s: TreeState | null) => s,
