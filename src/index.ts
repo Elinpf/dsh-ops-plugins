@@ -58,13 +58,20 @@ function generateId(): string {
   return 'n' + nodeCounter
 }
 
-/** Generate a slug from a title (e.g. "Check Ceph storage" → "check-ceph-storage").
+/** Generate a slug from a title.
+ *  - ASCII alphanumerics are kept and lowercased.
+ *  - Non-ASCII characters (Chinese, Japanese, etc.) are kept as-is.
+ *  - Whitespace and punctuation become hyphens.
+ *  e.g. "Check Ceph" → "check-ceph", "检查存储" → "检查存储",
+ *       "baizeops 故障" → "baizeops-故障"
  *  If the slug already exists in the tree, append a numeric suffix. */
 function slugify(title: string, existingIds: Set<string>): string {
   let slug = title
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
+    .replace(/[\s_]+/g, '-')       // whitespace → -
+    .replace(/[^\p{L}\p{N}-]+/gu, '', ) // remove punctuation, keep letters/numbers/hyphens (unicode-aware)
+    .replace(/-{2,}/g, '-')        // collapse multiple hyphens
+    .replace(/^-+|-+$/g, '')      // trim leading/trailing hyphens
     .slice(0, 40)
   if (!slug) slug = 'node'
   // Ensure uniqueness
