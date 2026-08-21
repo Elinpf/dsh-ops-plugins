@@ -38,7 +38,7 @@ const Config = z.object({})
 /** Legal status transitions. Key = from-status, value = set of allowed to-statuses. */
 const TRANSITIONS: Record<NodeStatus, NodeStatus[]> = {
   goal: ['in_progress', 'done', 'resolved'],
-  pending: ['in_progress'],
+  pending: ['in_progress', 'done', 'dead_end'],
   in_progress: ['done', 'dead_end'],
   done: ['dead_end'],
   dead_end: ['in_progress'],
@@ -159,8 +159,10 @@ function buildSummary(tree: TreeState | null): TodoTreeResult['summary'] {
     goal: 0, pending: 0, in_progress: 0, done: 0, dead_end: 0, resolved: 0,
   }
   for (const n of nodes) counts[n.status]++
+  // Incomplete = not done, not dead_end, not resolved, and not the root node.
+  // The root and goal nodes are structural, not "incomplete" steps.
   const incomplete = nodes
-    .filter((n) => n.status === 'goal' || n.status === 'pending' || n.status === 'in_progress')
+    .filter((n) => n.parent !== null && n.status !== 'done' && n.status !== 'dead_end' && n.status !== 'resolved')
     .map((n) => ({ id: n.id, title: n.title, status: n.status }))
   const warning = incomplete.length > 0 && tree?.resolved
     ? `${incomplete.length} node(s) still incomplete`
@@ -360,6 +362,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
       parent_id: { type: 'string', description: 'Parent node id (add_step/add_milestone only).' },
       title: { type: 'string', description: 'Node title (add_step/add_milestone only).' },
       branch: { type: 'boolean', description: 'Branch to a new lane (add_step/add_milestone only, default false).' },
+      id: { type: 'string', description: 'Custom semantic id for the new node, e.g. "ceph-full" (add_step/add_milestone only, optional). If omitted, auto-generates n1/n2/...' },
 
       // start / complete / abandon / note
       node_id: { type: 'string', description: 'Target node id (start/complete/abandon/note only).' },
@@ -426,7 +429,11 @@ function apply(ctx: any, _config: Record<string, never>): void {
           if (!args.title) throw new Error('todo_tree: title is required')
           const parent = currentTree.nodes.find((n) => n.id === args.parent_id)
           if (!parent) throw new Error(`todo_tree: parent node "${args.parent_id}" not found`)
-          const nodeId = generateId()
+          // Allow custom semantic id (e.g. "ceph-full"), fallback to auto-generated n1/n2...
+          const nodeId = args.id || generateId()
+          if (currentTree.nodes.some((n) => n.id === nodeId)) {
+            throw new Error(`todo_tree: node id "${nodeId}" already exists`)
+          }
           newNodeId = nodeId
           const kind = args.action === 'add_milestone' ? 'milestone' : 'step'
           eventType = 'todo_tree/add'
@@ -528,10 +535,10 @@ function apply(ctx: any, _config: Record<string, never>): void {
       '',
       '### Actions',
       '- `create_tree` — Create the tree with a root problem and a final goal. Call this once at the start.',
-      '- `add_step` — Add a concrete step as a child of an existing node. Set `branch=true` for a side path.',
-      '- `add_milestone` — Add a milestone (more stable than a step).',
+      '- `add_step` — Add a concrete step as a child of an existing node. Set `branch=true` for a side path. Optional `id` for a semantic id (e.g. "ceph-full"); omit for auto n1/n2/...',
+      '- `add_milestone` — Add a milestone. Same params as add_step.',
       '- `start` — Mark a node as in_progress.',
-      '- `complete` — Mark a node as done.',
+      '- `complete` — Mark a node as done (can skip start — pending also transitions to done directly).',
       '- `abandon` — Mark a node as a dead end (it stays on the tree; you can re-explore later).',
       '- `resolve` — Mark the final goal as resolved. Requires a `summary`.',
       '- `note` — Add detail text to a node.',
