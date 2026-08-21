@@ -324,6 +324,37 @@ function renderFull(value: any): string {
   return lines.join('\n')
 }
 
+/**
+ * Decide what to render based on the action.
+ * - create_tree / add_step / add_milestone / resolve: full compact tree
+ *   (agent needs to see new node id and structure)
+ * - view: full tree with details
+ * - start / complete / abandon / reopen / note: one-line confirmation only
+ *   (no tree — saves tokens on high-frequency status changes)
+ */
+function renderOutput(args: any, value: any): string {
+  const action = args?.action
+  if (action === 'view') return renderFull(value)
+
+  // Simple status changes and notes: return a short confirmation
+  if (action === 'start' || action === 'complete' || action === 'abandon'
+      || action === 'reopen' || action === 'note') {
+    if (!value || !value.tree) return 'No tree — call create_tree first.'
+    const summary = value.summary
+    const parts: string[] = []
+    const c = summary?.counts || {}
+    if (c.done) parts.push(`${c.done} done`)
+    if (c.in_progress) parts.push(`${c.in_progress} in_progress`)
+    if (c.pending) parts.push(`${c.pending} pending`)
+    if (c.dead_end) parts.push(`${c.dead_end} dead_end`)
+    if (value.tree.resolved) parts.push('resolved')
+    return parts.join(' | ')
+  }
+
+  // create_tree, add_step, add_milestone, resolve: return compact tree
+  return renderCompact(value, value?.new_node)
+}
+
 // ── Tool implementation ─────────────────────────────────────────────────────
 
 function apply(ctx: any, _config: Record<string, never>): void {
@@ -381,7 +412,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
       schema: { type: 'json' },
       render: (args: any, value: any) => [{
         type: 'text',
-        text: args?.action === 'view' ? renderFull(value) : renderCompact(value, value?.new_node),
+        text: renderOutput(args, value),
       }],
     },
 
