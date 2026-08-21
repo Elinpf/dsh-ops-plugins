@@ -206,7 +206,15 @@ function computeLayout(nodes: TreeNode[]): PositionedNode[] {
 // ── View component ──────────────────────────────────────────────────────────
 
 function OpsTreeView(props: any): any {
-  const tree: TreeState | null = props.useProjection ? props.useProjection('todo_tree') : null
+  // Defensive: useProjection may not exist or the projection key may not be
+  // registered (e.g. the host half is not composed in this profile).
+  // In that case, render a graceful empty state instead of crashing.
+  let tree: TreeState | null = null
+  try {
+    if (props.useProjection) tree = props.useProjection('todo_tree') ?? null
+  } catch {
+    tree = null
+  }
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [hovered, setHovered] = useState<string | null>(null)
