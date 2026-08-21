@@ -202,13 +202,13 @@ const todoTreeProjectionSchema = zod.union([treeStateSchema, zod.null()])
 // ── Tree renderers (model-visible output) ────────────────────────────────────
 
 /** Status → emoji for compact rendering. */
-const STATUS_EMOJI: Record<string, string> = {
-  pending: '○',
-  in_progress: '→',
-  done: '✓',
-  dead_end: '✗',
+const STATUS_LABEL: Record<string, string> = {
+  pending: 'pending',
+  in_progress: 'in_progress',
+  done: 'done',
+  dead_end: 'dead_end',
   goal: '',
-  resolved: '✅',
+  resolved: 'resolved',
 }
 
 /** Sort children: in_progress first, then pending, done, dead_end; goal always last. */
@@ -243,7 +243,7 @@ function buildTreeIndex(nodes: TreeNode[]) {
 }
 
 /**
- * Compact render: markdown list, one line per node, id + emoji + title.
+ * Compact render: markdown list, one line per node, id + status + title.
  * No detail/summary/turns. New node marked with *.
  */
 function renderCompact(value: any, newNodeId?: string): string {
@@ -260,12 +260,12 @@ function renderCompact(value: any, newNodeId?: string): string {
   if (summary) {
     const parts: string[] = []
     const c = summary.counts || {}
-    if (c.done) parts.push(`${c.done}✓`)
-    if (c.in_progress) parts.push(`${c.in_progress}→`)
-    if (c.pending) parts.push(`${c.pending}○`)
-    if (c.dead_end) parts.push(`${c.dead_end}✗`)
-    if (tree.resolved) parts.push('✅resolved')
-    if (summary.warning) parts.push('⚠ ' + summary.warning)
+    if (c.done) parts.push(`${c.done} done`)
+    if (c.in_progress) parts.push(`${c.in_progress} in_progress`)
+    if (c.pending) parts.push(`${c.pending} pending`)
+    if (c.dead_end) parts.push(`${c.dead_end} dead_end`)
+    if (tree.resolved) parts.push('resolved')
+    if (summary.warning) parts.push('WARN: ' + summary.warning)
     if (parts.length > 0) {
       lines.push(parts.join(' | '))
       lines.push('')
@@ -273,10 +273,10 @@ function renderCompact(value: any, newNodeId?: string): string {
   }
 
   function renderNode(node: TreeNode, indent: string): void {
-    const emoji = STATUS_EMOJI[node.status] || ''
+    const label = STATUS_LABEL[node.status] || ''
     const isNew = node.id === newNodeId ? '*' : ''
-    const emojiStr = emoji ? `${emoji} ` : ''
-    lines.push(`${indent}- ${isNew}${node.id}: ${emojiStr}${node.title}`)
+    const labelStr = label ? `${label} ` : ''
+    lines.push(`${indent}- ${isNew}${node.id}: ${labelStr}${node.title}`)
 
     const kids = sortChildren(children[node.id] || [])
     for (const kid of kids) {
@@ -290,7 +290,7 @@ function renderCompact(value: any, newNodeId?: string): string {
 }
 
 /**
- * Full render: includes detail (📝), summary (✅), and turns for each node.
+ * Full render: includes detail, summary, and turns for each node.
  * Used by the `view` action.
  */
 function renderFull(value: any): string {
@@ -303,12 +303,12 @@ function renderFull(value: any): string {
   const lines: string[] = []
 
   function renderNode(node: TreeNode, indent: string): void {
-    const emoji = STATUS_EMOJI[node.status] || ''
-    const emojiStr = emoji ? `${emoji} ` : ''
-    let line = `${indent}- ${node.id}: ${emojiStr}${node.title}`
+    const label = STATUS_LABEL[node.status] || ''
+    const labelStr = label ? `${label} ` : ''
+    let line = `${indent}- ${node.id}: ${labelStr}${node.title}`
     if (node.turns?.length) line += ` (turn ${node.turns.join(',')})`
-    if (node.detail) line += ` 📝 ${node.detail}`
-    if (node.summary) line += ` ✅ ${node.summary}`
+    if (node.detail) line += ` | note: ${node.detail}`
+    if (node.summary) line += ` | resolved: ${node.summary}`
     lines.push(line)
 
     const kids = sortChildren(children[node.id] || [])
@@ -536,8 +536,8 @@ function apply(ctx: any, _config: Record<string, never>): void {
       '- `view` — Retrieve the full tree with all details (titles, notes, summaries, turns). Use when you forget what a node id refers to.',
       '',
       '### Output format',
-      'Each call returns a compact tree: id + status emoji + title, one line per node.',
-      'Status: ○ pending, → in_progress, ✓ done, ✗ dead_end, ✅ resolved.',
+      'Each call returns a compact tree: id + status + title, one line per node.',
+      'Status: pending, in_progress, done, dead_end, resolved.',
       'New nodes from add_step/add_milestone are marked with *.',
       'Use `view` to see full details (notes, summaries, turns).',
       '',
