@@ -100,17 +100,11 @@ export interface TodoTreeEventMap {
     goal_id: string
     summary: string
   }
-  /** Add detail text to a node (no status change). */
-  'todo_tree/note': {
-    turn: number
-    node_id: string
-    detail: string
-  }
 }
 
 // ── Tool action types ────────────────────────────────────────────────────────
 
-/** The 10 actions the `todo_tree` tool accepts. */
+/** The 9 actions the `todo_tree` tool accepts. */
 export type TodoTreeAction =
   | 'create_tree'
   | 'add_step'
@@ -120,7 +114,6 @@ export type TodoTreeAction =
   | 'abandon'
   | 'reopen'
   | 'resolve'
-  | 'note'
   | 'view'
 
 /**

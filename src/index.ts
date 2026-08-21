@@ -149,10 +149,6 @@ function foldEvent(state: TreeState | null, event: any): TreeState | null {
       return updated ? { ...updated, resolved: true } : state
     }
 
-    case 'todo_tree/note': {
-      return updateNode(state, data.node_id, data.turn, (n) => { n.detail = data.detail })
-    }
-
     default:
       return state
   }
@@ -202,12 +198,14 @@ function buildSummary(tree: TreeState | null): TodoTreeResult['summary'] {
 
 const TOOL_DESCRIPTION = [
   'Maintain an investigation tree for incident response. ',
-  'Create the tree at the start of an incident, add steps and milestones as you investigate, ',
-  'mark dead ends (they stay on the tree — the full exploration trail is preserved), ',
+  'Structure: root (problem) → milestone (fixed phase anchor) → step (flexible investigation path). ',
+  'Create the tree at the start, plan milestones for investigation phases, add steps as you investigate, ',
+  'complete steps with a summary of findings, abandon steps that are no longer relevant, ',
   'and resolve when the incident is resolved. ',
-  'Actions: create_tree, add_step, add_milestone, start, complete, abandon, resolve, note. ',
-  'Use branch=true on add_step/add_milestone when exploring a side path. ',
-  'The tree persists for the session and helps you stay oriented — every call returns the full tree and a status summary.',
+  'Actions: create_tree, add_milestone, add_step, start, complete, abandon, reopen, resolve, view. ',
+  'Use branch=true on add_step when exploring a side path. ',
+  'Batch: pass titles+ids arrays to add_step, node_ids array to start/complete/abandon. ',
+  'The tree persists for the session and helps you stay oriented.',
 ].join('')
 
 // ── Projection schema (validates the view for client transport) ─────────────
@@ -341,11 +339,8 @@ function renderFull(value: any): string {
     const turnStr = node.turns?.length ? ` (turn ${node.turns.join(',')})` : ''
     lines.push(`${prefix}${connector}${node.id}: ${labelStr}${node.title}${turnStr}`)
 
-    // Detail and summary on separate indented lines to avoid super-long single lines
+    // Summary on separate indented line (from complete/resolve)
     const indent = prefix + (isLast ? '    ' : '│   ')
-    if (node.detail) {
-      lines.push(`${indent}note: ${node.detail}`)
-    }
     if (node.summary) {
       lines.push(`${indent}summary: ${node.summary}`)
     }
@@ -375,7 +370,7 @@ function renderOutput(args: any, value: any): string {
 
   // Simple status changes: return a short confirmation with total count
   if (action === 'start' || action === 'complete' || action === 'abandon'
-      || action === 'reopen' || action === 'note') {
+      || action === 'reopen') {
     if (!value || !value.tree) return 'No tree — call create_tree first.'
     const summary = value.summary
     const parts: string[] = []
@@ -420,7 +415,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
     parameters: {
       action: { type: 'string', enum: [
         'create_tree', 'add_step', 'add_milestone',
-        'start', 'complete', 'abandon', 'reopen', 'resolve', 'note', 'view',
+        'start', 'complete', 'abandon', 'reopen', 'resolve', 'view',
       ], description: 'The action to perform.' },
 
       // create_tree
@@ -441,9 +436,6 @@ function apply(ctx: any, _config: Record<string, never>): void {
 
       // resolve / complete (optional on complete)
       summary: { type: 'string', description: 'How the goal/node was resolved. Required for resolve. Optional for complete — records what was found/fixed.' },
-
-      // note
-      detail: { type: 'string', description: 'Detail text (note only), or array of details matching node_ids array for batch.' },
 
       // view
       status_filter: { type: 'string', enum: ['pending', 'in_progress', 'done', 'dead_end', 'resolved'], description: 'Filter view to nodes of one status (view only, optional). If omitted, shows all.' },
@@ -592,32 +584,6 @@ function apply(ctx: any, _config: Record<string, never>): void {
           break
         }
 
-        case 'note': {
-          if (!currentTree) throw new Error('todo_tree: no tree')
-          if (!args.node_id && !args.node_ids) throw new Error('todo_tree: node_id (or node_ids array) is required')
-          if (!args.detail) throw new Error('todo_tree: detail is required for note')
-
-          // Batch mode: node_ids and detail can be arrays
-          const nodeIds: string[] = Array.isArray(args.node_ids) ? args.node_ids : [args.node_id]
-          const details: string[] = Array.isArray(args.detail) ? args.detail : Array(nodeIds.length).fill(args.detail)
-          if (details.length !== nodeIds.length) {
-            throw new Error('todo_tree: detail array must match node_id array length')
-          }
-
-          let tree: TreeState | null = currentTree
-          for (let i = 0; i < nodeIds.length; i++) {
-            const nid = nodeIds[i]
-            const det = details[i]
-            const node = tree!.nodes.find((n) => n.id === nid)
-            if (!node) throw new Error(`todo_tree: node "${nid}" not found`)
-            const evData = { turn, node_id: nid, detail: det }
-            agent.session.append('todo_tree/note', evData)
-            tree = foldEvent(tree, { type: 'todo_tree/note', data: evData })
-          }
-          const result: any = { tree, summary: buildSummary(tree) }
-          return result
-        }
-
         case 'view': {
           // No event to append — just return the current tree in full format.
           // If status_filter is set, only include nodes matching that status
@@ -671,39 +637,38 @@ function apply(ctx: any, _config: Record<string, never>): void {
     '',
     '### Actions',
     '- `create_tree` — Create the tree with a root problem and a final goal. Call this once at the start.',
-    '- `add_step` — Add a step under a parent. Optional `id` for semantic id (e.g. "ceph-full"); if omitted, auto-generated from title. Batch: pass titles+ids arrays. node_id params for start/complete/abandon/reopen/note also accept arrays for batch updates.',
-    '- `add_milestone` — Add a milestone. Same params as add_step.',
-    '- `start` — Mark a node as in_progress.',
-    '- `complete` — Mark a node as done (can skip start). Optional `summary` to record what was found/fixed.',
-    '- `abandon` — Mark a node as a dead end (it stays on the tree; you can re-explore later).',
+    '- `add_milestone` — Add a milestone as a fixed anchor under root or another milestone. Milestones organize investigation phases (e.g. "confirm storage root cause", "fix storage layer").',
+    '- `add_step` — Add a step under a milestone (or another step). Steps are flexible investigation paths. Optional `id` for semantic id; if omitted, auto-generated from title. Batch: pass titles+ids arrays.',
+    '- `start` — Mark a step as in_progress. Accepts node_ids array for batch.',
+    '- `complete` — Mark a step as done (can skip start). Optional `summary` to record what was found/fixed. Accepts node_ids array for batch.',
+    '- `abandon` — Mark a step as no longer needed. This includes dead ends (didn\'t work) AND changed circumstances (situation shifted, this check is no longer relevant). The step stays on the tree for the record. Accepts node_ids array for batch.',
     '- `reopen` — Reactivate an abandoned (dead_end) node back to in_progress.',
     '- `resolve` — Mark the final goal as resolved. Requires a `summary`.',
-    '- `note` — Add detail text to a node.',
-    '- `view` — Retrieve the full tree with details. Optional `status_filter` to show only one status.',
+    '- `view` — Retrieve the full tree with summaries. Optional `status_filter` to show only one status.',
+    '',
+    '### Tree structure',
+    'root (problem) → milestone (fixed phase anchor) → step (flexible investigation path).',
+    'Milestones are planned upfront and stay relatively stable.',
+    'Steps are created and completed as you investigate; abandon steps that are no longer relevant.',
+    'When you find something new, add_step — do not accumulate findings in a single node.',
     '',
     '### Output format',
     'Each call returns a compact tree: id + status + title, one line per node.',
     'Status: pending, in_progress, done, dead_end, resolved.',
     'New nodes from add_step/add_milestone are marked with *.',
-    'Use `view` to see full details (notes, summaries, turns).',
+    'Use `view` to see full details (summaries, turns).',
     '',
     '### Discipline',
     '- **Every 5 steps of investigation, at least 1 todo_tree update.**',
-    '- **Waiting loops**: use `note` to record observations even when "nothing changed" (e.g. "Pod still ContainerCreating after 3min").',
-    '- **Unexpected branches**: when an investigation leads somewhere unplanned, immediately `add_step` with `branch=true` to record the new direction.',
-    '- **Dead ends are valuable**: `abandon` them — the full exploration trail is the record.',
-    '- **Don\'t forget**: if you lose track of what a node id means, call `view`.',
-    '',
-    '### note vs add_step — the key distinction',
-    '- `note` is backward-looking: records what you found.',
-    '- `add_step` is forward-looking: structures what to investigate next.',
-    '- When a note contains "need to verify X" or "depends on Y" or "might be caused by Z",',
-    '  that is a NEW investigation path. Promote it: `add_step` with a semantic id.',
-    '- Do NOT let actionable follow-ups stay buried in note text.',
+    '- **When you find something**: add_step to structure it, then complete with a summary.',
+    '- **Unexpected branches**: when an investigation leads somewhere unplanned, immediately `add_step` with `branch=true`.',
+    '- **Dead ends and changed plans**: `abandon` them — the full exploration trail is the record.',
+    '- **Don\'t forget**: if you lose track of the tree, call `view`.',
     '',
     '### Lifecycle',
-    '- At the start of an incident: `create_tree` with the problem and the goal.',
-    '- Before investigating: `add_step` for each concrete check.',
+    '- At the start: `create_tree` with the problem and the goal.',
+    '- Plan phases: `add_milestone` for each major investigation phase.',
+    '- Investigate: `add_step` under the relevant milestone, then `complete` with a summary of findings.',
     '- When a path doesn\'t work: `abandon` it.',
     '- When resolved: `resolve` with a summary.',
   ].join('\n')
