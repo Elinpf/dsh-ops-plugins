@@ -199,6 +199,66 @@ const treeStateSchema = zod.object({
 
 const todoTreeProjectionSchema = zod.union([treeStateSchema, zod.null()])
 
+// ── Tree renderer (model-visible output) ─────────────────────────────────────
+
+/** Render the full tree as text so the model can see every node's id and status. */
+function renderTree(value: any): string {
+  if (!value || !value.tree || !value.tree.nodes || value.tree.nodes.length === 0) {
+    return 'No tree — call create_tree first.'
+  }
+
+  const tree: TreeState = value.tree
+  const summary = value.summary
+  const lines: string[] = []
+
+  // Summary line
+  if (summary) {
+    const parts = [
+      `${summary.total} nodes`,
+      `${summary.counts?.in_progress || 0} in_progress`,
+      `${summary.counts?.done || 0} done`,
+      `${summary.counts?.dead_end || 0} dead_end`,
+    ]
+    if (tree.resolved) parts.push('✅ RESOLVED')
+    if (summary.warning) parts.push('⚠ ' + summary.warning)
+    lines.push(parts.join(' | '))
+  }
+
+  // Build child map for tree rendering
+  const children: Record<string, TreeNode[]> = {}
+  let root: TreeNode | null = null
+  for (const n of tree.nodes) {
+    if (n.parent === null) {
+      root = n
+    } else {
+      if (!children[n.parent]) children[n.parent] = []
+      children[n.parent].push(n)
+    }
+  }
+
+  // Render tree with indentation
+  function renderNode(node: TreeNode, indent: string, isLast: boolean): void {
+    const prefix = indent + (isLast ? '└─ ' : '├─ ')
+    let line = `${prefix}[${node.status}] ${node.id}: ${node.title}`
+    if (node.detail) line += `  📝 ${node.detail}`
+    if (node.summary) line += `  ✅ ${node.summary}`
+    if (node.turns?.length) line += `  (turn ${node.turns.join(',')})`
+    lines.push(line)
+
+    const kids = children[node.id] || []
+    const childIndent = indent + (isLast ? '   ' : '│  ')
+    for (let i = 0; i < kids.length; i++) {
+      renderNode(kids[i], childIndent, i === kids.length - 1)
+    }
+  }
+
+  if (root) {
+    renderNode(root, '', true)
+  }
+
+  return lines.join('\n')
+}
+
 // ── Tool implementation ─────────────────────────────────────────────────────
 
 function apply(ctx: any, _config: Record<string, never>): void {
@@ -252,9 +312,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
       schema: { type: 'json' },
       render: (_args: any, value: any) => [{
         type: 'text',
-        text: value?.summary
-          ? `${value.summary.total} nodes | ${value.summary.counts?.in_progress || 0} in progress | ${value.summary.counts?.done || 0} done | ${value.summary.counts?.dead_end || 0} dead ends${value.summary.warning ? ' | ⚠ ' + value.summary.warning : ''}`
-          : 'No tree',
+        text: renderTree(value),
       }],
     },
 
