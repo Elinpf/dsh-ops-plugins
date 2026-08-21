@@ -338,16 +338,21 @@ function renderFull(value: any): string {
     const label = STATUS_LABEL[node.status] || ''
     const labelStr = label ? `${label} ` : ''
     const connector = isLast ? '└── ' : '├── '
-    let line = `${prefix}${connector}${node.id}: ${labelStr}${node.title}`
-    if (node.turns?.length) line += ` (turn ${node.turns.join(',')})`
-    if (node.detail) line += ` | note: ${node.detail}`
-    if (node.summary) line += ` | resolved: ${node.summary}`
-    lines.push(line)
+    const turnStr = node.turns?.length ? ` (turn ${node.turns.join(',')})` : ''
+    lines.push(`${prefix}${connector}${node.id}: ${labelStr}${node.title}${turnStr}`)
+
+    // Detail and summary on separate indented lines to avoid super-long single lines
+    const indent = prefix + (isLast ? '    ' : '│   ')
+    if (node.detail) {
+      lines.push(`${indent}note: ${node.detail}`)
+    }
+    if (node.summary) {
+      lines.push(`${indent}summary: ${node.summary}`)
+    }
 
     const kids = sortChildren(children[node.id] || [])
-    const childPrefix = prefix + (isLast ? '    ' : '│   ')
     for (let i = 0; i < kids.length; i++) {
-      renderNode(kids[i], childPrefix, i === kids.length - 1)
+      renderNode(kids[i], indent, i === kids.length - 1)
     }
   }
 
@@ -368,34 +373,19 @@ function renderOutput(args: any, value: any): string {
   const action = args?.action
   if (action === 'view') return renderFull(value)
 
-  // Simple status changes: return a short confirmation
+  // Simple status changes: return a short confirmation with total count
   if (action === 'start' || action === 'complete' || action === 'abandon'
-      || action === 'reopen') {
+      || action === 'reopen' || action === 'note') {
     if (!value || !value.tree) return 'No tree — call create_tree first.'
     const summary = value.summary
     const parts: string[] = []
     const c = summary?.counts || {}
+    parts.push(`${summary?.total || 0} nodes`)
     if (c.done) parts.push(`${c.done} done`)
     if (c.in_progress) parts.push(`${c.in_progress} in_progress`)
     if (c.pending) parts.push(`${c.pending} pending`)
     if (c.dead_end) parts.push(`${c.dead_end} dead_end`)
     if (value.tree.resolved) parts.push('resolved')
-    return parts.join(' | ')
-  }
-
-  // note: short confirmation + a gentle nudge to create sub-steps
-  // when the note might reveal a new investigation path
-  if (action === 'note') {
-    if (!value || !value.tree) return 'No tree — call create_tree first.'
-    const summary = value.summary
-    const parts: string[] = []
-    const c = summary?.counts || {}
-    if (c.done) parts.push(`${c.done} done`)
-    if (c.in_progress) parts.push(`${c.in_progress} in_progress`)
-    if (c.pending) parts.push(`${c.pending} pending`)
-    if (c.dead_end) parts.push(`${c.dead_end} dead_end`)
-    if (value.tree.resolved) parts.push('resolved')
-    parts.push('[TIP] If this note reveals a new investigation path, add_step to track it.]')
     return parts.join(' | ')
   }
 
