@@ -170,10 +170,11 @@ function foldEvent(state: ForestState | null, event: FoldEvent): ForestState | n
 
   switch (action) {
     case 'create_tree': {
-      // Append a new tree to the forest
+      // Skip if goal_title missing (failed tool call that was logged before validation)
+      if (!args.goal_title) return state
       const newTree: TreeState = {
         nodes: [{
-          id: 'goal', title: args.goal_title!, status: 'goal',
+          id: 'goal', title: args.goal_title, status: 'goal',
           parent: null, turns: [turn], summary: null, caused_by: [],
         }],
         resolved: false,
@@ -183,16 +184,22 @@ function foldEvent(state: ForestState | null, event: FoldEvent): ForestState | n
 
     case 'add_step':
     case 'add_milestone': {
+      // Skip if required fields missing (failed tool call logged before validation)
+      if (!args.id || !args.parent_id || !args.title) return state
       const forest = state ?? { trees: [] }
       const tree = activeTree(forest)
       if (!tree) return state
+      // Skip if node id already exists (duplicate of a successful call)
+      if (tree.nodes.some(n => n.id === args.id)) return state
+      // Skip if parent doesn't exist
+      if (!tree.nodes.some(n => n.id === args.parent_id)) return state
       const kind = action === 'add_milestone' ? 'milestone' : 'step'
       const updatedTree: TreeState = {
         ...tree,
         nodes: [...tree.nodes, {
-          id: args.id!, title: args.title!,
+          id: args.id, title: args.title,
           status: kind === 'milestone' ? 'goal' : 'pending',
-          parent: args.parent_id!, turns: [turn], summary: null, caused_by: [],
+          parent: args.parent_id, turns: [turn], summary: null, caused_by: [],
         }],
       }
       return replaceTree(forest, tree, updatedTree)
@@ -210,6 +217,7 @@ function foldEvent(state: ForestState | null, event: FoldEvent): ForestState | n
         : action === 'complete' ? 'done'
         : 'dead_end'
       const nodeIds: string[] = Array.isArray(args.ids) ? args.ids : (args.id ? [args.id] : [])
+      if (nodeIds.length === 0) return state
       let updatedTree = tree
       for (const nid of nodeIds) {
         updatedTree = updateNodeInTree(updatedTree, nid, turn, (n) => {
@@ -221,12 +229,13 @@ function foldEvent(state: ForestState | null, event: FoldEvent): ForestState | n
     }
 
     case 'resolve': {
+      if (!args.summary) return state
       const forest = state ?? { trees: [] }
       const tree = activeTree(forest)
       if (!tree) return state
       const updatedTree = updateNodeInTree(tree, 'goal', turn, (n) => {
         n.status = 'resolved'
-        n.summary = args.summary!
+        n.summary = args.summary ?? null
       })
       if (!updatedTree) return state
       const resolvedTree: TreeState = { ...updatedTree, resolved: true }
@@ -237,9 +246,15 @@ function foldEvent(state: ForestState | null, event: FoldEvent): ForestState | n
       const forest = state ?? { trees: [] }
       const tree = activeTree(forest)
       if (!tree) return state
-      const links: LinkPair[] = Array.isArray(args.links) ? args.links : [{id: args.id!, caused_by: args.caused_by!}]
+      const links: LinkPair[] = Array.isArray(args.links) ? args.links : (args.id && args.caused_by ? [{id: args.id, caused_by: args.caused_by}] : [])
+      if (links.length === 0) return state
+      // Validate all links have required fields and nodes exist
+      const validLinks = links.filter(link => link.id && link.caused_by
+        && tree.nodes.some(n => n.id === link.id)
+        && tree.nodes.some(n => n.id === link.caused_by))
+      if (validLinks.length === 0) return state
       let updatedTree = tree
-      for (const link of links) {
+      for (const link of validLinks) {
         updatedTree = updateNodeInTree(updatedTree, link.id, turn, (n) => {
           if (!n.caused_by.includes(link.caused_by)) {
             n.caused_by = [...n.caused_by, link.caused_by]
