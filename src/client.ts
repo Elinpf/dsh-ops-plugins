@@ -73,6 +73,12 @@ const CSS = `
   align-items: center;
   gap: 10px;
   width: 100%;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.ops-trace-header:hover {
+  background: var(--dsw-alias-bg-hover, #e9ecef);
 }
 
 .ops-trace-title {
@@ -140,23 +146,11 @@ const CSS = `
   color: var(--dsw-alias-label-primary, #1f2328);
 }
 
-.ops-trace-chevron-btn {
+.ops-trace-chevron {
   display: grid;
   flex: none;
   place-items: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: none;
-  background: transparent;
   color: var(--dsw-alias-label-tertiary, #656d76);
-  cursor: pointer;
-  border-radius: 4px;
-}
-
-.ops-trace-chevron-btn:hover {
-  background: var(--dsw-alias-bg-hover, #e9ecef);
-  color: var(--dsw-alias-label-primary, #1f2328);
 }
 
 .ops-trace-selector-list {
@@ -564,8 +558,22 @@ function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown
     'aria-label': 'Trace',
   },
     h('div', { className: 'ops-trace-body' },
-      // Header row: icon + [Trace N/M switcher] + progress + chevron
-      h('div', { className: 'ops-trace-header' },
+      // Header row: clicking anywhere (except the switcher) toggles expand/collapse
+      h('div', {
+        className: 'ops-trace-header',
+        onClick: (e: any) => {
+          // Don't toggle if clicking the switcher button
+          if (e.target.closest('.ops-trace-switcher')) return
+          setCollapsed(v => !v)
+        },
+        role: 'button',
+        tabIndex: 0,
+        'aria-expanded': !collapsed,
+        onKeyDown: (e: any) => {
+          if (e.target.closest('.ops-trace-switcher')) return
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed(v => !v) }
+        },
+      },
         h('span', { className: 'ops-trace-lead', 'aria-hidden': 'true' }, h(IconChecklistOutline14)),
         // "Trace 1/2" — click to toggle the selector list
         hasMultiple
@@ -582,13 +590,7 @@ function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown
             )
           : h('span', { className: 'ops-trace-title' }, headerTitle),
         h('span', { className: 'ops-trace-progress' }, progressLabel(tree)),
-        h('button', {
-          type: 'button',
-          className: 'ops-trace-chevron-btn',
-          onClick: () => { setCollapsed(v => !v) },
-          'aria-expanded': !collapsed,
-          'aria-label': collapsed ? 'Expand' : 'Collapse',
-        },
+        h('span', { className: 'ops-trace-chevron', 'aria-hidden': 'true' },
           collapsed ? h(IconChevronUpOutline14) : h(IconChevronDownOutline14),
         ),
       ),
