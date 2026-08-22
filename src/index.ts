@@ -156,7 +156,7 @@ function foldEvent(state: TreeState | null, event: any): TreeState | null {
         action === 'start' || action === 'reopen' ? 'in_progress'
         : action === 'complete' ? 'done'
         : 'dead_end'
-      const nodeIds: string[] = Array.isArray(args.ids) ? args.ids : []
+      const nodeIds: string[] = Array.isArray(args.ids) ? args.ids : (args.id ? [args.id] : [])
       let tree: TreeState | null = state ? { ...state, nodes } : null
       for (const nid of nodeIds) {
         tree = updateNode(tree, nid, turn, (n) => {
@@ -472,7 +472,7 @@ function renderOutput(args: any, value: any): string {
     }
   } else if (action === 'start' || action === 'complete' || action === 'abandon' || action === 'reopen') {
     // Show changed node id + new status only (no summary for brevity)
-    const ids: string[] = args.ids || []
+    const ids: string[] = Array.isArray(args.ids) ? args.ids : (args.id ? [args.id] : [])
     for (const nid of ids) {
       const node = tree.nodes.find((n) => n.id === nid)
       if (node) {
@@ -562,13 +562,11 @@ function apply(ctx: any, _config: Record<string, never>): void {
       // create_tree
       goal_title: { type: 'string', description: 'Title for the investigation goal (create_tree only).' },
 
-      // add_step / add_milestone
+      // add_step / add_milestone / start / complete / abandon / reopen / link
+      id: { type: 'string', description: 'Node id. For add_step/add_milestone: the new node\'s semantic id (e.g. "ceph-full"). For start/complete/abandon/reopen: single target node. For link: target node (use with caused_by).' },
       parent_id: { type: 'string', description: 'Parent node id (add_step/add_milestone only). Use "goal" for top-level milestones.' },
       title: { type: 'string', description: 'Node title (add_step/add_milestone only).' },
-      id: { type: 'string', description: 'Semantic id for the new node (e.g. "ceph-full"). Required for add_step/add_milestone.' },
-
-      // start / complete / abandon / reopen
-      ids: { type: 'array', items: { type: 'string' }, description: 'Array of node ids to update (start/complete/abandon/reopen). Batch mode.' },
+      ids: { type: 'array', items: { type: 'string' }, description: 'Array of node ids for batch mode (start/complete/abandon/reopen).' },
 
       // resolve / complete (optional on complete)
       summary: { type: 'string', description: 'How the goal/node was resolved. Required for resolve. Optional for complete — records what was found/fixed.' },
@@ -649,14 +647,15 @@ function apply(ctx: any, _config: Record<string, never>): void {
         case 'abandon':
         case 'reopen': {
           if (!currentTree) throw new Error('todo_tree: no tree')
-          if (!args.ids || !Array.isArray(args.ids) || args.ids.length === 0) throw new Error('todo_tree: ids array is required')
+          const nodeIds: string[] = Array.isArray(args.ids) ? args.ids : (args.id ? [args.id] : [])
+          if (nodeIds.length === 0) throw new Error('todo_tree: id (or ids array) is required')
           const targetStatus: NodeStatus =
             args.action === 'start' || args.action === 'reopen' ? 'in_progress'
             : args.action === 'complete' ? 'done'
             : 'dead_end'
 
           // Validate transitions — idempotent if already at target status
-          for (const nid of args.ids) {
+          for (const nid of nodeIds) {
             const node = currentTree.nodes.find((n) => n.id === nid)
             if (!node) throw new Error(`todo_tree: node "${nid}" not found`)
             if (node.status === targetStatus) continue // idempotent — already at target
@@ -765,10 +764,10 @@ function apply(ctx: any, _config: Record<string, never>): void {
     '- `create_tree` — Create the tree with a goal (investigation target). Call this once at the start. Requires `goal_title`.',
     '- `add_milestone` — Add a milestone as a fixed anchor under goal. Requires `id` (semantic id), `parent_id`, `title`.',
     '- `add_step` — Add a step under a milestone (or another step). Requires `id` (semantic id), `parent_id`, `title`.',
-    '- `start` — Mark nodes as in_progress. Pass `ids` array of node ids.',
-    '- `complete` — Mark nodes as done (can skip start). Optional `summary` to record what was found/fixed. Pass `ids` array.',
-    '- `abandon` — Mark nodes as no longer needed (dead ends or changed circumstances). Pass `ids` array.',
-    '- `reopen` — Reactivate a `done` or `dead_end` node back to in_progress. Pass `ids` array.',
+    '- `start` — Mark nodes as in_progress. Pass `id` (single) or `ids` array (batch).',
+    '- `complete` — Mark nodes as done (can skip start). Optional `summary` to record what was found/fixed. Pass `id` or `ids` array.',
+    '- `abandon` — Mark nodes as no longer needed (dead ends or changed circumstances). Pass `id` or `ids` array.',
+    '- `reopen` — Reactivate a `done` or `dead_end` node back to in_progress. Pass `id` or `ids` array.',
     '- `resolve` — Mark the goal as resolved. Requires `summary`.',
     '- `link` — Connect causal edges. Single: pass `id` + `caused_by`. Batch: pass `links` array of {id, caused_by} pairs.',
     '- `view` — Retrieve the full tree with summaries and causal edges. Optional `status_filter`.',
