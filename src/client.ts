@@ -29,14 +29,8 @@ const inject = ['slots']
 
 const CSS = `
 /* Hide trace panel when the trajectory view tab is active (not the chat tab) */
-[data-phase]:has([role="tab"][aria-selected="true"]:not(:first-of-type)) .ops-trace-forest {
+[data-phase]:has([role="tab"][aria-selected="true"]:not(:first-of-type)) .ops-trace-root {
   display: none;
-}
-
-.ops-trace-forest {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
 }
 
 .ops-trace-root {
@@ -74,16 +68,70 @@ const CSS = `
   padding: 6px 12px;
 }
 
-.ops-trace-header {
+.ops-trace-header-row {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
+}
+
+.ops-trace-switcher {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.ops-trace-switch-btn {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
   padding: 0;
   border: none;
   background: transparent;
-  text-align: left;
+  color: var(--dsw-alias-label-tertiary, #656d76);
   cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 4px;
+}
+
+.ops-trace-switch-btn:hover:not(:disabled) {
+  background: var(--dsw-alias-bg-hover, #e9ecef);
+  color: var(--dsw-alias-label-primary, #1f2328);
+}
+
+.ops-trace-switch-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.ops-trace-switch-pos {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary, #656d76);
+  min-width: 28px;
+  text-align: center;
+}
+
+.ops-trace-chevron-btn {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary, #656d76);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.ops-trace-chevron-btn:hover {
+  background: var(--dsw-alias-bg-hover, #e9ecef);
+  color: var(--dsw-alias-label-primary, #1f2328);
 }
 
 .ops-trace-lead {
@@ -91,14 +139,6 @@ const CSS = `
   flex: none;
   place-items: center;
   color: var(--dsw-alias-label-tertiary, #656d76);
-}
-
-.ops-trace-title {
-  flex: none;
-  font-size: 13px;
-  line-height: 24px;
-  font-weight: 500;
-  color: var(--dsw-alias-label-primary, #1f2328);
 }
 
 .ops-trace-progress {
@@ -111,13 +151,6 @@ const CSS = `
   color: var(--dsw-alias-label-tertiary, #656d76);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.ops-trace-chevron {
-  display: grid;
-  flex: none;
-  place-items: center;
-  color: var(--dsw-alias-label-tertiary, #656d76);
 }
 
 .ops-trace-list {
@@ -407,47 +440,6 @@ function TreeNodeItem({ node, depth, nodes }: { node: TreeNode, depth: number, n
   )
 }
 
-// ── Single tree panel ───────────────────────────────────────────────────────
-
-function TreePanel({ tree, index, total }: { tree: TreeState, index: number, total: number }): any {
-  const isResolved = tree.resolved
-  // Resolved trees start collapsed; active tree starts expanded
-  const [collapsed, setCollapsed] = useState(isResolved)
-  if (!tree.nodes || tree.nodes.length === 0) return null
-
-  const cache: Record<string, number> = {}
-  const sorted = treeOrder(tree.nodes)
-  const title = total > 1 ? `Trace ${index + 1}` : 'Trace'
-
-  return h('section', {
-    className: 'ops-trace-root',
-    'data-testid': 'ops-trace-panel',
-    'aria-label': title,
-  },
-    h('div', { className: 'ops-trace-body' },
-      h('button', {
-        type: 'button',
-        className: 'ops-trace-header',
-        'aria-expanded': !collapsed,
-        onClick: () => { setCollapsed(v => !v) },
-      },
-        h('span', { className: 'ops-trace-lead', 'aria-hidden': 'true' }, h(IconChecklistOutline14)),
-        h('span', { className: 'ops-trace-title' }, title),
-        h('span', { className: 'ops-trace-progress' }, progressLabel(tree)),
-        h('span', { className: 'ops-trace-chevron', 'aria-hidden': 'true' },
-          collapsed ? h(IconChevronUpOutline14) : h(IconChevronDownOutline14),
-        ),
-      ),
-      !collapsed && h('ul', { className: 'ops-trace-list' },
-        sorted.map(node => {
-          const depth = depthOf(tree.nodes, node.id, cache)
-          return h(TreeNodeItem, { key: node.id, node, depth, nodes: tree.nodes })
-        }),
-      ),
-    ),
-  )
-}
-
 // ── Dock component ───────────────────────────────────────────────────────────
 
 function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown | undefined }): any {
@@ -461,11 +453,65 @@ function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown
     forest = null
   }
 
+  const [activeIndex, setActiveIndex] = useState(0)
+  const [collapsed, setCollapsed] = useState(false)
+
   if (!forest || !forest.trees || forest.trees.length === 0) return null
 
-  return h('div', { className: 'ops-trace-forest' },
-    forest.trees.map((tree, i) =>
-      h(TreePanel, { key: i, tree, index: i, total: forest!.trees.length })
+  // Clamp activeIndex to valid range (trees may shrink/grow)
+  const total = forest.trees.length
+  const idx = Math.min(activeIndex, total - 1)
+  const tree = forest.trees[idx]
+  if (!tree || !tree.nodes || tree.nodes.length === 0) return null
+
+  const cache: Record<string, number> = {}
+  const sorted = treeOrder(tree.nodes)
+  const hasMultiple = total > 1
+  const isActiveResolved = tree.resolved
+
+  // Header: icon + [‹ 1/2 ›] + progress + chevron
+  return h('section', {
+    className: 'ops-trace-root',
+    'data-testid': 'ops-trace-panel',
+    'aria-label': 'Trace',
+  },
+    h('div', { className: 'ops-trace-body' },
+      h('div', { className: 'ops-trace-header-row' },
+        h('span', { className: 'ops-trace-lead', 'aria-hidden': 'true' }, h(IconChecklistOutline14)),
+        hasMultiple && h('span', { className: 'ops-trace-switcher' },
+          h('button', {
+            type: 'button',
+            className: 'ops-trace-switch-btn',
+            onClick: () => { setActiveIndex(Math.max(0, idx - 1)); setCollapsed(false) },
+            disabled: idx === 0,
+            'aria-label': 'Previous trace',
+          }, '\u2039'),
+          h('span', { className: 'ops-trace-switch-pos' }, `${idx + 1}/${total}`),
+          h('button', {
+            type: 'button',
+            className: 'ops-trace-switch-btn',
+            onClick: () => { setActiveIndex(Math.min(total - 1, idx + 1)); setCollapsed(false) },
+            disabled: idx === total - 1,
+            'aria-label': 'Next trace',
+          }, '\u203a'),
+        ),
+        h('span', { className: 'ops-trace-progress' }, progressLabel(tree)),
+        h('button', {
+          type: 'button',
+          className: 'ops-trace-chevron-btn',
+          onClick: () => { setCollapsed(v => !v) },
+          'aria-expanded': !collapsed,
+          'aria-label': collapsed ? 'Expand' : 'Collapse',
+        },
+          collapsed ? h(IconChevronUpOutline14) : h(IconChevronDownOutline14),
+        ),
+      ),
+      !collapsed && h('ul', { className: 'ops-trace-list' },
+        sorted.map(node => {
+          const depth = depthOf(tree.nodes, node.id, cache)
+          return h(TreeNodeItem, { key: node.id, node, depth, nodes: tree.nodes })
+        }),
+      ),
     ),
   )
 }
