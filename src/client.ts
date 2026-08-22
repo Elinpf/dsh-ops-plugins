@@ -73,11 +73,6 @@ const CSS = `
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 0;
-  border: none;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
 }
 
 .ops-trace-title {
@@ -86,6 +81,23 @@ const CSS = `
   line-height: 24px;
   font-weight: 500;
   color: var(--dsw-alias-label-primary, #1f2328);
+}
+
+.ops-trace-switcher {
+  flex: none;
+  font-size: 13px;
+  line-height: 22px;
+  font-weight: 500;
+  padding: 0 8px;
+  border: 1px solid var(--dsw-alias-border-l1, #d0d7de);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-primary, #fff);
+  color: var(--dsw-alias-label-primary, #1f2328);
+  cursor: pointer;
+}
+
+.ops-trace-switcher:hover {
+  background: var(--dsw-alias-bg-hover, #e9ecef);
 }
 
 .ops-trace-progress {
@@ -100,77 +112,23 @@ const CSS = `
   white-space: nowrap;
 }
 
-.ops-trace-chevron {
+.ops-trace-chevron-btn {
   display: grid;
   flex: none;
   place-items: center;
-  color: var(--dsw-alias-label-tertiary, #656d76);
-}
-
-.ops-trace-selector-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
+  width: 22px;
+  height: 22px;
   padding: 0;
-  list-style: none;
-}
-
-.ops-trace-selector-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 5px 8px;
   border: none;
   background: transparent;
+  color: var(--dsw-alias-label-tertiary, #656d76);
   cursor: pointer;
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--dsw-alias-label-secondary, #656d76);
   border-radius: 4px;
-  text-align: left;
 }
 
-.ops-trace-selector-item:hover {
+.ops-trace-chevron-btn:hover {
   background: var(--dsw-alias-bg-hover, #e9ecef);
-}
-
-.ops-trace-selector-item-active {
-  background: var(--dsw-alias-bg-selected, #ddf4ff);
   color: var(--dsw-alias-label-primary, #1f2328);
-  font-weight: 500;
-}
-
-.ops-trace-selector-dot {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  border: 1.5px solid var(--dsw-alias-label-tertiary, #848d97);
-  background: transparent;
-}
-
-.ops-trace-selector-dot-active {
-  border-color: var(--dsw-alias-state-business-primary, #0969da);
-  background: var(--dsw-alias-state-business-primary, #0969da);
-}
-
-.ops-trace-selector-title {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ops-trace-selector-tag {
-  flex: none;
-  font-size: 10px;
-  padding: 0 5px;
-  border-radius: 4px;
-  background: rgba(26,127,55,0.12);
-  color: #1a7f37;
 }
 
 .ops-trace-chevron-btn {
@@ -513,8 +471,6 @@ function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown
 
   const [activeIndex, setActiveIndex] = useState(0)
   const [collapsed, setCollapsed] = useState(false)
-  // When multiple trees and user hasn't picked one yet, show the selector list
-  const [showSelector, setShowSelector] = useState(true)
 
   if (!forest || !forest.trees || forest.trees.length === 0) return null
 
@@ -524,20 +480,7 @@ function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown
   if (!tree || !tree.nodes || tree.nodes.length === 0) return null
 
   const hasMultiple = total > 1
-  // Show selector when: multiple trees, expanded, and selector mode is on
-  const displaySelector = hasMultiple && !collapsed && showSelector
-  // Title in header: "Trace 1/2" when multiple, "Trace" when single
   const headerTitle = hasMultiple ? `Trace ${idx + 1}/${total}` : 'Trace'
-
-  const handleHeaderClick = () => {
-    if (collapsed) {
-      setCollapsed(false)
-      // If multiple trees, start with selector
-      if (hasMultiple) setShowSelector(true)
-    } else {
-      setCollapsed(true)
-    }
-  }
 
   return h('section', {
     className: 'ops-trace-root',
@@ -545,45 +488,31 @@ function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown
     'aria-label': 'Trace',
   },
     h('div', { className: 'ops-trace-body' },
-      h('button', {
-        type: 'button',
-        className: 'ops-trace-header',
-        onClick: handleHeaderClick,
-        'aria-expanded': !collapsed,
-      },
+      // Header row: icon + [Trace N/M switcher] + progress + chevron
+      h('div', { className: 'ops-trace-header' },
         h('span', { className: 'ops-trace-lead', 'aria-hidden': 'true' }, h(IconChecklistOutline14)),
-        h('span', { className: 'ops-trace-title' }, headerTitle),
+        // "Trace 1/2" is a switch button (cycles to next tree on click)
+        hasMultiple
+          ? h('button', {
+              type: 'button',
+              className: 'ops-trace-switcher',
+              onClick: () => { setActiveIndex((idx + 1) % total) },
+              title: `Switch to Trace ${(idx + 1) % total + 1}/${total}`,
+            }, headerTitle)
+          : h('span', { className: 'ops-trace-title' }, headerTitle),
         h('span', { className: 'ops-trace-progress' }, progressLabel(tree)),
-        h('span', { className: 'ops-trace-chevron', 'aria-hidden': 'true' },
+        h('button', {
+          type: 'button',
+          className: 'ops-trace-chevron-btn',
+          onClick: () => { setCollapsed(v => !v) },
+          'aria-expanded': !collapsed,
+          'aria-label': collapsed ? 'Expand' : 'Collapse',
+        },
           collapsed ? h(IconChevronUpOutline14) : h(IconChevronDownOutline14),
         ),
       ),
-      // Selector list (multiple trees, expanded, selector mode)
-      displaySelector && h('ul', { className: 'ops-trace-selector-list' },
-        forest.trees.map((t, i) => {
-          const tGoal = t.nodes[0]?.title ?? ''
-          const tResolved = t.resolved
-          const isActive = i === idx
-          return h('li', { key: i },
-            h('button', {
-              type: 'button',
-              className: isActive
-                ? 'ops-trace-selector-item ops-trace-selector-item-active'
-                : 'ops-trace-selector-item',
-              onClick: () => {
-                setActiveIndex(i)
-                setShowSelector(false)
-              },
-            },
-              h('span', { className: isActive ? 'ops-trace-selector-dot ops-trace-selector-dot-active' : 'ops-trace-selector-dot', 'aria-hidden': 'true' }),
-              h('span', { className: 'ops-trace-selector-title' }, tGoal),
-              tResolved && h('span', { className: 'ops-trace-selector-tag' }, 'resolved'),
-            ),
-          )
-        }),
-      ),
-      // Tree content (single tree expanded, or multi-tree after selection)
-      !collapsed && !displaySelector && (() => {
+      // Tree content (same as todo — expand/collapse shows the list)
+      !collapsed && (() => {
         const cache: Record<string, number> = {}
         const sorted = treeOrder(tree.nodes)
         return h('ul', { className: 'ops-trace-list' },
