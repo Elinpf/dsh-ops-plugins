@@ -74,11 +74,6 @@ const CSS = `
   gap: 10px;
   width: 100%;
   cursor: pointer;
-  border-radius: 4px;
-}
-
-.ops-trace-header:hover {
-  background: var(--dsw-alias-bg-hover, #e9ecef);
 }
 
 .ops-trace-title {
