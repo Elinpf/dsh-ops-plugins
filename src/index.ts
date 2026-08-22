@@ -489,10 +489,14 @@ function apply(ctx: any, _config: Record<string, never>): void {
     })
   })
 
-  // Clean up in-process tree state when a session is disposed.
-  ;(ctx.on as any)('session/disposed', (session: any) => {
-    if (session?.id) sessionTrees.delete(session.id)
-  })
+  // Clean up in-process tree state when the plugin's fiber is disposed
+  // (process restart, preset unmount). session/disposed is a Session-scoped
+  // event we can't hear from the plugin's global ctx; instead, the execute
+  // function falls back to the projection snapshot for session replay, so
+  // stale entries in the map are harmless — they're overwritten on first
+  // call and never cause cross-session contamination because the key is
+  // the sessionId.
+  ctx.effect(() => () => { sessionTrees.clear() })
 
   // ── Register model tool (06) ──────────────────────────────────────────────
   ctx.tools.register(defineTool({
@@ -557,12 +561,15 @@ function apply(ctx: any, _config: Record<string, never>): void {
           currentTree = null
         }
       }
-
       switch (args.action as TodoTreeAction) {
         case 'create_tree': {
-          if (currentTree) throw new Error('todo_tree: tree already exists')
           if (!args.root_title) throw new Error('todo_tree: root_title is required for create_tree')
           if (!args.goal_title) throw new Error('todo_tree: goal_title is required for create_tree')
+          // Idempotent: if a tree already exists (e.g. session replay),
+          // return the existing tree instead of throwing.
+          if (currentTree) {
+            return { tree: currentTree, summary: buildSummary(currentTree) }
+          }
           const ev = { type: 'tool/call', data: { name: 'todo_tree', turn, arguments: JSON.stringify(args) } }
           const updated = foldEvent(currentTree, ev)
           setSessionTree(sessionId, updated)
