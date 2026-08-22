@@ -68,92 +68,95 @@ const CSS = `
   padding: 6px 12px;
 }
 
-.ops-trace-header-row {
+.ops-trace-header {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
-}
-
-.ops-trace-dropdown {
-  position: relative;
-  flex: none;
-}
-
-.ops-trace-dropdown-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border: 1px solid var(--dsw-alias-border-l1, #d0d7de);
-  border-radius: 6px;
-  background: var(--dsw-alias-bg-primary, #fff);
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
   cursor: pointer;
-  font-size: 12px;
+}
+
+.ops-trace-title {
+  flex: none;
+  font-size: 13px;
+  line-height: 24px;
   font-weight: 500;
   color: var(--dsw-alias-label-primary, #1f2328);
 }
 
-.ops-trace-dropdown-btn:hover {
-  background: var(--dsw-alias-bg-hover, #e9ecef);
+.ops-trace-progress {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 400;
+  color: var(--dsw-alias-label-tertiary, #656d76);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.ops-trace-dropdown-arrow {
+.ops-trace-chevron {
   display: grid;
+  flex: none;
   place-items: center;
   color: var(--dsw-alias-label-tertiary, #656d76);
 }
 
-.ops-trace-dropdown-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 10;
-  min-width: 200px;
-  max-width: 320px;
+.ops-trace-selector-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   margin: 0;
-  padding: 4px;
+  padding: 0;
   list-style: none;
-  border: 1px solid var(--dsw-alias-border-l1, #d0d7de);
-  border-radius: 8px;
-  background: var(--dsw-alias-bg-primary, #fff);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
 }
 
-.ops-trace-dropdown-item {
+.ops-trace-selector-item {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   width: 100%;
-  padding: 4px 8px;
+  padding: 5px 8px;
   border: none;
   background: transparent;
   cursor: pointer;
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 13px;
+  line-height: 20px;
   color: var(--dsw-alias-label-secondary, #656d76);
   border-radius: 4px;
   text-align: left;
 }
 
-.ops-trace-dropdown-item:hover {
+.ops-trace-selector-item:hover {
   background: var(--dsw-alias-bg-hover, #e9ecef);
 }
 
-.ops-trace-dropdown-item-active {
+.ops-trace-selector-item-active {
   background: var(--dsw-alias-bg-selected, #ddf4ff);
   color: var(--dsw-alias-label-primary, #1f2328);
   font-weight: 500;
 }
 
-.ops-trace-dropdown-item-num {
+.ops-trace-selector-dot {
   flex: none;
-  font-weight: 600;
-  color: var(--dsw-alias-label-tertiary, #848d97);
-  min-width: 20px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--dsw-alias-label-tertiary, #848d97);
+  background: transparent;
 }
 
-.ops-trace-dropdown-item-title {
+.ops-trace-selector-dot-active {
+  border-color: var(--dsw-alias-state-business-primary, #0969da);
+  background: var(--dsw-alias-state-business-primary, #0969da);
+}
+
+.ops-trace-selector-title {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -161,10 +164,10 @@ const CSS = `
   white-space: nowrap;
 }
 
-.ops-trace-dropdown-item-tag {
+.ops-trace-selector-tag {
   flex: none;
   font-size: 10px;
-  padding: 0 4px;
+  padding: 0 5px;
   border-radius: 4px;
   background: rgba(26,127,55,0.12);
   color: #1a7f37;
@@ -510,7 +513,8 @@ function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown
 
   const [activeIndex, setActiveIndex] = useState(0)
   const [collapsed, setCollapsed] = useState(false)
-  const [dropdownOpen, setDropdownOpen] = useState(false)
+  // When multiple trees and user hasn't picked one yet, show the selector list
+  const [showSelector, setShowSelector] = useState(true)
 
   if (!forest || !forest.trees || forest.trees.length === 0) return null
 
@@ -519,10 +523,21 @@ function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown
   const tree = forest.trees[idx]
   if (!tree || !tree.nodes || tree.nodes.length === 0) return null
 
-  const cache: Record<string, number> = {}
-  const sorted = treeOrder(tree.nodes)
   const hasMultiple = total > 1
-  const goalTitle = tree.nodes[0]?.title ?? 'Trace'
+  // Show selector when: multiple trees, expanded, and selector mode is on
+  const displaySelector = hasMultiple && !collapsed && showSelector
+  // Title in header: "Trace 1/2" when multiple, "Trace" when single
+  const headerTitle = hasMultiple ? `Trace ${idx + 1}/${total}` : 'Trace'
+
+  const handleHeaderClick = () => {
+    if (collapsed) {
+      setCollapsed(false)
+      // If multiple trees, start with selector
+      if (hasMultiple) setShowSelector(true)
+    } else {
+      setCollapsed(true)
+    }
+  }
 
   return h('section', {
     className: 'ops-trace-root',
@@ -530,69 +545,54 @@ function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown
     'aria-label': 'Trace',
   },
     h('div', { className: 'ops-trace-body' },
-      h('div', { className: 'ops-trace-header-row' },
+      h('button', {
+        type: 'button',
+        className: 'ops-trace-header',
+        onClick: handleHeaderClick,
+        'aria-expanded': !collapsed,
+      },
         h('span', { className: 'ops-trace-lead', 'aria-hidden': 'true' }, h(IconChecklistOutline14)),
-        // Dropdown selector button (only when multiple trees)
-        hasMultiple
-          ? h('div', { className: 'ops-trace-dropdown' },
-              h('button', {
-                type: 'button',
-                className: 'ops-trace-dropdown-btn',
-                onClick: () => setDropdownOpen(v => !v),
-                'aria-expanded': dropdownOpen,
-              },
-                h('span', { className: 'ops-trace-dropdown-label' },
-                  `Trace ${idx + 1}/${total}`,
-                ),
-                h('span', { className: 'ops-trace-dropdown-arrow', 'aria-hidden': 'true' },
-                  dropdownOpen ? h(IconChevronUpOutline14) : h(IconChevronDownOutline14),
-                ),
-              ),
-              dropdownOpen && h('ul', { className: 'ops-trace-dropdown-menu' },
-                forest.trees.map((t, i) => {
-                  const tGoal = t.nodes[0]?.title ?? ''
-                  const tResolved = t.resolved
-                  return h('li', { key: i },
-                    h('button', {
-                      type: 'button',
-                      className: i === idx
-                        ? 'ops-trace-dropdown-item ops-trace-dropdown-item-active'
-                        : 'ops-trace-dropdown-item',
-                      onClick: () => {
-                        setActiveIndex(i)
-                        setDropdownOpen(false)
-                        setCollapsed(false)
-                      },
-                    },
-                      h('span', { className: 'ops-trace-dropdown-item-num' }, `#${i + 1}`),
-                      h('span', { className: 'ops-trace-dropdown-item-title' }, tGoal),
-                      tResolved && h('span', { className: 'ops-trace-dropdown-item-tag' }, 'resolved'),
-                    ),
-                  )
-                }),
-              ),
-            )
-          : h('span', { className: 'ops-trace-progress' }, progressLabel(tree)),
-        // Progress label (always show, but when dropdown is present it takes the flex space)
-        hasMultiple
-          ? h('span', { className: 'ops-trace-progress' }, progressLabel(tree))
-          : null,
-        h('button', {
-          type: 'button',
-          className: 'ops-trace-chevron-btn',
-          onClick: () => { setCollapsed(v => !v) },
-          'aria-expanded': !collapsed,
-          'aria-label': collapsed ? 'Expand' : 'Collapse',
-        },
+        h('span', { className: 'ops-trace-title' }, headerTitle),
+        h('span', { className: 'ops-trace-progress' }, progressLabel(tree)),
+        h('span', { className: 'ops-trace-chevron', 'aria-hidden': 'true' },
           collapsed ? h(IconChevronUpOutline14) : h(IconChevronDownOutline14),
         ),
       ),
-      !collapsed && h('ul', { className: 'ops-trace-list' },
-        sorted.map(node => {
-          const depth = depthOf(tree.nodes, node.id, cache)
-          return h(TreeNodeItem, { key: node.id, node, depth, nodes: tree.nodes })
+      // Selector list (multiple trees, expanded, selector mode)
+      displaySelector && h('ul', { className: 'ops-trace-selector-list' },
+        forest.trees.map((t, i) => {
+          const tGoal = t.nodes[0]?.title ?? ''
+          const tResolved = t.resolved
+          const isActive = i === idx
+          return h('li', { key: i },
+            h('button', {
+              type: 'button',
+              className: isActive
+                ? 'ops-trace-selector-item ops-trace-selector-item-active'
+                : 'ops-trace-selector-item',
+              onClick: () => {
+                setActiveIndex(i)
+                setShowSelector(false)
+              },
+            },
+              h('span', { className: isActive ? 'ops-trace-selector-dot ops-trace-selector-dot-active' : 'ops-trace-selector-dot', 'aria-hidden': 'true' }),
+              h('span', { className: 'ops-trace-selector-title' }, tGoal),
+              tResolved && h('span', { className: 'ops-trace-selector-tag' }, 'resolved'),
+            ),
+          )
         }),
       ),
+      // Tree content (single tree expanded, or multi-tree after selection)
+      !collapsed && !displaySelector && (() => {
+        const cache: Record<string, number> = {}
+        const sorted = treeOrder(tree.nodes)
+        return h('ul', { className: 'ops-trace-list' },
+          sorted.map(node => {
+            const depth = depthOf(tree.nodes, node.id, cache)
+            return h(TreeNodeItem, { key: node.id, node, depth, nodes: tree.nodes })
+          }),
+        )
+      })(),
     ),
   )
 }
