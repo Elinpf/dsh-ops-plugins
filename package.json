@@ -1,5 +1,5 @@
 {
-  "name": "@deepseek-ai/dsh-ops-todo-tree",
+  "name": "@deepseek-ai/dsh-ops-trace",
   "version": "0.1.0",
   "description": "Investigation tree tool for ops mode — replaces todo_write with a diverge-converge tree of steps, milestones, dead ends, and a resolved terminal.",
   "type": "module",

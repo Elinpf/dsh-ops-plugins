@@ -1,14 +1,14 @@
 /**
- * Client half for ops-todo-tree: registers a `conversation.input.dock` entry
+ * Client half for ops-trace: registers a `conversation.input.dock` entry
  * that renders a collapsible investigation-tree panel above the composer —
  * structurally identical to todo_write's TodoPanel (same CSS class names,
- * same dock registration, same collapse pattern). Reads the `todo_tree`
+ * same dock registration, same collapse pattern). Reads the `trace`
  * projection via useProjection.
  *
  * Bundled by esbuild into lib/client.js in the ModuleLoader lazy-CJS format.
  * React is an external (provided by the browser module table).
  *
- * @module @deepseek-ai/dsh-ops-todo-tree/client
+ * @module @deepseek-ai/dsh-ops-trace/client
  */
 
 import { createElement as h, useState } from 'react'
@@ -22,13 +22,18 @@ import type { TreeState, TreeNode, NodeStatus } from './types.ts'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
-const name = 'ops-todo-tree-client'
+const name = 'ops-trace-client'
 const inject = ['slots']
 
 // ── CSS (mirrors TodoPanel.module.css exactly) ──────────────────────────────
 
 const CSS = `
-.ops-tree-root {
+/* Hide trace panel when the trajectory view tab is active (not the chat tab) */
+[data-phase]:has([role="tab"][aria-selected="true"]:not(:first-of-type)) .ops-trace-root {
+  display: none;
+}
+
+.ops-trace-root {
   box-sizing: border-box;
   flex: none;
   overflow: hidden;
@@ -56,14 +61,14 @@ const CSS = `
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2, #afb8c1);
 }
 
-.ops-tree-body {
+.ops-trace-body {
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 6px 12px;
 }
 
-.ops-tree-header {
+.ops-trace-header {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -75,14 +80,14 @@ const CSS = `
   cursor: pointer;
 }
 
-.ops-tree-lead {
+.ops-trace-lead {
   display: grid;
   flex: none;
   place-items: center;
   color: var(--dsw-alias-label-tertiary, #656d76);
 }
 
-.ops-tree-title {
+.ops-trace-title {
   flex: none;
   font-size: 13px;
   line-height: 24px;
@@ -90,7 +95,7 @@ const CSS = `
   color: var(--dsw-alias-label-primary, #1f2328);
 }
 
-.ops-tree-progress {
+.ops-trace-progress {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -102,14 +107,14 @@ const CSS = `
   white-space: nowrap;
 }
 
-.ops-tree-chevron {
+.ops-trace-chevron {
   display: grid;
   flex: none;
   place-items: center;
   color: var(--dsw-alias-label-tertiary, #656d76);
 }
 
-.ops-tree-list {
+.ops-trace-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -120,7 +125,7 @@ const CSS = `
   overflow-y: auto;
 }
 
-.ops-tree-item {
+.ops-trace-item {
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -129,7 +134,7 @@ const CSS = `
   color: var(--dsw-alias-label-secondary, #656d76);
 }
 
-.ops-tree-item-row {
+.ops-trace-item-row {
   display: flex;
   align-items: flex-start;
   gap: 6px;
@@ -139,11 +144,11 @@ const CSS = `
   padding: 1px 4px;
 }
 
-.ops-tree-item-row:hover {
+.ops-trace-item-row:hover {
   background: var(--dsw-alias-bg-hover, #e9ecef);
 }
 
-.ops-tree-glyph {
+.ops-trace-glyph {
   display: grid;
   flex: none;
   place-items: center;
@@ -152,43 +157,43 @@ const CSS = `
   margin-top: 2px;
 }
 
-.ops-tree-text {
+.ops-trace-text {
   flex: 1 1 auto;
   min-width: 0;
 }
 
-.ops-tree-node-title {
+.ops-trace-node-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--dsw-alias-label-primary, #1f2328);
 }
 
-.ops-tree-node-title-dead {
+.ops-trace-node-title-dead {
   text-decoration: line-through;
   color: var(--dsw-alias-label-tertiary, #848d97);
 }
 
-.ops-tree-node-hint {
+.ops-trace-node-hint {
   font-size: 11px;
   color: var(--dsw-alias-label-tertiary, #848d97);
   margin-left: 4px;
 }
 
-.ops-tree-node-detail {
+.ops-trace-node-detail {
   padding: 2px 8px 4px 22px;
   font-size: 12px;
   line-height: 18px;
   color: var(--dsw-alias-label-tertiary, #848d97);
 }
 
-.ops-tree-detail-value {
+.ops-trace-detail-value {
   min-width: 0;
   word-break: break-word;
   white-space: pre-wrap;
 }
 
-.ops-tree-caused-tag {
+.ops-trace-caused-tag {
   display: inline-block;
   font-size: 11px;
   line-height: 16px;
@@ -201,21 +206,21 @@ const CSS = `
   vertical-align: 1px;
 }
 
-.ops-tree-glyph-done { color: var(--dsw-alias-state-success-primary, #1a7f37); }
-.ops-tree-glyph-pending { color: var(--dsw-alias-label-caption, #848d97); }
-.ops-tree-glyph-progress { color: var(--dsw-alias-state-business-primary, #0969da); animation: ops-tree-spin 1s linear infinite; }
-.ops-tree-glyph-deadend { color: #d1242f; }
-.ops-tree-glyph-goal { color: var(--dsw-alias-state-success-primary, #1a7f37); }
-.ops-tree-glyph-resolved { color: var(--dsw-alias-state-success-primary, #1a7f37); }
+.ops-trace-glyph-done { color: var(--dsw-alias-state-success-primary, #1a7f37); }
+.ops-trace-glyph-pending { color: var(--dsw-alias-label-caption, #848d97); }
+.ops-trace-glyph-progress { color: var(--dsw-alias-state-business-primary, #0969da); animation: ops-trace-spin 1s linear infinite; }
+.ops-trace-glyph-deadend { color: #d1242f; }
+.ops-trace-glyph-goal { color: var(--dsw-alias-state-success-primary, #1a7f37); }
+.ops-trace-glyph-resolved { color: var(--dsw-alias-state-success-primary, #1a7f37); }
 
-@keyframes ops-tree-spin { to { transform: rotate(360deg); } }
+@keyframes ops-trace-spin { to { transform: rotate(360deg); } }
 `.trim()
 
 let cssInjected = false
 function injectCSS(): void {
   if (cssInjected || typeof document === 'undefined') return
   const tag = document.createElement('style')
-  tag.dataset.plugin = 'ops-todo-tree'
+  tag.dataset.plugin = 'ops-trace'
   tag.textContent = CSS
   document.head.appendChild(tag)
   cssInjected = true
@@ -237,7 +242,7 @@ function DoneGlyph(): any {
       d: 'M10.96 5.71L7.70 8.98C7.48 9.20 7.28 9.40 7.09 9.55C6.90 9.71 6.66 9.85 6.36 9.90C6.20 9.93 6.04 9.93 5.88 9.90C5.59 9.85 5.35 9.71 5.16 9.55C4.97 9.40 4.77 9.20 4.55 8.98L3.04 7.46L3.96 6.54L5.47 8.05C5.72 8.29 5.86 8.43 5.98 8.53C6.09 8.61 6.11 8.61 6.09 8.60C6.11 8.61 6.14 8.61 6.16 8.60C6.14 8.61 6.16 8.61 6.27 8.53C6.39 8.43 6.53 8.29 6.77 8.05L10.04 4.79L10.96 5.71Z',
       fill: 'currentColor',
     }),
-  ], 'ops-tree-glyph ops-tree-glyph-done')
+  ], 'ops-trace-glyph ops-trace-glyph-done')
 }
 
 function ProgressGlyph(nodeId: string): any {
@@ -252,26 +257,26 @@ function ProgressGlyph(nodeId: string): any {
       ),
     ),
     h('circle', { cx: 7, cy: 7, r: 6.4, stroke: `url(#${gid})`, strokeWidth: 1.2 }),
-  ], 'ops-tree-glyph ops-tree-glyph-progress')
+  ], 'ops-trace-glyph ops-trace-glyph-progress')
 }
 
 function PendingGlyph(): any {
   return svgBase([
     h('circle', { cx: 7, cy: 7, r: 6.4, stroke: 'currentColor', strokeWidth: 1.2, strokeDasharray: '2.4 2.4' }),
-  ], 'ops-tree-glyph ops-tree-glyph-pending')
+  ], 'ops-trace-glyph ops-trace-glyph-pending')
 }
 
 function DeadEndGlyph(): any {
   return svgBase([
     h('circle', { cx: 7, cy: 7, r: 6.4, stroke: 'currentColor', strokeWidth: 1.2 }),
     h('path', { d: 'M4.5 4.5 L9.5 9.5 M9.5 4.5 L4.5 9.5', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round' }),
-  ], 'ops-tree-glyph ops-tree-glyph-deadend')
+  ], 'ops-trace-glyph ops-trace-glyph-deadend')
 }
 
 function GoalGlyph(): any {
   return svgBase([
     h('circle', { cx: 7, cy: 7, r: 6.4, stroke: 'currentColor', strokeWidth: 1.6, strokeDasharray: '3 2' }),
-  ], 'ops-tree-glyph ops-tree-glyph-goal')
+  ], 'ops-trace-glyph ops-trace-glyph-goal')
 }
 
 function ResolvedGlyph(): any {
@@ -281,7 +286,7 @@ function ResolvedGlyph(): any {
       d: 'M10.96 5.71L7.70 8.98C7.48 9.20 7.28 9.40 7.09 9.55C6.90 9.71 6.66 9.85 6.36 9.90C6.20 9.93 6.04 9.93 5.88 9.90C5.59 9.85 5.35 9.71 5.16 9.55C4.97 9.40 4.77 9.20 4.55 8.98L3.04 7.46L3.96 6.54L5.47 8.05C5.72 8.29 5.86 8.43 5.98 8.53C6.09 8.61 6.11 8.61 6.09 8.60C6.11 8.61 6.14 8.61 6.16 8.60C6.14 8.61 6.16 8.61 6.27 8.53C6.39 8.43 6.53 8.29 6.77 8.05L10.04 4.79L10.96 5.71Z',
       fill: 'currentColor',
     }),
-  ], 'ops-tree-glyph ops-tree-glyph-resolved')
+  ], 'ops-trace-glyph ops-trace-glyph-resolved')
 }
 
 function StatusGlyph(status: NodeStatus, nodeId: string, hasInfo: boolean): any {
@@ -359,18 +364,18 @@ function hasDetail(node: TreeNode): boolean {
 function TreeNodeItem({ node, depth, nodes }: { node: TreeNode, depth: number, nodes: TreeNode[] }): any {
   const [expanded, setExpanded] = useState(false)
   const titleClass = node.status === 'dead_end'
-    ? 'ops-tree-node-title ops-tree-node-title-dead'
-    : 'ops-tree-node-title'
+    ? 'ops-trace-node-title ops-trace-node-title-dead'
+    : 'ops-trace-node-title'
   const expandable = !!node.summary
 
   return h('li', {
     key: node.id,
-    className: 'ops-tree-item',
+    className: 'ops-trace-item',
     'data-status': node.status,
     style: { paddingLeft: `${depth * 20}px` },
   },
     h('div', {
-      className: 'ops-tree-item-row',
+      className: 'ops-trace-item-row',
       role: expandable ? 'button' : undefined,
       tabIndex: expandable ? 0 : undefined,
       'aria-expanded': expandable ? expanded : undefined,
@@ -379,16 +384,16 @@ function TreeNodeItem({ node, depth, nodes }: { node: TreeNode, depth: number, n
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpanded(v => !v) }
       } : undefined,
     },
-      h('span', { className: 'ops-tree-glyph', 'aria-hidden': 'true' },
+      h('span', { className: 'ops-trace-glyph', 'aria-hidden': 'true' },
         StatusGlyph(node.status, node.id, node.caused_by.length > 0 || !!node.summary),
       ),
-      h('div', { className: 'ops-tree-text' },
+      h('div', { className: 'ops-trace-text' },
         h('div', { className: titleClass }, node.title),
       ),
     ),
-    expanded && expandable && h('div', { className: 'ops-tree-node-detail' },
+    expanded && expandable && h('div', { className: 'ops-trace-node-detail' },
       node.caused_by.length > 0 && h('span', {
-        className: 'ops-tree-caused-tag',
+        className: 'ops-trace-caused-tag',
         key: 'caused',
       }, '\u2190 ' + node.caused_by.join(', ')),
       node.summary,
@@ -398,11 +403,11 @@ function TreeNodeItem({ node, depth, nodes }: { node: TreeNode, depth: number, n
 
 // ── Dock component (mirrors TodoPanel structure exactly) ────────────────────
 
-function TodoTreeDock({ useProjection }: { useProjection?: (key: string) => unknown | undefined }): any {
+function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown | undefined }): any {
   let tree: TreeState | null = null
   try {
     if (useProjection) {
-      const val = useProjection('todo_tree')
+      const val = useProjection('trace')
       tree = (val as TreeState | null | undefined) ?? null
     }
   } catch {
@@ -416,25 +421,25 @@ function TodoTreeDock({ useProjection }: { useProjection?: (key: string) => unkn
   const sorted = treeOrder(tree.nodes)
 
   return h('section', {
-    className: 'ops-tree-root',
-    'data-testid': 'ops-tree-panel',
-    'aria-label': 'Investigation Tree',
+    className: 'ops-trace-root',
+    'data-testid': 'ops-trace-panel',
+    'aria-label': 'Trace',
   },
-    h('div', { className: 'ops-tree-body' },
+    h('div', { className: 'ops-trace-body' },
       h('button', {
         type: 'button',
-        className: 'ops-tree-header',
+        className: 'ops-trace-header',
         'aria-expanded': !collapsed,
         onClick: () => { setCollapsed(v => !v) },
       },
-        h('span', { className: 'ops-tree-lead', 'aria-hidden': 'true' }, h(IconChecklistOutline14)),
-        h('span', { className: 'ops-tree-title' }, 'Investigation Tree'),
-        h('span', { className: 'ops-tree-progress' }, progressLabel(tree)),
-        h('span', { className: 'ops-tree-chevron', 'aria-hidden': 'true' },
+        h('span', { className: 'ops-trace-lead', 'aria-hidden': 'true' }, h(IconChecklistOutline14)),
+        h('span', { className: 'ops-trace-title' }, 'Trace'),
+        h('span', { className: 'ops-trace-progress' }, progressLabel(tree)),
+        h('span', { className: 'ops-trace-chevron', 'aria-hidden': 'true' },
           collapsed ? h(IconChevronUpOutline14) : h(IconChevronDownOutline14),
         ),
       ),
-      !collapsed && h('ul', { className: 'ops-tree-list' },
+      !collapsed && h('ul', { className: 'ops-trace-list' },
         sorted.map(node => {
           const depth = depthOf(tree!.nodes, node.id, cache)
           return h(TreeNodeItem, { key: node.id, node, depth, nodes: tree!.nodes })
@@ -451,7 +456,7 @@ function apply(ctx: Context): void {
   ctx.slots.inject('conversation.input.dock', () =>
     ctx.slots.register(
       { name: 'conversation.input.dock', id: 'ops-tree', order: 10 },
-      TodoTreeDock,
+      TraceDock,
     ),
   )
 }

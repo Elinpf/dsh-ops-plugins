@@ -1,10 +1,10 @@
 /**
- * Ops-todo-tree: an investigation tree tool that replaces `todo_write` in the ops preset.
+ * Ops-trace: an investigation tree tool that replaces `todo_write` in the ops preset.
  *
  * Agent-driven, append-only event log, tree + unique resolved convergence terminal.
- * See `.scratch/ops-todo-tree/research/` for the full design.
+ * See `.scratch/ops-trace/research/` for the full design.
  *
- * @module @deepseek-ai/dsh-ops-todo-tree
+ * @module @deepseek-ai/dsh-ops-trace
  */
 
 import z from '@deepseek-ai/schemastery'
@@ -31,7 +31,7 @@ declare module '@deepseek-ai/cordis' {
         view: (state: TreeState | null) => TreeState | null
         stateVersion: number
       }): () => void
-      snapshot(session: { id: string }): { values: { todo_tree?: TreeState | null } }
+      snapshot(session: { id: string }): { values: { trace?: TreeState | null } }
     }
   }
 }
@@ -40,21 +40,21 @@ import type {
   NodeStatus,
   TreeState,
   TreeNode,
-  TodoTreeAction,
-  TodoTreeResult,
-  TodoTreeArgs,
+  TraceAction,
+  TraceResult,
+  TraceArgs,
   LinkPair,
 } from './types.ts'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
-const name = 'ops-todo-tree'
+const name = 'ops-trace'
 const inject = ['tools']
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
 /**
- * Schemastery configuration for the ops-todo-tree tool consumer.
+ * Schemastery configuration for the ops-trace tool consumer.
  */
 const Config = z.object({})
 
@@ -125,7 +125,7 @@ function currentTurn(exec: ToolRunContext): number {
 
 /**
  * Fold one tool/call event into tree state (pure function, allocation-fresh).
- * The projection reads tool/call events where name === 'todo_tree' and
+ * The projection reads tool/call events where name === 'trace' and
  * parses the arguments JSON to reconstruct the tree.
  * No custom session event types are needed — tool/call is a known type.
  */
@@ -141,13 +141,13 @@ interface FoldEvent {
 }
 
 function foldEvent(state: TreeState | null, event: FoldEvent): TreeState | null {
-  // Only fold tool/call events for the todo_tree tool
+  // Only fold tool/call events for the trace tool
   if (event.type !== 'tool/call') return state
   const data = event.data
-  if (data?.name !== 'todo_tree') return state
+  if (data?.name !== 'trace') return state
 
   // Parse arguments JSON string
-  let args: TodoTreeArgs
+  let args: TraceArgs
   try {
     args = typeof data.arguments === 'string' ? JSON.parse(data.arguments) : data.arguments
   } catch {
@@ -257,7 +257,7 @@ function updateNode(
 
 const ALL_STATUSES: NodeStatus[] = ['goal', 'pending', 'in_progress', 'done', 'dead_end', 'resolved']
 
-function buildSummary(tree: TreeState | null): TodoTreeResult['summary'] {
+function buildSummary(tree: TreeState | null): TraceResult['summary'] {
   const nodes = tree?.nodes ?? []
   const counts: Record<NodeStatus, number> = {
     goal: 0, pending: 0, in_progress: 0, done: 0, dead_end: 0, resolved: 0,
@@ -350,7 +350,7 @@ function buildTreeIndex(nodes: TreeNode[]) {
  * Compact render: tree characters, one line per node, id + status + title.
  * No detail/summary/turns. New node marked with *.
  */
-function renderCompact(value: TodoTreeResult, newNodeId?: string): string {
+function renderCompact(value: TraceResult, newNodeId?: string): string {
   if (!value || !value.tree || !value.tree.nodes || value.tree.nodes.length === 0) {
     return 'No tree — call create_tree first.'
   }
@@ -399,7 +399,7 @@ function renderCompact(value: TodoTreeResult, newNodeId?: string): string {
  * Full render: includes detail, summary, and turns for each node.
  * Used by the `view` action.
  */
-function renderFull(value: TodoTreeResult): string {
+function renderFull(value: TraceResult): string {
   if (!value || !value.tree || !value.tree.nodes || value.tree.nodes.length === 0) {
     return 'No tree — call create_tree first.'
   }
@@ -440,7 +440,7 @@ function renderFull(value: TodoTreeResult): string {
 /**
  * Render a single line of statistics.
  */
-function renderStats(value: TodoTreeResult): string {
+function renderStats(value: TraceResult): string {
   if (!value || !value.summary) return ''
   const summary = value.summary
   const parts: string[] = []
@@ -479,7 +479,7 @@ function renderNodeLine(node: TreeNode, marker: string): string {
  * - link: increment — changed node (with new caused_by) + stats
  * - resolve: increment — goal node (resolved) + stats
  */
-function renderOutput(args: TodoTreeArgs, value: TodoTreeResult): string {
+function renderOutput(args: TraceArgs, value: TraceResult): string {
   const action = args?.action
 
   // view: always full tree
@@ -563,7 +563,7 @@ function setSessionTree(sessionId: string, tree: TreeState | null): void {
 
 /** Minimal projection-registry interface used by this plugin. */
 interface ProjectionRegistryLike {
-  snapshot(session: { id: string }): { values: { todo_tree?: TreeState | null } }
+  snapshot(session: { id: string }): { values: { trace?: TreeState | null } }
 }
 
 function apply(ctx: Context, _config: Record<string, never>): void {
@@ -575,7 +575,7 @@ function apply(ctx: Context, _config: Record<string, never>): void {
   ctx.inject(['sessionProjections'], (pctx: Context) => {
     projectionRegistry = pctx.sessionProjections ?? null
     pctx.sessionProjections!.register({
-      key: 'todo_tree',
+      key: 'trace',
       schema: todoTreeProjectionSchema,
       init: () => null,
       apply: foldEvent,
@@ -595,7 +595,7 @@ function apply(ctx: Context, _config: Record<string, never>): void {
 
   // ── Register model tool (06) ──────────────────────────────────────────────
   ctx.tools.register(defineTool({
-    name: 'todo_tree',
+    name: 'trace',
     description: TOOL_DESCRIPTION,
     parameters: {
       action: { type: 'string', required: true, enum: [
@@ -709,7 +709,7 @@ function apply(ctx: Context, _config: Record<string, never>): void {
 
     async execute(args, exec) {
       const agent = exec.agent
-      if (!agent) throw new Error('todo_tree requires an owning agent session')
+      if (!agent) throw new Error('trace requires an owning agent session')
       const turn = currentTurn(exec)
       const sessionId = agent.session?.id ?? agent.id ?? 'default'
 
@@ -720,44 +720,44 @@ function apply(ctx: Context, _config: Record<string, never>): void {
       if (currentTree === null && projectionRegistry) {
         try {
           const snap = projectionRegistry.snapshot(agent.session)
-          currentTree = snap?.values?.todo_tree ?? null
+          currentTree = snap?.values?.trace ?? null
           if (currentTree) setSessionTree(sessionId, currentTree)
         } catch {
           currentTree = null
         }
       }
-      switch (args.action as TodoTreeAction) {
+      switch (args.action as TraceAction) {
         case 'create_tree': {
-          if (!args.goal_title) throw new Error('todo_tree: goal_title is required for create_tree')
+          if (!args.goal_title) throw new Error('trace: goal_title is required for create_tree')
           // Idempotent: if a tree already exists (e.g. session replay),
           // return the existing tree instead of throwing.
           if (currentTree) {
             return { tree: currentTree!, summary: buildSummary(currentTree!) }
           }
-          const ev = { type: 'tool/call', data: { name: 'todo_tree', turn, arguments: JSON.stringify(args) } }
+          const ev = { type: 'tool/call', data: { name: 'trace', turn, arguments: JSON.stringify(args) } }
           const updated = foldEvent(currentTree, ev)
           setSessionTree(sessionId, updated)
-          const result: TodoTreeResult = { tree: updated!, summary: buildSummary(updated!) }
+          const result: TraceResult = { tree: updated!, summary: buildSummary(updated!) }
           return result
         }
 
         case 'add_step':
         case 'add_milestone': {
-          if (!currentTree) throw new Error('todo_tree: no tree — call create_tree first')
-          if (!args.parent_id) throw new Error('todo_tree: parent_id is required')
-          if (!args.title) throw new Error('todo_tree: title is required')
-          if (!args.id) throw new Error('todo_tree: id is required')
+          if (!currentTree) throw new Error('trace: no tree — call create_tree first')
+          if (!args.parent_id) throw new Error('trace: parent_id is required')
+          if (!args.title) throw new Error('trace: title is required')
+          if (!args.id) throw new Error('trace: id is required')
           const parent = currentTree.nodes.find((n) => n.id === args.parent_id)
-          if (!parent) throw new Error(`todo_tree: parent node "${args.parent_id}" not found`)
+          if (!parent) throw new Error(`trace: parent node "${args.parent_id}" not found`)
           if (currentTree.nodes.some((n) => n.id === args.id)) {
-            throw new Error(`todo_tree: node id "${args.id}" already exists`)
+            throw new Error(`trace: node id "${args.id}" already exists`)
           }
 
-          const ev = { type: 'tool/call', data: { name: 'todo_tree', turn, arguments: JSON.stringify(args) } }
+          const ev = { type: 'tool/call', data: { name: 'trace', turn, arguments: JSON.stringify(args) } }
           const updated = foldEvent(currentTree, ev)
           setSessionTree(sessionId, updated)
 
-          const result: TodoTreeResult = { tree: updated!, summary: buildSummary(updated!) }
+          const result: TraceResult = { tree: updated!, summary: buildSummary(updated!) }
           result.new_node = args.id
           return result
         }
@@ -766,9 +766,9 @@ function apply(ctx: Context, _config: Record<string, never>): void {
         case 'complete':
         case 'abandon':
         case 'reopen': {
-          if (!currentTree) throw new Error('todo_tree: no tree')
+          if (!currentTree) throw new Error('trace: no tree')
           const nodeIds: string[] = Array.isArray(args.ids) ? args.ids : (args.id ? [args.id] : [])
-          if (nodeIds.length === 0) throw new Error('todo_tree: id (or ids array) is required')
+          if (nodeIds.length === 0) throw new Error('trace: id (or ids array) is required')
           const targetStatus: NodeStatus =
             args.action === 'start' || args.action === 'reopen' ? 'in_progress'
             : args.action === 'complete' ? 'done'
@@ -777,51 +777,51 @@ function apply(ctx: Context, _config: Record<string, never>): void {
           // Validate transitions — idempotent if already at target status
           for (const nid of nodeIds) {
             const node = currentTree.nodes.find((n) => n.id === nid)
-            if (!node) throw new Error(`todo_tree: node "${nid}" not found`)
+            if (!node) throw new Error(`trace: node "${nid}" not found`)
             if (node.status === targetStatus) continue // idempotent — already at target
             if (!canTransition(node.status, targetStatus)) {
-              throw new Error(`todo_tree: cannot transition "${nid}" from "${node.status}" to "${targetStatus}"`)
+              throw new Error(`trace: cannot transition "${nid}" from "${node.status}" to "${targetStatus}"`)
             }
           }
 
-          const ev = { type: 'tool/call', data: { name: 'todo_tree', turn, arguments: JSON.stringify(args) } }
+          const ev = { type: 'tool/call', data: { name: 'trace', turn, arguments: JSON.stringify(args) } }
           const updated = foldEvent(currentTree, ev)
           setSessionTree(sessionId, updated)
-          const result: TodoTreeResult = { tree: updated!, summary: buildSummary(updated!) }
+          const result: TraceResult = { tree: updated!, summary: buildSummary(updated!) }
           return result
         }
 
         case 'resolve': {
-          if (!currentTree) throw new Error('todo_tree: no tree')
-          if (!args.summary) throw new Error('todo_tree: summary is required for resolve')
+          if (!currentTree) throw new Error('trace: no tree')
+          if (!args.summary) throw new Error('trace: summary is required for resolve')
           const goal = currentTree.nodes.find((n) => n.id === 'goal')
-          if (!goal) throw new Error('todo_tree: no goal node to resolve')
+          if (!goal) throw new Error('trace: no goal node to resolve')
           if (goal.status === 'resolved') {
             return { tree: currentTree!, summary: buildSummary(currentTree!) }
           }
           if (!canTransition(goal.status, 'resolved')) {
-            throw new Error(`todo_tree: goal is "${goal.status}", cannot resolve`)
+            throw new Error(`trace: goal is "${goal.status}", cannot resolve`)
           }
-          const ev = { type: 'tool/call', data: { name: 'todo_tree', turn, arguments: JSON.stringify(args) } }
+          const ev = { type: 'tool/call', data: { name: 'trace', turn, arguments: JSON.stringify(args) } }
           const updated = foldEvent(currentTree, ev)
           setSessionTree(sessionId, updated)
-          const result: TodoTreeResult = { tree: updated!, summary: buildSummary(updated!) }
+          const result: TraceResult = { tree: updated!, summary: buildSummary(updated!) }
           return result
         }
 
         case 'link': {
-          if (!currentTree) throw new Error('todo_tree: no tree')
+          if (!currentTree) throw new Error('trace: no tree')
           const links: LinkPair[] = Array.isArray(args.links) ? args.links : [{id: args.id!, caused_by: args.caused_by!}]
-          if (links.length === 0) throw new Error('todo_tree: at least one link is required')
+          if (links.length === 0) throw new Error('trace: at least one link is required')
 
           // Validate all nodes exist
           for (const link of links) {
-            if (!link.id) throw new Error('todo_tree: id is required for link')
-            if (!link.caused_by) throw new Error('todo_tree: caused_by is required for link')
+            if (!link.id) throw new Error('trace: id is required for link')
+            if (!link.caused_by) throw new Error('trace: caused_by is required for link')
             const node = currentTree.nodes.find((n) => n.id === link.id)
-            if (!node) throw new Error(`todo_tree: node "${link.id}" not found`)
+            if (!node) throw new Error(`trace: node "${link.id}" not found`)
             const target = currentTree.nodes.find((n) => n.id === link.caused_by)
-            if (!target) throw new Error(`todo_tree: node "${link.caused_by}" not found`)
+            if (!target) throw new Error(`trace: node "${link.caused_by}" not found`)
           }
 
           // Check if all links already exist (idempotent)
@@ -833,10 +833,10 @@ function apply(ctx: Context, _config: Record<string, never>): void {
             return { tree: currentTree!, summary: buildSummary(currentTree!) }
           }
 
-          const ev = { type: 'tool/call', data: { name: 'todo_tree', turn, arguments: JSON.stringify(args) } }
+          const ev = { type: 'tool/call', data: { name: 'trace', turn, arguments: JSON.stringify(args) } }
           const updated = foldEvent(currentTree, ev)
           setSessionTree(sessionId, updated)
-          const result: TodoTreeResult = { tree: updated!, summary: buildSummary(updated!) }
+          const result: TraceResult = { tree: updated!, summary: buildSummary(updated!) }
           return result
         }
 
@@ -854,10 +854,10 @@ function apply(ctx: Context, _config: Record<string, never>): void {
         }
 
         default:
-          throw new Error(`todo_tree: unknown action "${args.action}"`)
+          throw new Error(`trace: unknown action "${args.action}"`)
       }
       // Unreachable — all cases return directly
-      throw new Error('todo_tree: unreachable')
+      throw new Error('trace: unreachable')
     },
 
     presentCall: (args) => {
@@ -874,9 +874,9 @@ function apply(ctx: Context, _config: Record<string, never>): void {
   // ── System prompt section ──────────────────────────────────────────────────
   // Static documentation (always present)
   const staticText = [
-    '## todo_tree — Investigation Tree',
+    '## trace — Trace',
     '',
-    'Use `todo_tree` to maintain an investigation tree for the current incident response.',
+    'Use `trace` to maintain an investigation tree for the current incident response.',
     'Unlike a flat todo list, the tree records the full exploration trail — dead ends stay visible, branches show parallel paths.',
     '',
     '### Actions',
@@ -906,7 +906,7 @@ function apply(ctx: Context, _config: Record<string, never>): void {
     '- `view`: shows the full tree with all details.',
     '',
     '### Discipline',
-    '- **Every 5 steps of investigation, at least 1 todo_tree update.**',
+    '- **Every 5 steps of investigation, at least 1 trace update.**',
     '- **When you find something**: add_step to structure it, then complete with a summary.',
     '- **Dead ends and changed plans**: `abandon` them — the full exploration trail is the record.',
     '- **Don\'t forget**: if you lose track of the tree, call `view`.',
@@ -926,30 +926,30 @@ function apply(ctx: Context, _config: Record<string, never>): void {
   if (opsPrompts !== undefined) {
     // Register tool usage prompt as a methodology section
     opsPrompts.registerMethodology({
-      name: 'todo_tree:usage',
+      name: 'trace:usage',
       order: 240,
       text: staticText,
     })
 
     // Register the idle reminder rule
     opsPrompts.registerReminder({
-      name: 'todo_tree:idle',
+      name: 'trace:idle',
       check: (agent: unknown) => {
         const events = (agent as { session?: { events?: FoldEvent[] } })?.session?.events
         if (!events || events.length === 0) return null
 
         let currentStep = 0
-        let lastTodoTreeStep = 0
+        let lastTraceStep = 0
         let hasTree = false
 
         for (const ev of events) {
           if (ev.type === 'step/start') {
             currentStep = (ev.data?.turn ?? 0) * 1000 + (ev.data?.step ?? 0)
           }
-          if (ev.type === 'tool/call' && ev.data?.name === 'todo_tree') {
-            lastTodoTreeStep = currentStep
+          if (ev.type === 'tool/call' && ev.data?.name === 'trace') {
+            lastTraceStep = currentStep
           }
-          if (ev.type === 'tool/call' && ev.data?.name === 'todo_tree') {
+          if (ev.type === 'tool/call' && ev.data?.name === 'trace') {
             try {
               const a = typeof ev.data?.arguments === 'string' ? JSON.parse(ev.data.arguments) : ev.data?.arguments
               if (a?.action === 'create_tree') hasTree = true
@@ -957,11 +957,11 @@ function apply(ctx: Context, _config: Record<string, never>): void {
           }
         }
 
-        if (!hasTree || lastTodoTreeStep === 0) return null
-        const gap = currentStep - lastTodoTreeStep
+        if (!hasTree || lastTraceStep === 0) return null
+        const gap = currentStep - lastTraceStep
         if (gap < 5) return null
 
-        return `[REMINDER] You haven't updated todo_tree in ${gap} steps. Call \`todo_tree view\` to check current state, then \`add_step\` or \`complete\` to record your progress.`
+        return `[REMINDER] You haven't updated trace in ${gap} steps. Call \`trace view\` to check current state, then \`add_step\` or \`complete\` to record your progress.`
       },
     })
   } else {
@@ -969,7 +969,7 @@ function apply(ctx: Context, _config: Record<string, never>): void {
     const systemPrompt = ctx.get('systemPrompt')
     if (systemPrompt !== undefined) {
       systemPrompt.section({
-        name: 'tool:todo_tree',
+        name: 'tool:trace',
         order: 240,
         text: staticText,
       })

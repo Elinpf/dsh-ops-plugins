@@ -1,5 +1,5 @@
 /**
- * Projection fold tests for ops-todo-tree.
+ * Projection fold tests for ops-trace.
  *
  * Validates that foldEvent correctly builds TreeState from tool/call events.
  * These are pure-function tests — no Cordis runtime needed.
@@ -9,11 +9,11 @@ import { describe, it, expect } from 'vitest'
 import { foldEvent } from '../src/index.ts'
 import type { TreeState } from '../src/types.ts'
 
-/** Build a tool/call event for todo_tree with the given action args. */
+/** Build a tool/call event for trace with the given action args. */
 function ev(turn: number, args: Record<string, unknown>) {
   return {
     type: 'tool/call',
-    data: { name: 'todo_tree', turn, arguments: JSON.stringify(args) },
+    data: { name: 'trace', turn, arguments: JSON.stringify(args) },
   }
 }
 
@@ -34,7 +34,7 @@ describe('projection fold', () => {
     expect(foldEvent(null, { type: 'user/message', data: {} })).toBe(null)
   })
 
-  it('ignores non-todo_tree tool calls', () => {
+  it('ignores non-trace tool calls', () => {
     const state = foldEvent(null, {
       type: 'tool/call',
       data: { name: 'bash', turn: 1, arguments: '{"command":"ls"}' },

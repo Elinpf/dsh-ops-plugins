@@ -1,13 +1,13 @@
 /**
- * Invariant companion for @deepseek-ai/dsh-ops-todo-tree.
+ * Invariant companion for @deepseek-ai/dsh-ops-trace.
  *
- * @module @deepseek-ai/dsh-ops-todo-tree/invariant
+ * @module @deepseek-ai/dsh-ops-trace/invariant
  */
 
-const PACKAGE_NAME = '@deepseek-ai/dsh-ops-todo-tree'
+const PACKAGE_NAME = '@deepseek-ai/dsh-ops-trace'
 
 /** Cordis companion plugin name. */
-const name = 'ops-todo-tree-invariant'
+const name = 'ops-trace-invariant'
 
 /** Service required before the companion can reserve package ownership. */
 const inject = ['invariants']

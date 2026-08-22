@@ -1,3 +1,3 @@
 - insert:
-    - id: tool-ops-todo-tree
-      name: '@deepseek-ai/dsh-ops-todo-tree'
+    - id: tool-ops-trace
+      name: '@deepseek-ai/dsh-ops-trace'

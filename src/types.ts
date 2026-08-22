@@ -1,7 +1,7 @@
 /**
- * Type definitions for the ops-todo-tree plugin.
+ * Type definitions for the ops-trace plugin.
  *
- * @module @deepseek-ai/dsh-ops-todo-tree
+ * @module @deepseek-ai/dsh-ops-trace
  */
 
 // ── Node status (05 state machine) ──────────────────────────────────────────
@@ -55,8 +55,8 @@ export interface TreeState {
 
 // ── Tool action types ────────────────────────────────────────────────────────
 
-/** The 10 actions the `todo_tree` tool accepts. */
-export type TodoTreeAction =
+/** The 10 actions the `trace` tool accepts. */
+export type TraceAction =
   | 'create_tree'
   | 'add_step'
   | 'add_milestone'
@@ -69,9 +69,9 @@ export type TodoTreeAction =
   | 'view'
 
 /**
- * Return value of every `todo_tree` call.
+ * Return value of every `trace` call.
  */
-export interface TodoTreeResult {
+export interface TraceResult {
   /** Current full tree state. */
   tree: TreeState
   /** Status summary to help the agent stay oriented. */
@@ -94,11 +94,11 @@ export interface LinkPair {
 }
 
 /**
- * Tool arguments for `todo_tree`. All fields are optional except `action`;
+ * Tool arguments for `trace`. All fields are optional except `action`;
  * which fields are required depends on the action (enforced at execute time).
  */
-export interface TodoTreeArgs {
-  action: TodoTreeAction
+export interface TraceArgs {
+  action: TraceAction
   goal_title?: string
   id?: string
   parent_id?: string
