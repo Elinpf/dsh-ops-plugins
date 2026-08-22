@@ -81,4 +81,31 @@ export interface TodoTreeResult {
     incomplete: Array<{ id: string; title: string; status: NodeStatus }>
     warning: string | null
   }
+  /** ID of the newly created node (add_step/add_milestone only). */
+  new_node?: string
+}
+
+/**
+ * A single causal-edge pair used by the `link` action.
+ */
+export interface LinkPair {
+  id: string
+  caused_by: string
+}
+
+/**
+ * Tool arguments for `todo_tree`. All fields are optional except `action`;
+ * which fields are required depends on the action (enforced at execute time).
+ */
+export interface TodoTreeArgs {
+  action: TodoTreeAction
+  goal_title?: string
+  id?: string
+  parent_id?: string
+  title?: string
+  ids?: string[]
+  summary?: string
+  caused_by?: string
+  links?: LinkPair[]
+  status_filter?: NodeStatus
 }

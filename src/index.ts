@@ -10,8 +10,31 @@
 import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 
 // ── Types (import type so they erase at runtime) ─────────────────────────────
+
+import type { Context } from '@deepseek-ai/cordis'
+import type { OpsPromptsHandle } from '@deepseek-ai/dsh-ops-prompts'
+
+// ── Module augmentation: declare the opsPrompts service on Context ──────────
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    opsPrompts?: OpsPromptsHandle
+    sessionProjections?: {
+      register(def: {
+        key: string
+        schema: unknown
+        init: () => TreeState | null
+        apply: (state: TreeState | null, event: FoldEvent) => TreeState | null
+        view: (state: TreeState | null) => TreeState | null
+        stateVersion: number
+      }): () => void
+      snapshot(session: { id: string }): { values: { todo_tree?: TreeState | null } }
+    }
+  }
+}
 
 import type {
   NodeStatus,
@@ -19,6 +42,8 @@ import type {
   TreeNode,
   TodoTreeAction,
   TodoTreeResult,
+  TodoTreeArgs,
+  LinkPair,
 } from './types.ts'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
@@ -86,11 +111,12 @@ function slugify(title: string, existingIds: Set<string>): string {
 // ── Turn extraction (02) ─────────────────────────────────────────────────────
 
 /** Extract the current turn number from the agent's session events. */
-function currentTurn(exec: any): number {
+function currentTurn(exec: ToolRunContext): number {
   const events = exec.agent?.session?.events
   if (!events) return 0
   for (let i = events.length - 1; i >= 0; i--) {
-    if (events[i]?.type === 'turn/start') return events[i].data.turn
+    const ev = events[i] as { type: string, data?: { turn?: number } }
+    if (ev.type === 'turn/start') return ev.data?.turn ?? 0
   }
   return 0
 }
@@ -103,14 +129,25 @@ function currentTurn(exec: any): number {
  * parses the arguments JSON to reconstruct the tree.
  * No custom session event types are needed — tool/call is a known type.
  */
-function foldEvent(state: TreeState | null, event: any): TreeState | null {
+/** Minimal event shape that foldEvent reads from the session log. */
+interface FoldEvent {
+  type: string
+  data: {
+    name?: string
+    turn?: number
+    step?: number
+    arguments?: string
+  }
+}
+
+function foldEvent(state: TreeState | null, event: FoldEvent): TreeState | null {
   // Only fold tool/call events for the todo_tree tool
   if (event.type !== 'tool/call') return state
   const data = event.data
   if (data?.name !== 'todo_tree') return state
 
   // Parse arguments JSON string
-  let args: any
+  let args: TodoTreeArgs
   try {
     args = typeof data.arguments === 'string' ? JSON.parse(data.arguments) : data.arguments
   } catch {
@@ -126,7 +163,7 @@ function foldEvent(state: TreeState | null, event: any): TreeState | null {
       // Idempotent: if a goal already exists (session replay), keep the original.
       if (nodes.some((n) => n.id === 'goal')) return state
       nodes.push({
-        id: 'goal', title: args.goal_title, status: 'goal',
+        id: 'goal', title: args.goal_title!, status: 'goal',
         parent: null, turns: [turn], summary: null, caused_by: [],
       })
       return { nodes, resolved: false }
@@ -136,15 +173,15 @@ function foldEvent(state: TreeState | null, event: any): TreeState | null {
     case 'add_milestone': {
       const kind = action === 'add_milestone' ? 'milestone' : 'step'
       const existingIds = new Set(nodes.map((n) => n.id))
-      const nodeId = args.id
+      const nodeId = args.id!
       existingIds.add(nodeId)
       let tree = state ? { ...state, nodes } : { nodes, resolved: false }
       tree = {
         ...tree,
         nodes: [...tree.nodes, {
-          id: nodeId, title: args.title,
+          id: nodeId, title: args.title!,
           status: kind === 'milestone' ? 'goal' : 'pending',
-          parent: args.parent_id, turns: [turn], summary: null, caused_by: [],
+          parent: args.parent_id!, turns: [turn], summary: null, caused_by: [],
         }],
       }
       return tree
@@ -173,14 +210,14 @@ function foldEvent(state: TreeState | null, event: any): TreeState | null {
       const goalId = 'goal'
       const updated = updateNode(state ? { ...state, nodes } : null, goalId, turn, (n) => {
         n.status = 'resolved'
-        n.summary = args.summary
+        n.summary = args.summary!
       })
       return updated ? { ...updated, resolved: true } : state
     }
 
     case 'link': {
       // Support batch: links array [{id, caused_by}], or single {id, caused_by}
-      const links: Array<{id: string, caused_by: string}> = Array.isArray(args.links) ? args.links : [{id: args.id, caused_by: args.caused_by}]
+      const links: LinkPair[] = Array.isArray(args.links) ? args.links : [{id: args.id!, caused_by: args.caused_by!}]
       let tree = state ? { ...state, nodes } : null
       for (const link of links) {
         tree = updateNode(tree, link.id, turn, (n) => {
@@ -313,7 +350,7 @@ function buildTreeIndex(nodes: TreeNode[]) {
  * Compact render: tree characters, one line per node, id + status + title.
  * No detail/summary/turns. New node marked with *.
  */
-function renderCompact(value: any, newNodeId?: string): string {
+function renderCompact(value: TodoTreeResult, newNodeId?: string): string {
   if (!value || !value.tree || !value.tree.nodes || value.tree.nodes.length === 0) {
     return 'No tree — call create_tree first.'
   }
@@ -362,7 +399,7 @@ function renderCompact(value: any, newNodeId?: string): string {
  * Full render: includes detail, summary, and turns for each node.
  * Used by the `view` action.
  */
-function renderFull(value: any): string {
+function renderFull(value: TodoTreeResult): string {
   if (!value || !value.tree || !value.tree.nodes || value.tree.nodes.length === 0) {
     return 'No tree — call create_tree first.'
   }
@@ -403,7 +440,7 @@ function renderFull(value: any): string {
 /**
  * Render a single line of statistics.
  */
-function renderStats(value: any): string {
+function renderStats(value: TodoTreeResult): string {
   if (!value || !value.summary) return ''
   const summary = value.summary
   const parts: string[] = []
@@ -442,7 +479,7 @@ function renderNodeLine(node: TreeNode, marker: string): string {
  * - link: increment — changed node (with new caused_by) + stats
  * - resolve: increment — goal node (resolved) + stats
  */
-function renderOutput(args: any, value: any): string {
+function renderOutput(args: TodoTreeArgs, value: TodoTreeResult): string {
   const action = args?.action
 
   // view: always full tree
@@ -484,7 +521,7 @@ function renderOutput(args: any, value: any): string {
     }
   } else if (action === 'link') {
     // Show changed nodes with their new caused_by (id + caused_by only)
-    const links: Array<{id: string, caused_by: string}> = Array.isArray(args.links) ? args.links : [{id: args.id, caused_by: args.caused_by}]
+    const links: LinkPair[] = Array.isArray(args.links) ? args.links : [{id: args.id!, caused_by: args.caused_by!}]
     for (const link of links) {
       lines.push(`~ ${link.id} ← caused_by: ${link.caused_by}`)
     }
@@ -524,15 +561,20 @@ function setSessionTree(sessionId: string, tree: TreeState | null): void {
   else sessionTrees.set(sessionId, tree)
 }
 
-function apply(ctx: any, _config: Record<string, never>): void {
+/** Minimal projection-registry interface used by this plugin. */
+interface ProjectionRegistryLike {
+  snapshot(session: { id: string }): { values: { todo_tree?: TreeState | null } }
+}
+
+function apply(ctx: Context, _config: Record<string, never>): void {
   // ── Register session projection (09) ──────────────────────────────────────
   // Store the registry reference so the tool's execute can read the current
   // projection state via snapshot(session) — the host-side API (not faceOf,
   // which is client-only).
-  let projectionRegistry: any = null
-  ctx.inject(['sessionProjections'], (pctx: any) => {
-    projectionRegistry = pctx.sessionProjections
-    pctx.sessionProjections.register({
+  let projectionRegistry: ProjectionRegistryLike | null = null
+  ctx.inject(['sessionProjections'], (pctx: Context) => {
+    projectionRegistry = pctx.sessionProjections ?? null
+    pctx.sessionProjections!.register({
       key: 'todo_tree',
       schema: todoTreeProjectionSchema,
       init: () => null,
@@ -613,8 +655,8 @@ function apply(ctx: any, _config: Record<string, never>): void {
                     status: { type: 'string', required: true, enum: ['goal', 'pending', 'in_progress', 'done', 'dead_end', 'resolved'] },
                     parent: { required: true, oneOf: [{ type: 'string' }, { type: 'null' }] },
                     turns: { type: 'array', required: true, items: { type: 'number' } },
-                    summary: { oneOf: [{ type: 'string' }, { type: 'null' }] },
-                    caused_by: { type: 'array', items: { type: 'string' } },
+                    summary: { required: true, oneOf: [{ type: 'string' }, { type: 'null' }] },
+                    caused_by: { type: 'array', required: true, items: { type: 'string' } },
                   },
                 },
               },
@@ -642,29 +684,30 @@ function apply(ctx: any, _config: Record<string, never>): void {
               },
               incomplete: {
                 type: 'array',
+                required: true,
                 items: {
                   type: 'object',
                   additionalProperties: false,
                   properties: {
                     id: { type: 'string', required: true },
                     title: { type: 'string', required: true },
-                    status: { type: 'string', required: true },
+                    status: { type: 'string', required: true, enum: ['goal', 'pending', 'in_progress', 'done', 'dead_end', 'resolved'] },
                   },
                 },
               },
-              warning: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+              warning: { required: true, oneOf: [{ type: 'string' }, { type: 'null' }] },
             },
           },
           new_node: { type: 'string' },
         },
       },
-      render: (args: any, value: any) => [{
+      render: (args, value) => [{
         type: 'text',
         text: renderOutput(args, value),
       }],
     },
 
-    async execute(args: any, exec: any): Promise<any> {
+    async execute(args, exec) {
       const agent = exec.agent
       if (!agent) throw new Error('todo_tree requires an owning agent session')
       const turn = currentTurn(exec)
@@ -689,12 +732,12 @@ function apply(ctx: any, _config: Record<string, never>): void {
           // Idempotent: if a tree already exists (e.g. session replay),
           // return the existing tree instead of throwing.
           if (currentTree) {
-            return { tree: currentTree, summary: buildSummary(currentTree) }
+            return { tree: currentTree!, summary: buildSummary(currentTree!) }
           }
           const ev = { type: 'tool/call', data: { name: 'todo_tree', turn, arguments: JSON.stringify(args) } }
           const updated = foldEvent(currentTree, ev)
           setSessionTree(sessionId, updated)
-          const result: any = { tree: updated, summary: buildSummary(updated) }
+          const result: TodoTreeResult = { tree: updated!, summary: buildSummary(updated!) }
           return result
         }
 
@@ -714,7 +757,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
           const updated = foldEvent(currentTree, ev)
           setSessionTree(sessionId, updated)
 
-          const result: any = { tree: updated, summary: buildSummary(updated) }
+          const result: TodoTreeResult = { tree: updated!, summary: buildSummary(updated!) }
           result.new_node = args.id
           return result
         }
@@ -744,7 +787,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
           const ev = { type: 'tool/call', data: { name: 'todo_tree', turn, arguments: JSON.stringify(args) } }
           const updated = foldEvent(currentTree, ev)
           setSessionTree(sessionId, updated)
-          const result: any = { tree: updated, summary: buildSummary(updated) }
+          const result: TodoTreeResult = { tree: updated!, summary: buildSummary(updated!) }
           return result
         }
 
@@ -754,7 +797,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
           const goal = currentTree.nodes.find((n) => n.id === 'goal')
           if (!goal) throw new Error('todo_tree: no goal node to resolve')
           if (goal.status === 'resolved') {
-            return { tree: currentTree, summary: buildSummary(currentTree) }
+            return { tree: currentTree!, summary: buildSummary(currentTree!) }
           }
           if (!canTransition(goal.status, 'resolved')) {
             throw new Error(`todo_tree: goal is "${goal.status}", cannot resolve`)
@@ -762,13 +805,13 @@ function apply(ctx: any, _config: Record<string, never>): void {
           const ev = { type: 'tool/call', data: { name: 'todo_tree', turn, arguments: JSON.stringify(args) } }
           const updated = foldEvent(currentTree, ev)
           setSessionTree(sessionId, updated)
-          const result: any = { tree: updated, summary: buildSummary(updated) }
+          const result: TodoTreeResult = { tree: updated!, summary: buildSummary(updated!) }
           return result
         }
 
         case 'link': {
           if (!currentTree) throw new Error('todo_tree: no tree')
-          const links: Array<{id: string, caused_by: string}> = Array.isArray(args.links) ? args.links : [{id: args.id, caused_by: args.caused_by}]
+          const links: LinkPair[] = Array.isArray(args.links) ? args.links : [{id: args.id!, caused_by: args.caused_by!}]
           if (links.length === 0) throw new Error('todo_tree: at least one link is required')
 
           // Validate all nodes exist
@@ -787,13 +830,13 @@ function apply(ctx: any, _config: Record<string, never>): void {
             return node && node.caused_by.includes(link.caused_by)
           })
           if (allExist) {
-            return { tree: currentTree, summary: buildSummary(currentTree) }
+            return { tree: currentTree!, summary: buildSummary(currentTree!) }
           }
 
           const ev = { type: 'tool/call', data: { name: 'todo_tree', turn, arguments: JSON.stringify(args) } }
           const updated = foldEvent(currentTree, ev)
           setSessionTree(sessionId, updated)
-          const result: any = { tree: updated, summary: buildSummary(updated) }
+          const result: TodoTreeResult = { tree: updated!, summary: buildSummary(updated!) }
           return result
         }
 
@@ -805,9 +848,9 @@ function apply(ctx: any, _config: Record<string, never>): void {
                 n.parent === null || n.id === 'goal' || n.status === args.status_filter
               ),
             }
-            return { tree: filtered, summary: buildSummary(currentTree) }
+            return { tree: filtered, summary: buildSummary(currentTree!) }
           }
-          return { tree: currentTree, summary: buildSummary(currentTree) }
+          return { tree: currentTree!, summary: buildSummary(currentTree!) }
         }
 
         default:
@@ -817,16 +860,15 @@ function apply(ctx: any, _config: Record<string, never>): void {
       throw new Error('todo_tree: unreachable')
     },
 
-    presentCall: (args: any) => ({
-      card: 'generic',
-      title: args.action === 'create_tree' ? 'Create investigation tree'
-        : args.action === 'add_step' ? 'Add step'
-        : args.action === 'add_milestone' ? 'Add milestone'
-        : args.action === 'resolve' ? 'Resolve'
-        : args.action?.charAt(0).toUpperCase() + args.action.slice(1),
-      kind: 'other',
-      rawInput: args,
-    }),
+    presentCall: (args) => {
+      const action: string = args.action
+      const title = action === 'create_tree' ? 'Create investigation tree'
+        : action === 'add_step' ? 'Add step'
+        : action === 'add_milestone' ? 'Add milestone'
+        : action === 'resolve' ? 'Resolve'
+        : action.charAt(0).toUpperCase() + action.slice(1)
+      return { card: 'generic' as const, title, kind: 'other' as const, rawInput: args }
+    },
   }))
 
   // ── System prompt section ──────────────────────────────────────────────────
@@ -879,7 +921,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
 
   // Register methodology and reminder through ops-prompts if available,
   // otherwise fall back to direct systemPrompt.section registration.
-  const opsPrompts = ctx.get('opsPrompts') as any | undefined
+  const opsPrompts = ctx.get('opsPrompts')
 
   if (opsPrompts !== undefined) {
     // Register tool usage prompt as a methodology section
@@ -892,8 +934,8 @@ function apply(ctx: any, _config: Record<string, never>): void {
     // Register the idle reminder rule
     opsPrompts.registerReminder({
       name: 'todo_tree:idle',
-      check: (agent: any) => {
-        const events = agent?.session?.events
+      check: (agent: unknown) => {
+        const events = (agent as { session?: { events?: FoldEvent[] } })?.session?.events
         if (!events || events.length === 0) return null
 
         let currentStep = 0
