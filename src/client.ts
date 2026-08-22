@@ -1,12 +1,9 @@
 /**
  * Client half for ops-todo-tree: registers a `conversation.input.dock` entry
  * that renders a collapsible investigation-tree panel above the composer —
- * the same pattern as todo_write's TodoPanel and goal's GoalBar.
- *
- * The panel reads the `todo_tree` projection via useProjection (host-side
- * fold of tool/call events) and shows:
- * - Collapsed: icon + title + progress counts + chevron
- * - Expanded: the full tree as an indented text outline
+ * structurally identical to todo_write's TodoPanel (same CSS class names,
+ * same dock registration, same collapse pattern). Reads the `todo_tree`
+ * projection via useProjection.
  *
  * Bundled by esbuild into lib/client.js in the ModuleLoader lazy-CJS format.
  * React is an external (provided by the browser module table).
@@ -28,45 +25,292 @@ import type { TreeState, TreeNode, NodeStatus } from './types.ts'
 const name = 'ops-todo-tree-client'
 const inject = ['slots']
 
-// ── Status labels ────────────────────────────────────────────────────────────
-
-const STATUS_LABEL: Record<NodeStatus, string> = {
-  goal: '',
-  pending: 'pending',
-  in_progress: 'in_progress',
-  done: 'done',
-  dead_end: 'dead_end',
-  resolved: 'resolved',
-}
-
-// ── CSS (self-injected) ──────────────────────────────────────────────────────
+// ── CSS (mirrors TodoPanel.module.css exactly) ──────────────────────────────
 
 const CSS = `
-.dock-tree-root{border-top:1px solid var(--dsw-alias-border-primary,#e5e7eb);background:var(--dsw-alias-bg-primary,#fff)}
-.dock-tree-header{display:flex;align-items:center;gap:6px;padding:6px 12px;cursor:pointer;user-select:none;font-size:13px;color:var(--dsh-alias-text-primary,#1f2328)}
-.dock-tree-header:hover{background:var(--dsw-alias-bg-hover,#f6f8fa)}
-.dock-tree-icon{display:flex;align-items:center;color:var(--dsw-alias-text-secondary,#656d76)}
-.dock-tree-title{font-weight:600}
-.dock-tree-progress{color:var(--dsw-alias-text-secondary,#656d76);font-size:12px}
-.dock-tree-chevron{margin-left:auto;color:var(--dsw-alias-text-tertiary,#848d97)}
-.dock-tree-body{padding:0 12px 8px;max-height:300px;overflow:auto}
-.dock-tree-line{font-size:13px;line-height:1.6;font-family:ui-monospace,monospace;white-space:pre;color:var(--dsh-alias-text-primary,#1f2328)}
-.dock-tree-empty{padding:6px 12px;font-size:13px;color:var(--dsw-alias-text-tertiary,#848d97)}
+.ops-tree-root {
+  box-sizing: border-box;
+  flex: none;
+  overflow: hidden;
+  margin: 0 auto;
+  width: calc(
+    100% -
+    var(--dsh-composer-side-clearance) -
+    var(--dsh-composer-side-clearance) -
+    var(--dsh-composer-dock-inset) -
+    var(--dsh-composer-dock-inset) -
+    var(--dsh-composer-dock-inset) -
+    var(--dsh-composer-dock-inset)
+  );
+  max-width: calc(
+    var(--dsh-composer-card-max-width) -
+    var(--dsh-composer-dock-inset) -
+    var(--dsh-composer-dock-inset) -
+    var(--dsh-composer-dock-inset) -
+    var(--dsh-composer-dock-inset)
+  );
+  border: 1px solid var(--dsw-alias-border-l1, #e5e7eb);
+  border-radius: 12px;
+  background: var(--dsw-specific-tip, #f6f8fa);
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2, #d0d7de);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2, #afb8c1);
+}
+
+.ops-tree-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 6px 12px;
+}
+
+.ops-tree-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ops-tree-lead {
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: var(--dsw-alias-label-tertiary, #656d76);
+}
+
+.ops-tree-title {
+  flex: none;
+  font-size: 13px;
+  line-height: 24px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary, #1f2328);
+}
+
+.ops-tree-progress {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 400;
+  color: var(--dsw-alias-label-tertiary, #656d76);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ops-tree-chevron {
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: var(--dsw-alias-label-tertiary, #656d76);
+}
+
+.ops-tree-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.ops-tree-item {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary, #656d76);
+}
+
+.ops-tree-item-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.ops-tree-item-row:hover {
+  background: var(--dsw-alias-bg-hover, #e9ecef);
+}
+
+.ops-tree-glyph {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+}
+
+.ops-tree-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ops-tree-node-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-primary, #1f2328);
+}
+
+.ops-tree-node-title-dead {
+  text-decoration: line-through;
+  color: var(--dsw-alias-label-tertiary, #848d97);
+}
+
+.ops-tree-node-hint {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary, #848d97);
+  margin-left: 4px;
+}
+
+.ops-tree-node-detail {
+  padding: 2px 8px 4px 22px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary, #848d97);
+}
+
+.ops-tree-detail-value {
+  min-width: 0;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.ops-tree-caused-tag {
+  display: inline-block;
+  font-size: 11px;
+  line-height: 16px;
+  padding: 1px 6px;
+  margin-right: 4px;
+  border-radius: 8px;
+  background: rgba(209,36,47,0.10);
+  color: #d1242f;
+  white-space: nowrap;
+  vertical-align: 1px;
+}
+
+.ops-tree-glyph-done { color: var(--dsw-alias-state-success-primary, #1a7f37); }
+.ops-tree-glyph-pending { color: var(--dsw-alias-label-caption, #848d97); }
+.ops-tree-glyph-progress { color: var(--dsw-alias-state-business-primary, #0969da); animation: ops-tree-spin 1s linear infinite; }
+.ops-tree-glyph-deadend { color: #d1242f; }
+.ops-tree-glyph-goal { color: var(--dsw-alias-state-success-primary, #1a7f37); }
+.ops-tree-glyph-resolved { color: var(--dsw-alias-state-success-primary, #1a7f37); }
+
+@keyframes ops-tree-spin { to { transform: rotate(360deg); } }
 `.trim()
 
 let cssInjected = false
 function injectCSS(): void {
   if (cssInjected || typeof document === 'undefined') return
   const tag = document.createElement('style')
-  tag.dataset.plugin = 'ops-todo-tree-dock'
+  tag.dataset.plugin = 'ops-todo-tree'
   tag.textContent = CSS
   document.head.appendChild(tag)
   cssInjected = true
 }
 
-// ── Tree rendering ───────────────────────────────────────────────────────────
+// ── Status glyphs (14x14, same as TodoPanel) ────────────────────────────────
 
-/** Build a depth map for indentation. */
+function svgBase(children: any[], cls: string): any {
+  return h('svg', {
+    width: 14, height: 14, viewBox: '0 0 14 14', fill: 'none',
+    'aria-hidden': 'true', className: cls,
+  }, children)
+}
+
+function DoneGlyph(): any {
+  return svgBase([
+    h('circle', { cx: 7, cy: 7, r: 6.4, stroke: 'currentColor', strokeWidth: 1.2 }),
+    h('path', {
+      d: 'M10.96 5.71L7.70 8.98C7.48 9.20 7.28 9.40 7.09 9.55C6.90 9.71 6.66 9.85 6.36 9.90C6.20 9.93 6.04 9.93 5.88 9.90C5.59 9.85 5.35 9.71 5.16 9.55C4.97 9.40 4.77 9.20 4.55 8.98L3.04 7.46L3.96 6.54L5.47 8.05C5.72 8.29 5.86 8.43 5.98 8.53C6.09 8.61 6.11 8.61 6.09 8.60C6.11 8.61 6.14 8.61 6.16 8.60C6.14 8.61 6.16 8.61 6.27 8.53C6.39 8.43 6.53 8.29 6.77 8.05L10.04 4.79L10.96 5.71Z',
+      fill: 'currentColor',
+    }),
+  ], 'ops-tree-glyph ops-tree-glyph-done')
+}
+
+function ProgressGlyph(nodeId: string): any {
+  const gid = 'ops-g-' + nodeId
+  return svgBase([
+    h('defs', null,
+      h('linearGradient', {
+        id: gid, x1: 2.5, y1: 12, x2: 10.5, y2: 3.5, gradientUnits: 'userSpaceOnUse',
+      },
+        h('stop', { stopColor: 'currentColor' }),
+        h('stop', { offset: 1, stopColor: 'currentColor', stopOpacity: 0 }),
+      ),
+    ),
+    h('circle', { cx: 7, cy: 7, r: 6.4, stroke: `url(#${gid})`, strokeWidth: 1.2 }),
+  ], 'ops-tree-glyph ops-tree-glyph-progress')
+}
+
+function PendingGlyph(): any {
+  return svgBase([
+    h('circle', { cx: 7, cy: 7, r: 6.4, stroke: 'currentColor', strokeWidth: 1.2, strokeDasharray: '2.4 2.4' }),
+  ], 'ops-tree-glyph ops-tree-glyph-pending')
+}
+
+function DeadEndGlyph(): any {
+  return svgBase([
+    h('circle', { cx: 7, cy: 7, r: 6.4, stroke: 'currentColor', strokeWidth: 1.2 }),
+    h('path', { d: 'M4.5 4.5 L9.5 9.5 M9.5 4.5 L4.5 9.5', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round' }),
+  ], 'ops-tree-glyph ops-tree-glyph-deadend')
+}
+
+function GoalGlyph(): any {
+  return svgBase([
+    h('circle', { cx: 7, cy: 7, r: 6.4, stroke: 'currentColor', strokeWidth: 1.6, strokeDasharray: '3 2' }),
+  ], 'ops-tree-glyph ops-tree-glyph-goal')
+}
+
+function ResolvedGlyph(): any {
+  return svgBase([
+    h('circle', { cx: 7, cy: 7, r: 6.4, stroke: 'currentColor', strokeWidth: 1.4, fill: 'currentColor', fillOpacity: 0.15 }),
+    h('path', {
+      d: 'M10.96 5.71L7.70 8.98C7.48 9.20 7.28 9.40 7.09 9.55C6.90 9.71 6.66 9.85 6.36 9.90C6.20 9.93 6.04 9.93 5.88 9.90C5.59 9.85 5.35 9.71 5.16 9.55C4.97 9.40 4.77 9.20 4.55 8.98L3.04 7.46L3.96 6.54L5.47 8.05C5.72 8.29 5.86 8.43 5.98 8.53C6.09 8.61 6.11 8.61 6.09 8.60C6.11 8.61 6.14 8.61 6.16 8.60C6.14 8.61 6.16 8.61 6.27 8.53C6.39 8.43 6.53 8.29 6.77 8.05L10.04 4.79L10.96 5.71Z',
+      fill: 'currentColor',
+    }),
+  ], 'ops-tree-glyph ops-tree-glyph-resolved')
+}
+
+function StatusGlyph(status: NodeStatus, nodeId: string, hasInfo: boolean): any {
+  switch (status) {
+    case 'goal': return GoalGlyph()
+    case 'done': return hasInfo ? ResolvedGlyph() : DoneGlyph()
+    case 'in_progress': return ProgressGlyph(nodeId)
+    case 'dead_end': return DeadEndGlyph()
+    case 'resolved': return ResolvedGlyph()
+    default: return PendingGlyph()
+  }
+}
+
+// ── Progress label (mirrors TodoPanel.progressLabel) ─────────────────────────
+
+function progressLabel(tree: TreeState): string {
+  const counts: Partial<Record<NodeStatus, number>> = {}
+  for (const n of tree.nodes) counts[n.status] = (counts[n.status] ?? 0) + 1
+  const parts: string[] = [`${tree.nodes.length} nodes`]
+  if (counts.done) parts.push(`${counts.done} done`)
+  if (counts.in_progress) parts.push(`${counts.in_progress} active`)
+  if (counts.pending) parts.push(`${counts.pending} pending`)
+  if (counts.dead_end) parts.push(`${counts.dead_end} dead`)
+  if (tree.resolved) parts.push('resolved')
+  return parts.join('\u2002\u00b7\u2002')
+}
+
+// ── Tree layout ──────────────────────────────────────────────────────────────
+
 function depthOf(nodes: TreeNode[], id: string, cache: Record<string, number> = {}): number {
   if (id in cache) return cache[id]
   const node = nodes.find(n => n.id === id)
@@ -76,60 +320,89 @@ function depthOf(nodes: TreeNode[], id: string, cache: Record<string, number> = 
   return d
 }
 
-/** Render the full tree as indented text lines. */
-function renderTreeText(tree: TreeState): string {
-  const cache: Record<string, number> = {}
-  const lines: string[] = []
-
-  // Sort: goal first, then by parent chain depth, then by original order
-  const sorted = [...tree.nodes].sort((a, b) => {
-    const da = depthOf(tree.nodes, a.id, cache)
-    const db = depthOf(tree.nodes, b.id, cache)
-    if (da !== db) return da - db
-    return 0
-  })
-
-  for (const node of sorted) {
-    const depth = depthOf(tree.nodes, node.id, cache)
-    const indent = '  '.repeat(depth)
-    const prefix = depth === 0 ? '└── ' : '├── '
-    const label = STATUS_LABEL[node.status]
-    const labelStr = label ? `${label} ` : ''
-    let line = `${indent}${prefix}${node.id}: ${labelStr}${node.title}`
-    if (node.turns.length > 0) line += ` (turn ${node.turns.join(',')})`
-    if (node.caused_by.length > 0) line += `  ← caused_by: ${node.caused_by.join(', ')}`
-    if (node.summary) line += `  summary: ${node.summary}`
-    lines.push(line)
+/** DFS traversal: children follow their parent, preserving insertion order. */
+function treeOrder(nodes: TreeNode[]): TreeNode[] {
+  const childrenOf: Record<string, TreeNode[]> = {}
+  let root: TreeNode | undefined
+  for (const n of nodes) {
+    if (n.parent === null) { root = n; continue }
+    const list = childrenOf[n.parent] ?? (childrenOf[n.parent] = [])
+    list.push(n)
   }
-
-  if (tree.resolved) lines.push('=== RESOLVED ===')
-  return lines.join('\n')
+  const result: TreeNode[] = []
+  function visit(node: TreeNode): void {
+    result.push(node)
+    const kids = childrenOf[node.id]
+    if (kids) for (const k of kids) visit(k)
+  }
+  if (root) visit(root)
+  // Orphans (parent not found) appended at the end
+  for (const n of nodes) {
+    if (!result.includes(n)) result.push(n)
+  }
+  return result
 }
 
-/** Progress summary: "N nodes | X done | Y in_progress | Z pending" */
-function progressLabel(tree: TreeState): string {
-  const counts: Record<string, number> = {}
-  for (const n of tree.nodes) counts[n.status] = (counts[n.status] ?? 0) + 1
-  const parts: string[] = [`${tree.nodes.length} nodes`]
-  if (counts.done) parts.push(`${counts.done} done`)
-  if (counts.in_progress) parts.push(`${counts.in_progress} active`)
-  if (counts.pending) parts.push(`${counts.pending} pending`)
-  if (counts.dead_end) parts.push(`${counts.dead_end} dead`)
-  if (tree.resolved) parts.push('resolved')
-  return parts.join(' | ')
+function formatContent(node: TreeNode): string {
+  let text = node.title
+  if (node.caused_by.length > 0) text += `  \u2190 ${node.caused_by.join(', ')}`
+  if (node.summary) text += `  \u2014 ${node.summary}`
+  return text
 }
 
-// ── Dock component ───────────────────────────────────────────────────────────
-
-interface DockProps {
-  useProjection?: (key: string) => unknown | undefined
+/** Whether a node has expandable detail (caused_by or summary). */
+function hasDetail(node: TreeNode): boolean {
+  return node.caused_by.length > 0 || !!node.summary
 }
 
-function TodoTreeDock(props: DockProps): any {
+/** One node row: clickable to expand summary if present. */
+function TreeNodeItem({ node, depth, nodes }: { node: TreeNode, depth: number, nodes: TreeNode[] }): any {
+  const [expanded, setExpanded] = useState(false)
+  const titleClass = node.status === 'dead_end'
+    ? 'ops-tree-node-title ops-tree-node-title-dead'
+    : 'ops-tree-node-title'
+  const expandable = !!node.summary
+
+  return h('li', {
+    key: node.id,
+    className: 'ops-tree-item',
+    'data-status': node.status,
+    style: { paddingLeft: `${depth * 20}px` },
+  },
+    h('div', {
+      className: 'ops-tree-item-row',
+      role: expandable ? 'button' : undefined,
+      tabIndex: expandable ? 0 : undefined,
+      'aria-expanded': expandable ? expanded : undefined,
+      onClick: expandable ? () => setExpanded(v => !v) : undefined,
+      onKeyDown: expandable ? (e: any) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpanded(v => !v) }
+      } : undefined,
+    },
+      h('span', { className: 'ops-tree-glyph', 'aria-hidden': 'true' },
+        StatusGlyph(node.status, node.id, node.caused_by.length > 0 || !!node.summary),
+      ),
+      h('div', { className: 'ops-tree-text' },
+        h('div', { className: titleClass }, node.title),
+      ),
+    ),
+    expanded && expandable && h('div', { className: 'ops-tree-node-detail' },
+      node.caused_by.length > 0 && h('span', {
+        className: 'ops-tree-caused-tag',
+        key: 'caused',
+      }, '\u2190 ' + node.caused_by.join(', ')),
+      node.summary,
+    ),
+  )
+}
+
+// ── Dock component (mirrors TodoPanel structure exactly) ────────────────────
+
+function TodoTreeDock({ useProjection }: { useProjection?: (key: string) => unknown | undefined }): any {
   let tree: TreeState | null = null
   try {
-    if (props.useProjection) {
-      const val = props.useProjection('todo_tree')
+    if (useProjection) {
+      const val = useProjection('todo_tree')
       tree = (val as TreeState | null | undefined) ?? null
     }
   } catch {
@@ -137,32 +410,41 @@ function TodoTreeDock(props: DockProps): any {
   }
 
   const [collapsed, setCollapsed] = useState(true)
-
   if (!tree || !tree.nodes || tree.nodes.length === 0) return null
 
-  return h('div', { className: 'dock-tree-root' },
-    h('div', {
-      className: 'dock-tree-header',
-      onClick: () => setCollapsed(v => !v),
-      role: 'button',
-      tabIndex: 0,
-      'aria-expanded': !collapsed,
-      onKeyDown: (e: any) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed(v => !v) } },
-    },
-      h('span', { className: 'dock-tree-icon' }, h(IconChecklistOutline14)),
-      h('span', { className: 'dock-tree-title' }, 'Investigation Tree'),
-      h('span', { className: 'dock-tree-progress' }, progressLabel(tree)),
-      h('span', { className: 'dock-tree-chevron' },
-        collapsed ? h(IconChevronUpOutline14) : h(IconChevronDownOutline14),
+  const cache: Record<string, number> = {}
+  const sorted = treeOrder(tree.nodes)
+
+  return h('section', {
+    className: 'ops-tree-root',
+    'data-testid': 'ops-tree-panel',
+    'aria-label': 'Investigation Tree',
+  },
+    h('div', { className: 'ops-tree-body' },
+      h('button', {
+        type: 'button',
+        className: 'ops-tree-header',
+        'aria-expanded': !collapsed,
+        onClick: () => { setCollapsed(v => !v) },
+      },
+        h('span', { className: 'ops-tree-lead', 'aria-hidden': 'true' }, h(IconChecklistOutline14)),
+        h('span', { className: 'ops-tree-title' }, 'Investigation Tree'),
+        h('span', { className: 'ops-tree-progress' }, progressLabel(tree)),
+        h('span', { className: 'ops-tree-chevron', 'aria-hidden': 'true' },
+          collapsed ? h(IconChevronUpOutline14) : h(IconChevronDownOutline14),
+        ),
       ),
-    ),
-    !collapsed && h('div', { className: 'dock-tree-body' },
-      h('pre', { className: 'dock-tree-line' }, renderTreeText(tree)),
+      !collapsed && h('ul', { className: 'ops-tree-list' },
+        sorted.map(node => {
+          const depth = depthOf(tree!.nodes, node.id, cache)
+          return h(TreeNodeItem, { key: node.id, node, depth, nodes: tree!.nodes })
+        }),
+      ),
     ),
   )
 }
 
-// ── Client plugin apply ─────────────────────────────────────────────────────
+// ── Client plugin apply (mirrors todoDockEntry) ─────────────────────────────
 
 function apply(ctx: Context): void {
   injectCSS()
