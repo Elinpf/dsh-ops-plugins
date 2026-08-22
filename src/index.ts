@@ -133,26 +133,17 @@ function foldEvent(state: TreeState | null, event: any): TreeState | null {
     case 'add_step':
     case 'add_milestone': {
       const kind = action === 'add_milestone' ? 'milestone' : 'step'
-      // Batch: titles array
-      const titles: string[] = Array.isArray(args.titles) ? args.titles : [args.title]
-      const providedIds: (string | undefined)[] = Array.isArray(args.ids)
-        ? args.ids
-        : args.id ? [args.id] : Array(titles.length).fill(undefined)
-
       const existingIds = new Set(nodes.map((n) => n.id))
+      const nodeId = args.id
+      existingIds.add(nodeId)
       let tree = state ? { ...state, nodes } : { nodes, resolved: false }
-      for (let i = 0; i < titles.length; i++) {
-        const t = titles[i]
-        const nodeId = providedIds[i] || slugify(t, existingIds)
-        existingIds.add(nodeId)
-        tree = {
-          ...tree,
-          nodes: [...tree.nodes, {
-            id: nodeId, title: t,
-            status: kind === 'milestone' ? 'goal' : 'pending',
-            parent: args.parent_id, turns: [turn], summary: null, caused_by: [],
-          }],
-        }
+      tree = {
+        ...tree,
+        nodes: [...tree.nodes, {
+          id: nodeId, title: args.title,
+          status: kind === 'milestone' ? 'goal' : 'pending',
+          parent: args.parent_id, turns: [turn], summary: null, caused_by: [],
+        }],
       }
       return tree
     }
@@ -165,7 +156,7 @@ function foldEvent(state: TreeState | null, event: any): TreeState | null {
         action === 'start' || action === 'reopen' ? 'in_progress'
         : action === 'complete' ? 'done'
         : 'dead_end'
-      const nodeIds: string[] = Array.isArray(args.node_ids) ? args.node_ids : [args.node_id]
+      const nodeIds: string[] = Array.isArray(args.ids) ? args.ids : []
       let tree: TreeState | null = state ? { ...state, nodes } : null
       for (const nid of nodeIds) {
         tree = updateNode(tree, nid, turn, (n) => {
@@ -186,11 +177,17 @@ function foldEvent(state: TreeState | null, event: any): TreeState | null {
     }
 
     case 'link': {
-      return updateNode(state ? { ...state, nodes } : null, args.node_id, turn, (n) => {
-        if (!n.caused_by.includes(args.caused_by)) {
-          n.caused_by = [...n.caused_by, args.caused_by]
-        }
-      })
+      // Support batch: links array [{id, caused_by}], or single {id, caused_by}
+      const links: Array<{id: string, caused_by: string}> = Array.isArray(args.links) ? args.links : [{id: args.id, caused_by: args.caused_by}]
+      let tree = state ? { ...state, nodes } : null
+      for (const link of links) {
+        tree = updateNode(tree, link.id, turn, (n) => {
+          if (!n.caused_by.includes(link.caused_by)) {
+            n.caused_by = [...n.caused_by, link.caused_by]
+          }
+        })
+      }
+      return tree
     }
 
     default:
@@ -243,11 +240,8 @@ function buildSummary(tree: TreeState | null): TodoTreeResult['summary'] {
 const TOOL_DESCRIPTION = [
   'Maintain an investigation tree for incident response. ',
   'Structure: goal (investigation target) → milestone (fixed phase anchor) → step (flexible investigation path). ',
-  'Create the tree at the start, plan milestones for investigation phases, add steps as you investigate, ',
-  'complete steps with a summary of findings, abandon steps that are no longer relevant, ',
-  'and resolve when the incident is resolved. ',
+  'All node operations use `id` (or `ids` array for batch). ',
   'Actions: create_tree, add_milestone, add_step, start, complete, abandon, reopen, resolve, link, view. ',
-  'Batch: pass titles+ids arrays to add_step, node_ids array to start/complete/abandon. ',
   'The tree persists for the session and helps you stay oriented.',
 ].join('')
 
@@ -465,33 +459,36 @@ function renderOutput(args: any, value: any): string {
   const lines: string[] = []
 
   if (action === 'add_step' || action === 'add_milestone') {
-    // Show new node(s) + parent
-    const newIds: string[] = value.new_node ? [value.new_node] : (value.new_nodes || [])
-    for (const nid of newIds) {
-      const node = tree.nodes.find((n) => n.id === nid)
+    // Show new node + parent
+    const newId = value.new_node
+    if (newId) {
+      const node = tree.nodes.find((n) => n.id === newId)
       if (node) {
         lines.push(renderNodeLine(node, '+'))
         if (node.parent) {
-          const parent = tree.nodes.find((n) => n.id === node.parent)
-          if (parent) lines.push(`  parent: ${parent.id}`)
+          lines.push(`  parent: ${node.parent}`)
         }
       }
     }
   } else if (action === 'start' || action === 'complete' || action === 'abandon' || action === 'reopen') {
-    // Show changed node(s)
-    const nodeIds: string[] = Array.isArray(args.node_ids) ? args.node_ids : [args.node_id]
-    for (const nid of nodeIds) {
+    // Show changed node id + new status only (no summary for brevity)
+    const ids: string[] = args.ids || []
+    for (const nid of ids) {
       const node = tree.nodes.find((n) => n.id === nid)
-      if (node) lines.push(renderNodeLine(node, '='))
+      if (node) {
+        const label = STATUS_LABEL[node.status] || ''
+        lines.push(`= ${nid}: ${label}`)
+      }
     }
   } else if (action === 'link') {
-    // Show changed node with its new caused_by
-    const node = tree.nodes.find((n) => n.id === args.node_id)
-    if (node) lines.push(renderNodeLine(node, '~'))
+    // Show changed nodes with their new caused_by (id + caused_by only)
+    const links: Array<{id: string, caused_by: string}> = Array.isArray(args.links) ? args.links : [{id: args.id, caused_by: args.caused_by}]
+    for (const link of links) {
+      lines.push(`~ ${link.id} ← caused_by: ${link.caused_by}`)
+    }
   } else if (action === 'resolve') {
-    // Show resolved goal node
-    const goal = tree.nodes.find((n) => n.id === 'goal')
-    if (goal) lines.push(renderNodeLine(goal, '='))
+    // Show resolved goal
+    lines.push('= goal: resolved')
   }
 
   if (stats) lines.push(stats)
@@ -568,19 +565,17 @@ function apply(ctx: any, _config: Record<string, never>): void {
       // add_step / add_milestone
       parent_id: { type: 'string', description: 'Parent node id (add_step/add_milestone only). Use "goal" for top-level milestones.' },
       title: { type: 'string', description: 'Node title (add_step/add_milestone only).' },
-      id: { type: 'string', description: 'Semantic id for the new node (e.g. "ceph-full"). If omitted, auto-generated from title slug (e.g. "Check Ceph" → "check-ceph").' },
-      titles: { type: 'array', items: { type: 'string' }, description: 'Array of titles to add multiple siblings at once (batch mode).' },
-      ids: { type: 'array', items: { type: 'string' }, description: 'Array of semantic ids, one per title. If omitted, auto-generated from each title.' },
+      id: { type: 'string', description: 'Semantic id for the new node (e.g. "ceph-full"). Required for add_step/add_milestone.' },
 
-      // start / complete / abandon / reopen / link
-      node_id: { type: 'string', description: 'Target node id (start/complete/abandon/reopen/link only).' },
-      node_ids: { type: 'array', items: { type: 'string' }, description: 'Array of node ids for batch mode (start/complete/abandon/reopen). Use instead of node_id to update multiple nodes at once.' },
+      // start / complete / abandon / reopen
+      ids: { type: 'array', items: { type: 'string' }, description: 'Array of node ids to update (start/complete/abandon/reopen). Batch mode.' },
 
       // resolve / complete (optional on complete)
       summary: { type: 'string', description: 'How the goal/node was resolved. Required for resolve. Optional for complete — records what was found/fixed.' },
 
       // link
-      caused_by: { type: 'string', description: 'Node id that is the root cause of node_id (link only). Expresses: "node_id is caused by caused_by".' },
+      caused_by: { type: 'string', description: 'Node id that is the root cause (link only). Expresses: "id is caused by caused_by".' },
+      links: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, caused_by: { type: 'string' } }, additionalProperties: false }, description: 'Batch link: array of {id, caused_by} pairs (link only).' },
 
       // view
       status_filter: { type: 'string', enum: ['pending', 'in_progress', 'done', 'dead_end', 'resolved'], description: 'Filter view to nodes of one status (view only, optional). If omitted, shows all.' },
@@ -632,28 +627,12 @@ function apply(ctx: any, _config: Record<string, never>): void {
         case 'add_milestone': {
           if (!currentTree) throw new Error('todo_tree: no tree — call create_tree first')
           if (!args.parent_id) throw new Error('todo_tree: parent_id is required')
-          if (!args.title && !args.titles) throw new Error('todo_tree: title (or titles array) is required')
+          if (!args.title) throw new Error('todo_tree: title is required')
+          if (!args.id) throw new Error('todo_tree: id is required')
           const parent = currentTree.nodes.find((n) => n.id === args.parent_id)
           if (!parent) throw new Error(`todo_tree: parent node "${args.parent_id}" not found`)
-
-          // Validate ids don't already exist BEFORE folding
-          const titles: string[] = Array.isArray(args.titles) ? args.titles : [args.title]
-          const providedIds: (string | undefined)[] = Array.isArray(args.ids)
-            ? args.ids
-            : args.id ? [args.id] : Array(titles.length).fill(undefined)
-          if (providedIds.length !== titles.length) {
-            throw new Error(`todo_tree: ids array must have exactly ${titles.length} entry(ies) to match titles.`)
-          }
-
-          const existingIds = new Set(currentTree.nodes.map((n) => n.id))
-          const addedIds: string[] = []
-          for (let i = 0; i < titles.length; i++) {
-            const nodeId = providedIds[i] || slugify(titles[i], existingIds)
-            if (existingIds.has(nodeId)) {
-              throw new Error(`todo_tree: node id "${nodeId}" already exists`)
-            }
-            existingIds.add(nodeId)
-            addedIds.push(nodeId)
+          if (currentTree.nodes.some((n) => n.id === args.id)) {
+            throw new Error(`todo_tree: node id "${args.id}" already exists`)
           }
 
           const ev = { type: 'tool/call', data: { name: 'todo_tree', turn, arguments: JSON.stringify(args) } }
@@ -661,8 +640,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
           setSessionTree(sessionId, updated)
 
           const result: any = { tree: updated, summary: buildSummary(updated) }
-          if (addedIds.length === 1) result.new_node = addedIds[0]
-          else result.new_nodes = addedIds
+          result.new_node = args.id
           return result
         }
 
@@ -671,15 +649,14 @@ function apply(ctx: any, _config: Record<string, never>): void {
         case 'abandon':
         case 'reopen': {
           if (!currentTree) throw new Error('todo_tree: no tree')
-          if (!args.node_id && !args.node_ids) throw new Error('todo_tree: node_id (or node_ids array) is required')
+          if (!args.ids || !Array.isArray(args.ids) || args.ids.length === 0) throw new Error('todo_tree: ids array is required')
           const targetStatus: NodeStatus =
             args.action === 'start' || args.action === 'reopen' ? 'in_progress'
             : args.action === 'complete' ? 'done'
             : 'dead_end'
 
           // Validate transitions — idempotent if already at target status
-          const nodeIds: string[] = Array.isArray(args.node_ids) ? args.node_ids : [args.node_id]
-          for (const nid of nodeIds) {
+          for (const nid of args.ids) {
             const node = currentTree.nodes.find((n) => n.id === nid)
             if (!node) throw new Error(`todo_tree: node "${nid}" not found`)
             if (node.status === targetStatus) continue // idempotent — already at target
@@ -715,15 +692,28 @@ function apply(ctx: any, _config: Record<string, never>): void {
 
         case 'link': {
           if (!currentTree) throw new Error('todo_tree: no tree')
-          if (!args.node_id) throw new Error('todo_tree: node_id is required for link')
-          if (!args.caused_by) throw new Error('todo_tree: caused_by is required for link')
-          const node = currentTree.nodes.find((n) => n.id === args.node_id)
-          if (!node) throw new Error(`todo_tree: node "${args.node_id}" not found`)
-          const target = currentTree.nodes.find((n) => n.id === args.caused_by)
-          if (!target) throw new Error(`todo_tree: node "${args.caused_by}" not found`)
-          if (node.caused_by.includes(args.caused_by)) {
+          const links: Array<{id: string, caused_by: string}> = Array.isArray(args.links) ? args.links : [{id: args.id, caused_by: args.caused_by}]
+          if (links.length === 0) throw new Error('todo_tree: at least one link is required')
+
+          // Validate all nodes exist
+          for (const link of links) {
+            if (!link.id) throw new Error('todo_tree: id is required for link')
+            if (!link.caused_by) throw new Error('todo_tree: caused_by is required for link')
+            const node = currentTree.nodes.find((n) => n.id === link.id)
+            if (!node) throw new Error(`todo_tree: node "${link.id}" not found`)
+            const target = currentTree.nodes.find((n) => n.id === link.caused_by)
+            if (!target) throw new Error(`todo_tree: node "${link.caused_by}" not found`)
+          }
+
+          // Check if all links already exist (idempotent)
+          const allExist = links.every(link => {
+            const node = currentTree!.nodes.find((n) => n.id === link.id)
+            return node && node.caused_by.includes(link.caused_by)
+          })
+          if (allExist) {
             return { tree: currentTree, summary: buildSummary(currentTree) }
           }
+
           const ev = { type: 'tool/call', data: { name: 'todo_tree', turn, arguments: JSON.stringify(args) } }
           const updated = foldEvent(currentTree, ev)
           setSessionTree(sessionId, updated)
@@ -772,16 +762,16 @@ function apply(ctx: any, _config: Record<string, never>): void {
     'Unlike a flat todo list, the tree records the full exploration trail — dead ends stay visible, branches show parallel paths.',
     '',
     '### Actions',
-    '- `create_tree` — Create the tree with a goal (investigation target). Call this once at the start.',
-    '- `add_milestone` — Add a milestone as a fixed anchor under goal. Milestones organize investigation phases (e.g. "confirm storage root cause", "fix storage layer").',
-    '- `add_step` — Add a step under a milestone (or another step). Steps are flexible investigation paths. Optional `id` for semantic id; if omitted, auto-generated from title. Batch: pass titles+ids arrays.',
-    '- `start` — Mark a step as in_progress. Accepts node_ids array for batch.',
-    '- `complete` — Mark a step as done (can skip start). Optional `summary` to record what was found/fixed. `done` means this step\'s investigation is complete, NOT that the conclusion is final. Accepts node_ids array for batch.',
-    '- `abandon` — Mark a step as no longer needed. This includes dead ends (didn\'t work) AND changed circumstances (situation shifted, this check is no longer relevant). The step stays on the tree for the record. Accepts node_ids array for batch.',
-    '- `reopen` — Reactivate a `done` or `dead_end` node back to in_progress. Use when a completed step\'s conclusion turns out to be wrong or incomplete and needs re-investigation.',
-    '- `resolve` — Mark the goal as resolved. Requires a `summary`.',
-    '- `link` — Connect a causal edge: `node_id` is caused by `caused_by`. Use when one symptom\'s root cause is another node (e.g. cred-broker is caused_by postgres). The tree keeps its parent structure; link adds a causal edge on top.',
-    '- `view` — Retrieve the full tree with summaries and causal edges. Optional `status_filter` to show only one status.',
+    '- `create_tree` — Create the tree with a goal (investigation target). Call this once at the start. Requires `goal_title`.',
+    '- `add_milestone` — Add a milestone as a fixed anchor under goal. Requires `id` (semantic id), `parent_id`, `title`.',
+    '- `add_step` — Add a step under a milestone (or another step). Requires `id` (semantic id), `parent_id`, `title`.',
+    '- `start` — Mark nodes as in_progress. Pass `ids` array of node ids.',
+    '- `complete` — Mark nodes as done (can skip start). Optional `summary` to record what was found/fixed. Pass `ids` array.',
+    '- `abandon` — Mark nodes as no longer needed (dead ends or changed circumstances). Pass `ids` array.',
+    '- `reopen` — Reactivate a `done` or `dead_end` node back to in_progress. Pass `ids` array.',
+    '- `resolve` — Mark the goal as resolved. Requires `summary`.',
+    '- `link` — Connect causal edges. Single: pass `id` + `caused_by`. Batch: pass `links` array of {id, caused_by} pairs.',
+    '- `view` — Retrieve the full tree with summaries and causal edges. Optional `status_filter`.',
     '',
     '### Tree structure',
     'goal (investigation target) → milestone (fixed phase anchor) → step (flexible investigation path).',
@@ -792,11 +782,10 @@ function apply(ctx: any, _config: Record<string, never>): void {
     '### Output format',
     '- `create_tree`: shows the new tree.',
     '- `add_step`/`add_milestone`: shows the new node + parent + stats line.',
-    '- `start`/`complete`/`abandon`/`reopen`: shows the changed node + stats line.',
-    '- `link`: shows the changed node with its caused_by + stats line.',
-    '- `resolve`: shows the resolved goal + stats line.',
+    '- `start`/`complete`/`abandon`/`reopen`: shows `= id: status` + stats line.',
+    '- `link`: shows `~ id ← caused_by: ...` + stats line.',
+    '- `resolve`: shows `= goal: resolved` + stats line.',
     '- `view`: shows the full tree with all details.',
-    'Use `view` when you need to see the full tree.',
     '',
     '### Discipline',
     '- **Every 5 steps of investigation, at least 1 todo_tree update.**',
