@@ -123,6 +123,8 @@ function foldEvent(state: TreeState | null, event: any): TreeState | null {
 
   switch (action) {
     case 'create_tree': {
+      // Idempotent: if a goal already exists (session replay), keep the original.
+      if (nodes.some((n) => n.id === 'goal')) return state
       nodes.push({
         id: 'goal', title: args.goal_title, status: 'goal',
         parent: null, turns: [turn], summary: null, caused_by: [],
@@ -554,33 +556,108 @@ function apply(ctx: any, _config: Record<string, never>): void {
     name: 'todo_tree',
     description: TOOL_DESCRIPTION,
     parameters: {
-      action: { type: 'string', enum: [
+      action: { type: 'string', required: true, enum: [
         'create_tree', 'add_step', 'add_milestone',
         'start', 'complete', 'abandon', 'reopen', 'resolve', 'link', 'view',
       ], description: 'The action to perform.' },
 
-      // create_tree
       goal_title: { type: 'string', description: 'Title for the investigation goal (create_tree only).' },
 
-      // add_step / add_milestone / start / complete / abandon / reopen / link
       id: { type: 'string', description: 'Node id. For add_step/add_milestone: the new node\'s semantic id (e.g. "ceph-full"). For start/complete/abandon/reopen: single target node. For link: target node (use with caused_by).' },
       parent_id: { type: 'string', description: 'Parent node id (add_step/add_milestone only). Use "goal" for top-level milestones.' },
       title: { type: 'string', description: 'Node title (add_step/add_milestone only).' },
-      ids: { type: 'array', items: { type: 'string' }, description: 'Array of node ids for batch mode (start/complete/abandon/reopen).' },
+      ids: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Array of node ids for batch mode (start/complete/abandon/reopen).',
+      },
 
-      // resolve / complete (optional on complete)
       summary: { type: 'string', description: 'How the goal/node was resolved. Required for resolve. Optional for complete — records what was found/fixed.' },
 
-      // link
       caused_by: { type: 'string', description: 'Node id that is the root cause (link only). Expresses: "id is caused by caused_by".' },
-      links: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, caused_by: { type: 'string' } }, additionalProperties: false }, description: 'Batch link: array of {id, caused_by} pairs (link only).' },
+      links: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string', required: true },
+            caused_by: { type: 'string', required: true },
+          },
+        },
+        description: 'Batch link: array of {id, caused_by} pairs (link only).',
+      },
 
-      // view
-      status_filter: { type: 'string', enum: ['pending', 'in_progress', 'done', 'dead_end', 'resolved'], description: 'Filter view to nodes of one status (view only, optional). If omitted, shows all.' },
+      status_filter: { type: 'string', enum: ['pending', 'in_progress', 'done', 'dead_end', 'resolved'], description: 'Filter view to nodes of one status (view only, optional).' },
     },
 
     output: {
-      schema: { type: 'json' },
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          tree: {
+            type: 'object',
+            additionalProperties: false,
+            required: true,
+            properties: {
+              nodes: {
+                type: 'array',
+                required: true,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    id: { type: 'string', required: true },
+                    title: { type: 'string', required: true },
+                    status: { type: 'string', required: true, enum: ['goal', 'pending', 'in_progress', 'done', 'dead_end', 'resolved'] },
+                    parent: { required: true, oneOf: [{ type: 'string' }, { type: 'null' }] },
+                    turns: { type: 'array', required: true, items: { type: 'number' } },
+                    summary: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                    caused_by: { type: 'array', items: { type: 'string' } },
+                  },
+                },
+              },
+              resolved: { type: 'boolean', required: true },
+            },
+          },
+          summary: {
+            type: 'object',
+            additionalProperties: false,
+            required: true,
+            properties: {
+              total: { type: 'integer', required: true },
+              counts: {
+                type: 'object',
+                additionalProperties: false,
+                required: true,
+                properties: {
+                  goal: { type: 'integer', required: true },
+                  pending: { type: 'integer', required: true },
+                  in_progress: { type: 'integer', required: true },
+                  done: { type: 'integer', required: true },
+                  dead_end: { type: 'integer', required: true },
+                  resolved: { type: 'integer', required: true },
+                },
+              },
+              incomplete: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    id: { type: 'string', required: true },
+                    title: { type: 'string', required: true },
+                    status: { type: 'string', required: true },
+                  },
+                },
+              },
+              warning: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+            },
+          },
+          new_node: { type: 'string' },
+        },
+      },
       render: (args: any, value: any) => [{
         type: 'text',
         text: renderOutput(args, value),
@@ -858,4 +935,4 @@ function apply(ctx: any, _config: Record<string, never>): void {
   }
 }
 
-export { Config, apply, inject, name }
+export { Config, apply, inject, name, foldEvent }

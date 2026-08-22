@@ -1,7 +1,7 @@
 /**
  * Projection fold tests for ops-todo-tree.
  *
- * Validates that foldEvent correctly builds TreeState from incremental events.
+ * Validates that foldEvent correctly builds TreeState from tool/call events.
  * These are pure-function tests — no Cordis runtime needed.
  */
 
@@ -9,181 +9,303 @@ import { describe, it, expect } from 'vitest'
 import { foldEvent } from '../src/index.ts'
 import type { TreeState } from '../src/types.ts'
 
-// Helper: build a tree from a sequence of events
-function foldAll(events: any[]): TreeState | null {
+/** Build a tool/call event for todo_tree with the given action args. */
+function ev(turn: number, args: Record<string, unknown>) {
+  return {
+    type: 'tool/call',
+    data: { name: 'todo_tree', turn, arguments: JSON.stringify(args) },
+  }
+}
+
+/** Fold a sequence of action args into a TreeState. */
+function foldAll(actions: Array<{ turn: number, args: Record<string, unknown> }>): TreeState | null {
   let state: TreeState | null = null
-  for (const event of events) {
-    state = foldEvent(state, event)
+  for (const { turn, args } of actions) {
+    state = foldEvent(state, ev(turn, args))
   }
   return state
 }
 
+// ── Basic structure ──────────────────────────────────────────────────────────
+
 describe('projection fold', () => {
-  it('initial state is null', () => {
-    expect(foldEvent(null, { type: 'other/event' })).toBe(null)
+  it('null state stays null on unrelated events', () => {
+    expect(foldEvent(null, { type: 'turn/start', data: { turn: 1 } })).toBe(null)
+    expect(foldEvent(null, { type: 'user/message', data: {} })).toBe(null)
   })
 
-  it('ignores unrelated events', () => {
-    const events = [
-      { type: 'turn/start', data: { turn: 1 } },
-      { type: 'user/message', data: {} },
-    ]
-    expect(foldAll(events)).toBe(null)
+  it('ignores non-todo_tree tool calls', () => {
+    const state = foldEvent(null, {
+      type: 'tool/call',
+      data: { name: 'bash', turn: 1, arguments: '{"command":"ls"}' },
+    })
+    expect(state).toBe(null)
   })
 
-  it('create_tree builds root + goal', () => {
+  it('create_tree builds goal node', () => {
     const state = foldAll([
-      { type: 'todo_tree/create', data: {
-        turn: 1, root_id: 'root', root_title: 'Pod crashing',
-        goal_id: 'goal', goal_title: 'Service recovered',
-      } },
+      { turn: 1, args: { action: 'create_tree', goal_title: 'Pod crashing' } },
     ])
     expect(state).not.toBeNull()
-    expect(state!.nodes).toHaveLength(2)
+    expect(state!.nodes).toHaveLength(1)
     expect(state!.resolved).toBe(false)
 
-    const root = state!.nodes.find((n) => n.id === 'root')
-    expect(root).toBeDefined()
-    expect(root!.title).toBe('Pod crashing')
-    expect(root!.status).toBe('goal')
-    expect(root!.parent).toBeNull()
-    expect(root!.turns).toEqual([1])
-
-    const goal = state!.nodes.find((n) => n.id === 'goal')
-    expect(goal).toBeDefined()
-    expect(goal!.title).toBe('Service recovered')
-    expect(goal!.status).toBe('goal')
-    expect(goal!.parent).toBe('root')
+    const goal = state!.nodes[0]
+    expect(goal.id).toBe('goal')
+    expect(goal.title).toBe('Pod crashing')
+    expect(goal.status).toBe('goal')
+    expect(goal.parent).toBeNull()
+    expect(goal.turns).toEqual([1])
+    expect(goal.caused_by).toEqual([])
   })
 
-  it('add_step creates a pending step', () => {
+  it('create_tree is idempotent on replay', () => {
     const state = foldAll([
-      { type: 'todo_tree/create', data: { turn: 1, root_id: 'root', root_title: 'P', goal_id: 'goal', goal_title: 'G' } },
-      { type: 'todo_tree/add', data: { turn: 1, node_id: 'n1', parent_id: 'root', title: 'Check logs', kind: 'step', branch: false } },
+      { turn: 1, args: { action: 'create_tree', goal_title: 'A' } },
+      { turn: 2, args: { action: 'create_tree', goal_title: 'A' } },
     ])
-    const step = state!.nodes.find((n) => n.id === 'n1')
-    expect(step).toBeDefined()
-    expect(step!.status).toBe('pending')
-    expect(step!.parent).toBe('root')
-    expect(step!.turns).toEqual([1])
+    expect(state!.nodes).toHaveLength(1)
+    expect(state!.nodes[0].title).toBe('A')
   })
+})
 
-  it('add_milestone creates a goal-status milestone', () => {
+// ── Add nodes ────────────────────────────────────────────────────────────────
+
+describe('add nodes', () => {
+  it('add_milestone creates a goal-status node under goal', () => {
     const state = foldAll([
-      { type: 'todo_tree/create', data: { turn: 1, root_id: 'root', root_title: 'P', goal_id: 'goal', goal_title: 'G' } },
-      { type: 'todo_tree/add', data: { turn: 2, node_id: 'm1', parent_id: 'root', title: 'Confirm root cause', kind: 'milestone', branch: false } },
+      { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
+      { turn: 1, args: { action: 'add_milestone', id: 'm1', parent_id: 'goal', title: 'Phase 1' } },
     ])
-    const milestone = state!.nodes.find((n) => n.id === 'm1')
-    expect(milestone!.status).toBe('goal')
+    const m = state!.nodes.find((n) => n.id === 'm1')
+    expect(m).toBeDefined()
+    expect(m!.status).toBe('goal')
+    expect(m!.parent).toBe('goal')
+    expect(m!.turns).toEqual([1])
   })
 
-  it('start transitions pending → in_progress', () => {
+  it('add_step creates a pending node', () => {
     const state = foldAll([
-      { type: 'todo_tree/create', data: { turn: 1, root_id: 'root', root_title: 'P', goal_id: 'goal', goal_title: 'G' } },
-      { type: 'todo_tree/add', data: { turn: 1, node_id: 'n1', parent_id: 'root', title: 'Step 1', kind: 'step', branch: false } },
-      { type: 'todo_tree/start', data: { turn: 2, node_id: 'n1' } },
+      { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
+      { turn: 1, args: { action: 'add_milestone', id: 'm1', parent_id: 'goal', title: 'M1' } },
+      { turn: 2, args: { action: 'add_step', id: 's1', parent_id: 'm1', title: 'Check logs' } },
     ])
-    const node = state!.nodes.find((n) => n.id === 'n1')
-    expect(node!.status).toBe('in_progress')
-    expect(node!.turns).toContain(2)
+    const s = state!.nodes.find((n) => n.id === 's1')
+    expect(s).toBeDefined()
+    expect(s!.status).toBe('pending')
+    expect(s!.parent).toBe('m1')
+    expect(s!.turns).toEqual([2])
   })
 
-  it('complete transitions in_progress → done', () => {
+  it('add_step can nest under another step', () => {
     const state = foldAll([
-      { type: 'todo_tree/create', data: { turn: 1, root_id: 'root', root_title: 'P', goal_id: 'goal', goal_title: 'G' } },
-      { type: 'todo_tree/add', data: { turn: 1, node_id: 'n1', parent_id: 'root', title: 'Step 1', kind: 'step', branch: false } },
-      { type: 'todo_tree/start', data: { turn: 2, node_id: 'n1' } },
-      { type: 'todo_tree/complete', data: { turn: 3, node_id: 'n1' } },
+      { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
+      { turn: 1, args: { action: 'add_step', id: 's1', parent_id: 'goal', title: 'S1' } },
+      { turn: 2, args: { action: 'add_step', id: 's2', parent_id: 's1', title: 'S2' } },
     ])
-    expect(state!.nodes.find((n) => n.id === 'n1')!.status).toBe('done')
+    expect(state!.nodes.find((n) => n.id === 's2')!.parent).toBe('s1')
   })
+})
 
-  it('abandon transitions in_progress → dead_end', () => {
-    const state = foldAll([
-      { type: 'todo_tree/create', data: { turn: 1, root_id: 'root', root_title: 'P', goal_id: 'goal', goal_title: 'G' } },
-      { type: 'todo_tree/add', data: { turn: 1, node_id: 'n1', parent_id: 'root', title: 'Step 1', kind: 'step', branch: false } },
-      { type: 'todo_tree/start', data: { turn: 2, node_id: 'n1' } },
-      { type: 'todo_tree/abandon', data: { turn: 3, node_id: 'n1' } },
+// ── Status transitions ──────────────────────────────────────────────────────
+
+describe('status transitions', () => {
+  function buildWithStep() {
+    return foldAll([
+      { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
+      { turn: 1, args: { action: 'add_step', id: 's1', parent_id: 'goal', title: 'S1' } },
     ])
-    expect(state!.nodes.find((n) => n.id === 'n1')!.status).toBe('dead_end')
+  }
+
+  it('start: pending → in_progress', () => {
+    const state = foldEvent(buildWithStep(), ev(2, { action: 'start', id: 's1' }))
+    expect(state!.nodes.find((n) => n.id === 's1')!.status).toBe('in_progress')
+    expect(state!.nodes.find((n) => n.id === 's1')!.turns).toContain(2)
   })
 
-  it('dead_end can be re-started (non-terminal)', () => {
+  it('complete: pending → done (skips start)', () => {
+    const state = foldEvent(buildWithStep(), ev(2, { action: 'complete', id: 's1' }))
+    expect(state!.nodes.find((n) => n.id === 's1')!.status).toBe('done')
+  })
+
+  it('complete with summary stores it', () => {
+    const state = foldEvent(buildWithStep(), ev(2, { action: 'complete', id: 's1', summary: 'Found OOM' }))
+    expect(state!.nodes.find((n) => n.id === 's1')!.summary).toBe('Found OOM')
+  })
+
+  it('abandon: pending → dead_end', () => {
+    const state = foldEvent(buildWithStep(), ev(2, { action: 'abandon', id: 's1' }))
+    expect(state!.nodes.find((n) => n.id === 's1')!.status).toBe('dead_end')
+  })
+
+  it('reopen: done → in_progress', () => {
     const state = foldAll([
-      { type: 'todo_tree/create', data: { turn: 1, root_id: 'root', root_title: 'P', goal_id: 'goal', goal_title: 'G' } },
-      { type: 'todo_tree/add', data: { turn: 1, node_id: 'n1', parent_id: 'root', title: 'Step 1', kind: 'step', branch: false } },
-      { type: 'todo_tree/start', data: { turn: 2, node_id: 'n1' } },
-      { type: 'todo_tree/abandon', data: { turn: 3, node_id: 'n1' } },
-      { type: 'todo_tree/start', data: { turn: 4, node_id: 'n1' } },
+      { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
+      { turn: 1, args: { action: 'add_step', id: 's1', parent_id: 'goal', title: 'S1' } },
+      { turn: 2, args: { action: 'complete', id: 's1' } },
+      { turn: 3, args: { action: 'reopen', id: 's1' } },
     ])
-    expect(state!.nodes.find((n) => n.id === 'n1')!.status).toBe('in_progress')
+    expect(state!.nodes.find((n) => n.id === 's1')!.status).toBe('in_progress')
   })
 
-  it('resolve sets summary and resolved flag', () => {
+  it('reopen: dead_end → in_progress', () => {
     const state = foldAll([
-      { type: 'todo_tree/create', data: { turn: 1, root_id: 'root', root_title: 'P', goal_id: 'goal', goal_title: 'G' } },
-      { type: 'todo_tree/resolve', data: { turn: 5, goal_id: 'goal', summary: 'OOM — increased memory limit' } },
+      { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
+      { turn: 1, args: { action: 'add_step', id: 's1', parent_id: 'goal', title: 'S1' } },
+      { turn: 2, args: { action: 'abandon', id: 's1' } },
+      { turn: 3, args: { action: 'reopen', id: 's1' } },
+    ])
+    expect(state!.nodes.find((n) => n.id === 's1')!.status).toBe('in_progress')
+  })
+
+  it('start accepts ids array (batch)', () => {
+    const state = foldAll([
+      { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
+      { turn: 1, args: { action: 'add_step', id: 's1', parent_id: 'goal', title: 'S1' } },
+      { turn: 1, args: { action: 'add_step', id: 's2', parent_id: 'goal', title: 'S2' } },
+      { turn: 2, args: { action: 'start', ids: ['s1', 's2'] } },
+    ])
+    expect(state!.nodes.find((n) => n.id === 's1')!.status).toBe('in_progress')
+    expect(state!.nodes.find((n) => n.id === 's2')!.status).toBe('in_progress')
+  })
+
+  it('complete accepts ids array (batch)', () => {
+    const state = foldAll([
+      { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
+      { turn: 1, args: { action: 'add_step', id: 's1', parent_id: 'goal', title: 'S1' } },
+      { turn: 1, args: { action: 'add_step', id: 's2', parent_id: 'goal', title: 'S2' } },
+      { turn: 2, args: { action: 'complete', ids: ['s1', 's2'], summary: 'both done' } },
+    ])
+    expect(state!.nodes.find((n) => n.id === 's1')!.status).toBe('done')
+    expect(state!.nodes.find((n) => n.id === 's2')!.status).toBe('done')
+    expect(state!.nodes.find((n) => n.id === 's1')!.summary).toBe('both done')
+  })
+})
+
+// ── Link (causal edges) ──────────────────────────────────────────────────────
+
+describe('link', () => {
+  it('single link adds caused_by edge', () => {
+    const state = foldAll([
+      { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
+      { turn: 1, args: { action: 'add_step', id: 's1', parent_id: 'goal', title: 'S1' } },
+      { turn: 1, args: { action: 'add_step', id: 's2', parent_id: 'goal', title: 'S2' } },
+      { turn: 2, args: { action: 'link', id: 's1', caused_by: 's2' } },
+    ])
+    expect(state!.nodes.find((n) => n.id === 's1')!.caused_by).toEqual(['s2'])
+  })
+
+  it('batch link via links array', () => {
+    const state = foldAll([
+      { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
+      { turn: 1, args: { action: 'add_step', id: 'a', parent_id: 'goal', title: 'A' } },
+      { turn: 1, args: { action: 'add_step', id: 'b', parent_id: 'goal', title: 'B' } },
+      { turn: 1, args: { action: 'add_step', id: 'c', parent_id: 'goal', title: 'C' } },
+      { turn: 2, args: { action: 'link', links: [
+        { id: 'a', caused_by: 'c' },
+        { id: 'b', caused_by: 'c' },
+      ] } },
+    ])
+    expect(state!.nodes.find((n) => n.id === 'a')!.caused_by).toEqual(['c'])
+    expect(state!.nodes.find((n) => n.id === 'b')!.caused_by).toEqual(['c'])
+  })
+
+  it('duplicate link does not duplicate caused_by entry', () => {
+    const state = foldAll([
+      { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
+      { turn: 1, args: { action: 'add_step', id: 'a', parent_id: 'goal', title: 'A' } },
+      { turn: 1, args: { action: 'add_step', id: 'b', parent_id: 'goal', title: 'B' } },
+      { turn: 2, args: { action: 'link', id: 'a', caused_by: 'b' } },
+      { turn: 3, args: { action: 'link', id: 'a', caused_by: 'b' } },
+    ])
+    expect(state!.nodes.find((n) => n.id === 'a')!.caused_by).toEqual(['b'])
+  })
+})
+
+// ── Resolve ─────────────────────────────────────────────────────────────────
+
+describe('resolve', () => {
+  it('sets goal status to resolved and flag', () => {
+    const state = foldAll([
+      { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
+      { turn: 5, args: { action: 'resolve', summary: 'Ceph was full' } },
     ])
     expect(state!.resolved).toBe(true)
     const goal = state!.nodes.find((n) => n.id === 'goal')
     expect(goal!.status).toBe('resolved')
-    expect(goal!.summary).toBe('OOM — increased memory limit')
+    expect(goal!.summary).toBe('Ceph was full')
   })
+})
 
-  it('note adds detail to a node', () => {
-    const state = foldAll([
-      { type: 'todo_tree/create', data: { turn: 1, root_id: 'root', root_title: 'P', goal_id: 'goal', goal_title: 'G' } },
-      { type: 'todo_tree/add', data: { turn: 1, node_id: 'n1', parent_id: 'root', title: 'Step 1', kind: 'step', branch: false } },
-      { type: 'todo_tree/note', data: { turn: 2, node_id: 'n1', detail: 'kubectl logs showed OOMKilled' } },
-    ])
-    expect(state!.nodes.find((n) => n.id === 'n1')!.detail).toBe('kubectl logs showed OOMKilled')
-  })
+// ── Purity ──────────────────────────────────────────────────────────────────
 
-  it('fold is a pure function (does not mutate input)', () => {
+describe('purity', () => {
+  it('does not mutate input state', () => {
     const state1 = foldAll([
-      { type: 'todo_tree/create', data: { turn: 1, root_id: 'root', root_title: 'P', goal_id: 'goal', goal_title: 'G' } },
+      { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
+      { turn: 1, args: { action: 'add_step', id: 's1', parent_id: 'goal', title: 'S1' } },
     ])
     const nodesBefore = state1!.nodes.length
-    const state2 = foldEvent(state1, {
-      type: 'todo_tree/add', data: { turn: 2, node_id: 'n1', parent_id: 'root', title: 'Step', kind: 'step', branch: false },
-    })
-    // Original state unchanged
+    const state2 = foldEvent(state1, ev(2, { action: 'add_step', id: 's2', parent_id: 'goal', title: 'S2' }))
+
     expect(state1!.nodes).toHaveLength(nodesBefore)
-    // New state has the added node
     expect(state2!.nodes).toHaveLength(nodesBefore + 1)
-    // Different references
     expect(state1).not.toBe(state2)
     expect(state1!.nodes).not.toBe(state2!.nodes)
   })
+})
 
-  it('full scenario: create → branch → dead_end → resolve', () => {
+// ── Full scenario ───────────────────────────────────────────────────────────
+
+describe('full scenario', () => {
+  it('create → investigate → dead end → resolve', () => {
     const state = foldAll([
-      { type: 'todo_tree/create', data: { turn: 1, root_id: 'root', root_title: 'Pod crashing', goal_id: 'goal', goal_title: 'Service recovered' } },
-      { type: 'todo_tree/add', data: { turn: 1, node_id: 'A', parent_id: 'root', title: 'Check logs', kind: 'step', branch: false } },
-      { type: 'todo_tree/start', data: { turn: 2, node_id: 'A' } },
-      { type: 'todo_tree/complete', data: { turn: 3, node_id: 'A' } },
-      { type: 'todo_tree/add', data: { turn: 3, node_id: 'B', parent_id: 'A', title: 'Check events', kind: 'step', branch: false } },
-      { type: 'todo_tree/start', data: { turn: 4, node_id: 'B' } },
-      { type: 'todo_tree/complete', data: { turn: 5, node_id: 'B' } },
-      { type: 'todo_tree/add', data: { turn: 5, node_id: 'C', parent_id: 'B', title: 'Edit deployment', kind: 'step', branch: true } },
-      { type: 'todo_tree/start', data: { turn: 5, node_id: 'C' } },
-      { type: 'todo_tree/abandon', data: { turn: 6, node_id: 'C' } },
-      { type: 'todo_tree/add', data: { turn: 6, node_id: 'D', parent_id: 'B', title: 'Check resources', kind: 'step', branch: true } },
-      { type: 'todo_tree/start', data: { turn: 7, node_id: 'D' } },
-      { type: 'todo_tree/complete', data: { turn: 8, node_id: 'D' } },
-      { type: 'todo_tree/add', data: { turn: 8, node_id: 'M', parent_id: 'D', title: 'Confirm OOM', kind: 'milestone', branch: false } },
-      { type: 'todo_tree/complete', data: { turn: 9, node_id: 'M' } },
-      { type: 'todo_tree/resolve', data: { turn: 10, goal_id: 'goal', summary: 'OOM — increased memory limit from 256Mi to 512Mi' } },
+      { turn: 1, args: { action: 'create_tree', goal_title: 'Pod crash' } },
+      { turn: 1, args: { action: 'add_milestone', id: 'm1', parent_id: 'goal', title: 'Find root cause' } },
+      { turn: 1, args: { action: 'add_step', id: 's1', parent_id: 'm1', title: 'Check logs' } },
+      { turn: 2, args: { action: 'start', id: 's1' } },
+      { turn: 3, args: { action: 'complete', id: 's1', summary: 'OOMKilled' } },
+      { turn: 3, args: { action: 'add_step', id: 's2', parent_id: 'm1', title: 'Check events' } },
+      { turn: 4, args: { action: 'start', id: 's2' } },
+      { turn: 4, args: { action: 'abandon', id: 's2' } },
+      { turn: 5, args: { action: 'resolve', summary: 'OOM — increased memory limit' } },
     ])
 
-    expect(state!.nodes).toHaveLength(8)
+    expect(state!.nodes).toHaveLength(4) // goal, m1, s1, s2
     expect(state!.resolved).toBe(true)
 
-    const dead = state!.nodes.find((n) => n.id === 'C')
-    expect(dead!.status).toBe('dead_end')
+    const s1 = state!.nodes.find((n) => n.id === 's1')
+    expect(s1!.status).toBe('done')
+    expect(s1!.summary).toBe('OOMKilled')
+
+    const s2 = state!.nodes.find((n) => n.id === 's2')
+    expect(s2!.status).toBe('dead_end')
 
     const goal = state!.nodes.find((n) => n.id === 'goal')
     expect(goal!.status).toBe('resolved')
-    expect(goal!.summary).toBe('OOM — increased memory limit from 256Mi to 512Mi')
+  })
+
+  it('causal chain: ceph-full → csi-lock → pod-stuck → downstream', () => {
+    const state = foldAll([
+      { turn: 1, args: { action: 'create_tree', goal_title: 'Multi-pod failure' } },
+      { turn: 1, args: { action: 'add_milestone', id: 'm1', parent_id: 'goal', title: 'Storage' } },
+      { turn: 1, args: { action: 'add_milestone', id: 'm2', parent_id: 'goal', title: 'Pods' } },
+      { turn: 1, args: { action: 'add_step', id: 'ceph-full', parent_id: 'm1', title: 'Ceph full' } },
+      { turn: 1, args: { action: 'add_step', id: 'csi-lock', parent_id: 'm1', title: 'CSI lock' } },
+      { turn: 1, args: { action: 'add_step', id: 'pod-stuck', parent_id: 'm2', title: 'Pod ContainerCreating' } },
+      { turn: 1, args: { action: 'add_step', id: 'downstream', parent_id: 'm2', title: 'Downstream 503' } },
+      { turn: 2, args: { action: 'complete', ids: ['ceph-full', 'csi-lock', 'pod-stuck', 'downstream'] } },
+      { turn: 3, args: { action: 'link', links: [
+        { id: 'csi-lock', caused_by: 'ceph-full' },
+        { id: 'pod-stuck', caused_by: 'csi-lock' },
+        { id: 'downstream', caused_by: 'pod-stuck' },
+      ] } },
+      { turn: 4, args: { action: 'resolve', summary: 'Ceph full → CSI lock → pods stuck → downstream 503' } },
+    ])
+
+    expect(state!.nodes.find((n) => n.id === 'csi-lock')!.caused_by).toEqual(['ceph-full'])
+    expect(state!.nodes.find((n) => n.id === 'pod-stuck')!.caused_by).toEqual(['csi-lock'])
+    expect(state!.nodes.find((n) => n.id === 'downstream')!.caused_by).toEqual(['pod-stuck'])
+    expect(state!.resolved).toBe(true)
   })
 })
