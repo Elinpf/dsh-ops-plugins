@@ -124,12 +124,8 @@ function foldEvent(state: TreeState | null, event: any): TreeState | null {
   switch (action) {
     case 'create_tree': {
       nodes.push({
-        id: 'root', title: args.root_title, status: 'goal',
-        parent: null, turns: [turn], summary: null, caused_by: [],
-      })
-      nodes.push({
         id: 'goal', title: args.goal_title, status: 'goal',
-        parent: 'root', turns: [turn], summary: null, caused_by: [],
+        parent: null, turns: [turn], summary: null, caused_by: [],
       })
       return { nodes, resolved: false }
     }
@@ -231,8 +227,8 @@ function buildSummary(tree: TreeState | null): TodoTreeResult['summary'] {
     goal: 0, pending: 0, in_progress: 0, done: 0, dead_end: 0, resolved: 0,
   }
   for (const n of nodes) counts[n.status]++
-  // Incomplete = not done, not dead_end, not resolved, and not the root node.
-  // The root and goal nodes are structural, not "incomplete" steps.
+  // Incomplete = not done, not dead_end, not resolved, and not the goal node.
+  // The goal node is structural, not "incomplete".
   const incomplete = nodes
     .filter((n) => n.parent !== null && n.status !== 'done' && n.status !== 'dead_end' && n.status !== 'resolved')
     .map((n) => ({ id: n.id, title: n.title, status: n.status }))
@@ -246,12 +242,11 @@ function buildSummary(tree: TreeState | null): TodoTreeResult['summary'] {
 
 const TOOL_DESCRIPTION = [
   'Maintain an investigation tree for incident response. ',
-  'Structure: root (problem) → milestone (fixed phase anchor) → step (flexible investigation path). ',
+  'Structure: goal (investigation target) → milestone (fixed phase anchor) → step (flexible investigation path). ',
   'Create the tree at the start, plan milestones for investigation phases, add steps as you investigate, ',
   'complete steps with a summary of findings, abandon steps that are no longer relevant, ',
   'and resolve when the incident is resolved. ',
   'Actions: create_tree, add_milestone, add_step, start, complete, abandon, reopen, resolve, link, view. ',
-  'Use branch=true on add_step when exploring a side path. ',
   'Batch: pass titles+ids arrays to add_step, node_ids array to start/complete/abandon. ',
   'The tree persists for the session and helps you stay oriented.',
 ].join('')
@@ -294,9 +289,9 @@ const STATUS_ORDER: Record<string, number> = {
 
 function sortChildren(nodes: TreeNode[]): TreeNode[] {
   return [...nodes].sort((a, b) => {
-    // goal always last
-    const aIsGoal = a.id === 'goal' || (a.status === 'goal' && a.parent !== null)
-    const bIsGoal = b.id === 'goal' || (b.status === 'goal' && b.parent !== null)
+    // goal node always last (it's the convergence terminal)
+    const aIsGoal = a.id === 'goal'
+    const bIsGoal = b.id === 'goal'
     if (aIsGoal && !bIsGoal) return 1
     if (!aIsGoal && bIsGoal) return -1
     return (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9)
@@ -385,17 +380,18 @@ function renderFull(value: any): string {
     const labelStr = label ? `${label} ` : ''
     const connector = isLast ? '└── ' : '├── '
     const turnStr = node.turns?.length ? ` (turn ${node.turns.join(',')})` : ''
-    lines.push(`${prefix}${connector}${node.id}: ${labelStr}${node.title}${turnStr}`)
-
-    // Summary on separate indented line (from complete/resolve)
-    const indent = prefix + (isLast ? '    ' : '│   ')
+    let line = `${prefix}${connector}${node.id}: ${labelStr}${node.title}${turnStr}`
+    // Inline caused_by
     if (node.caused_by.length > 0) {
-      lines.push(`${indent}← caused_by: ${node.caused_by.join(', ')}`)
+      line += `  ← caused_by: ${node.caused_by.join(', ')}`
     }
+    // Inline summary
     if (node.summary) {
-      lines.push(`${indent}summary: ${node.summary}`)
+      line += `  summary: ${node.summary}`
     }
+    lines.push(line)
 
+    const indent = prefix + (isLast ? '    ' : '│   ')
     const kids = sortChildren(children[node.id] || [])
     for (let i = 0; i < kids.length; i++) {
       renderNode(kids[i], indent, i === kids.length - 1)
@@ -403,45 +399,103 @@ function renderFull(value: any): string {
   }
 
   if (root) renderNode(root, '', true)
+  if (tree.resolved) lines.push('resolved')
 
   return lines.join('\n')
 }
 
 /**
+ * Render a single line of statistics.
+ */
+function renderStats(value: any): string {
+  if (!value || !value.summary) return ''
+  const summary = value.summary
+  const parts: string[] = []
+  parts.push(`${summary.total || 0} nodes`)
+  const c = summary.counts || {}
+  if (c.done) parts.push(`${c.done} done`)
+  if (c.in_progress) parts.push(`${c.in_progress} in_progress`)
+  if (c.pending) parts.push(`${c.pending} pending`)
+  if (c.dead_end) parts.push(`${c.dead_end} dead_end`)
+  if (value.tree?.resolved) parts.push('resolved')
+  return parts.join(' | ')
+}
+
+/**
+ * Render a single node line (inline caused_by + summary).
+ */
+function renderNodeLine(node: TreeNode, marker: string): string {
+  const label = STATUS_LABEL[node.status] || ''
+  const labelStr = label ? `${label} ` : ''
+  let line = `${marker} ${node.id}: ${labelStr}${node.title}`
+  if (node.caused_by.length > 0) {
+    line += `  ← caused_by: ${node.caused_by.join(', ')}`
+  }
+  if (node.summary) {
+    line += `  summary: ${node.summary}`
+  }
+  return line
+}
+
+/**
  * Decide what to render based on the action.
- * - create_tree / add_step / add_milestone / resolve: full compact tree
- *   (agent needs to see new node id and structure)
- * - view: full tree with details
- * - start / complete / abandon / reopen / note: one-line confirmation only
- *   (no tree — saves tokens on high-frequency status changes)
+ * - view: full tree with all details
+ * - create_tree: full compact tree (tree is tiny — just goal node)
+ * - add_step/add_milestone: increment — new node + parent + stats
+ * - start/complete/abandon/reopen: increment — changed node + stats
+ * - link: increment — changed node (with new caused_by) + stats
+ * - resolve: increment — goal node (resolved) + stats
  */
 function renderOutput(args: any, value: any): string {
   const action = args?.action
+
+  // view: always full tree
   if (action === 'view') return renderFull(value)
 
-  // Simple status changes: return a short confirmation with total count
-  if (action === 'start' || action === 'complete' || action === 'abandon'
-      || action === 'reopen') {
-    if (!value || !value.tree) return 'No tree — call create_tree first.'
-    const summary = value.summary
-    const parts: string[] = []
-    const c = summary?.counts || {}
-    parts.push(`${summary?.total || 0} nodes`)
-    if (c.done) parts.push(`${c.done} done`)
-    if (c.in_progress) parts.push(`${c.in_progress} in_progress`)
-    if (c.pending) parts.push(`${c.pending} pending`)
-    if (c.dead_end) parts.push(`${c.dead_end} dead_end`)
-    if (value.tree.resolved) parts.push('resolved')
-    return parts.join(' | ')
+  // create_tree: tree is just 1 node, return it
+  if (action === 'create_tree') {
+    return renderCompact(value, undefined)
   }
 
-  // link: render full tree to show the causal edge
-  if (action === 'link') {
-    return renderFull(value)
+  // Incremental output for all other actions
+  if (!value || !value.tree) return 'No tree — call create_tree first.'
+
+  const tree: TreeState = value.tree
+  const stats = renderStats(value)
+  const lines: string[] = []
+
+  if (action === 'add_step' || action === 'add_milestone') {
+    // Show new node(s) + parent
+    const newIds: string[] = value.new_node ? [value.new_node] : (value.new_nodes || [])
+    for (const nid of newIds) {
+      const node = tree.nodes.find((n) => n.id === nid)
+      if (node) {
+        lines.push(renderNodeLine(node, '+'))
+        if (node.parent) {
+          const parent = tree.nodes.find((n) => n.id === node.parent)
+          if (parent) lines.push(`  parent: ${parent.id}`)
+        }
+      }
+    }
+  } else if (action === 'start' || action === 'complete' || action === 'abandon' || action === 'reopen') {
+    // Show changed node(s)
+    const nodeIds: string[] = Array.isArray(args.node_ids) ? args.node_ids : [args.node_id]
+    for (const nid of nodeIds) {
+      const node = tree.nodes.find((n) => n.id === nid)
+      if (node) lines.push(renderNodeLine(node, '='))
+    }
+  } else if (action === 'link') {
+    // Show changed node with its new caused_by
+    const node = tree.nodes.find((n) => n.id === args.node_id)
+    if (node) lines.push(renderNodeLine(node, '~'))
+  } else if (action === 'resolve') {
+    // Show resolved goal node
+    const goal = tree.nodes.find((n) => n.id === 'goal')
+    if (goal) lines.push(renderNodeLine(goal, '='))
   }
 
-  // create_tree, add_step, add_milestone, resolve: return compact tree
-  return renderCompact(value, value?.new_node)
+  if (stats) lines.push(stats)
+  return lines.join('\n')
 }
 
 // ── Tool implementation ─────────────────────────────────────────────────────
@@ -509,13 +563,11 @@ function apply(ctx: any, _config: Record<string, never>): void {
       ], description: 'The action to perform.' },
 
       // create_tree
-      root_title: { type: 'string', description: 'Title for the root problem (create_tree only).' },
-      goal_title: { type: 'string', description: 'Title for the final goal (create_tree only).' },
+      goal_title: { type: 'string', description: 'Title for the investigation goal (create_tree only).' },
 
       // add_step / add_milestone
-      parent_id: { type: 'string', description: 'Parent node id (add_step/add_milestone only).' },
+      parent_id: { type: 'string', description: 'Parent node id (add_step/add_milestone only). Use "goal" for top-level milestones.' },
       title: { type: 'string', description: 'Node title (add_step/add_milestone only).' },
-      branch: { type: 'boolean', description: 'Branch to a new lane (add_step/add_milestone only, default false).' },
       id: { type: 'string', description: 'Semantic id for the new node (e.g. "ceph-full"). If omitted, auto-generated from title slug (e.g. "Check Ceph" → "check-ceph").' },
       titles: { type: 'array', items: { type: 'string' }, description: 'Array of titles to add multiple siblings at once (batch mode).' },
       ids: { type: 'array', items: { type: 'string' }, description: 'Array of semantic ids, one per title. If omitted, auto-generated from each title.' },
@@ -563,7 +615,6 @@ function apply(ctx: any, _config: Record<string, never>): void {
       }
       switch (args.action as TodoTreeAction) {
         case 'create_tree': {
-          if (!args.root_title) throw new Error('todo_tree: root_title is required for create_tree')
           if (!args.goal_title) throw new Error('todo_tree: goal_title is required for create_tree')
           // Idempotent: if a tree already exists (e.g. session replay),
           // return the existing tree instead of throwing.
@@ -647,9 +698,8 @@ function apply(ctx: any, _config: Record<string, never>): void {
         case 'resolve': {
           if (!currentTree) throw new Error('todo_tree: no tree')
           if (!args.summary) throw new Error('todo_tree: summary is required for resolve')
-          const goal = currentTree.nodes.find((n) => n.status === 'goal' && n.parent !== null && n.id !== 'root')
-            ?? currentTree.nodes.find((n) => n.id === 'goal')
-          if (!goal) throw new Error('todo_tree: no final goal node to resolve')
+          const goal = currentTree.nodes.find((n) => n.id === 'goal')
+          if (!goal) throw new Error('todo_tree: no goal node to resolve')
           if (goal.status === 'resolved') {
             return { tree: currentTree, summary: buildSummary(currentTree) }
           }
@@ -722,38 +772,40 @@ function apply(ctx: any, _config: Record<string, never>): void {
     'Unlike a flat todo list, the tree records the full exploration trail — dead ends stay visible, branches show parallel paths.',
     '',
     '### Actions',
-    '- `create_tree` — Create the tree with a root problem and a final goal. Call this once at the start.',
-    '- `add_milestone` — Add a milestone as a fixed anchor under root or another milestone. Milestones organize investigation phases (e.g. "confirm storage root cause", "fix storage layer").',
+    '- `create_tree` — Create the tree with a goal (investigation target). Call this once at the start.',
+    '- `add_milestone` — Add a milestone as a fixed anchor under goal. Milestones organize investigation phases (e.g. "confirm storage root cause", "fix storage layer").',
     '- `add_step` — Add a step under a milestone (or another step). Steps are flexible investigation paths. Optional `id` for semantic id; if omitted, auto-generated from title. Batch: pass titles+ids arrays.',
     '- `start` — Mark a step as in_progress. Accepts node_ids array for batch.',
     '- `complete` — Mark a step as done (can skip start). Optional `summary` to record what was found/fixed. `done` means this step\'s investigation is complete, NOT that the conclusion is final. Accepts node_ids array for batch.',
     '- `abandon` — Mark a step as no longer needed. This includes dead ends (didn\'t work) AND changed circumstances (situation shifted, this check is no longer relevant). The step stays on the tree for the record. Accepts node_ids array for batch.',
     '- `reopen` — Reactivate a `done` or `dead_end` node back to in_progress. Use when a completed step\'s conclusion turns out to be wrong or incomplete and needs re-investigation.',
-    '- `resolve` — Mark the final goal as resolved. Requires a `summary`.',
+    '- `resolve` — Mark the goal as resolved. Requires a `summary`.',
     '- `link` — Connect a causal edge: `node_id` is caused by `caused_by`. Use when one symptom\'s root cause is another node (e.g. cred-broker is caused_by postgres). The tree keeps its parent structure; link adds a causal edge on top.',
     '- `view` — Retrieve the full tree with summaries and causal edges. Optional `status_filter` to show only one status.',
     '',
     '### Tree structure',
-    'root (problem) → milestone (fixed phase anchor) → step (flexible investigation path).',
+    'goal (investigation target) → milestone (fixed phase anchor) → step (flexible investigation path).',
     'Milestones are planned upfront and stay relatively stable.',
     'Steps are created and completed as you investigate; abandon steps that are no longer relevant.',
     'When you find something new, add_step — do not accumulate findings in a single node.',
     '',
     '### Output format',
-    'Each call returns a compact tree: id + status + title, one line per node.',
-    'Status: pending, in_progress, done, dead_end, resolved.',
-    'New nodes from add_step/add_milestone are marked with *.',
-    'Use `view` to see full details (summaries, turns).',
+    '- `create_tree`: shows the new tree.',
+    '- `add_step`/`add_milestone`: shows the new node + parent + stats line.',
+    '- `start`/`complete`/`abandon`/`reopen`: shows the changed node + stats line.',
+    '- `link`: shows the changed node with its caused_by + stats line.',
+    '- `resolve`: shows the resolved goal + stats line.',
+    '- `view`: shows the full tree with all details.',
+    'Use `view` when you need to see the full tree.',
     '',
     '### Discipline',
     '- **Every 5 steps of investigation, at least 1 todo_tree update.**',
     '- **When you find something**: add_step to structure it, then complete with a summary.',
-    '- **Unexpected branches**: when an investigation leads somewhere unplanned, immediately `add_step` with `branch=true`.',
     '- **Dead ends and changed plans**: `abandon` them — the full exploration trail is the record.',
     '- **Don\'t forget**: if you lose track of the tree, call `view`.',
     '',
     '### Lifecycle',
-    '- At the start: `create_tree` with the problem and the goal.',
+    '- At the start: `create_tree` with the goal.',
     '- Plan phases: `add_milestone` for each major investigation phase.',
     '- Investigate: `add_step` under the relevant milestone, then `complete` with a summary of findings.',
     '- When a path doesn\'t work: `abandon` it.',

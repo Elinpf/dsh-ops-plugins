@@ -25,13 +25,13 @@ export type NodeStatus = 'goal' | 'pending' | 'in_progress' | 'done' | 'dead_end
  * Lane and depth are NOT stored here — they are derived client-side.
  */
 export interface TreeNode {
-  /** Auto-generated unique id (e.g. 'root', 'n1', 'n2'). */
+  /** Unique id. The root node has id 'goal'. */
   id: string
   /** One-line description of this node. */
   title: string
   /** Current status per the 05 state machine. */
   status: NodeStatus
-  /** Parent node id; `null` for the root node. */
+  /** Parent node id; `null` for the goal node (tree root). */
   parent: string | null
   /** Turns that operated on this node. */
   turns: number[]
