@@ -10,7 +10,6 @@
 import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
 
 // ── Types (import type so they erase at runtime) ─────────────────────────────
 
@@ -705,61 +704,59 @@ function apply(ctx: any, _config: Record<string, never>): void {
     '- When resolved: `resolve` with a summary.',
   ].join('\n')
 
-  const systemPrompt = ctx.get('systemPrompt')
-  if (systemPrompt !== undefined) {
-    systemPrompt.section({
-      name: 'tool:todo_tree',
+  // Register methodology and reminder through ops-prompts if available,
+  // otherwise fall back to direct systemPrompt.section registration.
+  const opsPrompts = ctx.get('opsPrompts') as any | undefined
+
+  if (opsPrompts !== undefined) {
+    // Register tool usage prompt as a methodology section
+    opsPrompts.registerMethodology({
+      name: 'todo_tree:usage',
       order: 240,
       text: staticText,
     })
+
+    // Register the idle reminder rule
+    opsPrompts.registerReminder({
+      name: 'todo_tree:idle',
+      check: (agent: any) => {
+        const events = agent?.session?.events
+        if (!events || events.length === 0) return null
+
+        let currentStep = 0
+        let lastTodoTreeStep = 0
+        let hasTree = false
+
+        for (const ev of events) {
+          if (ev.type === 'step/start') {
+            currentStep = (ev.data?.turn ?? 0) * 1000 + (ev.data?.step ?? 0)
+          }
+          if (ev.type === 'tool/call' && ev.data?.name === 'todo_tree') {
+            lastTodoTreeStep = currentStep
+          }
+          if (ev.type === 'todo_tree/create') {
+            hasTree = true
+          }
+        }
+
+        if (!hasTree || lastTodoTreeStep === 0) return null
+        const gap = currentStep - lastTodoTreeStep
+        if (gap < 5) return null
+
+        return `[REMINDER] You haven't updated todo_tree in ${gap} steps. Call \`todo_tree view\` to check current state, then \`add_step\` or \`complete\` to record your progress.`
+      },
+    })
+  } else {
+    // Fallback: register directly if ops-prompts is not loaded
+    const systemPrompt = ctx.get('systemPrompt')
+    if (systemPrompt !== undefined) {
+      systemPrompt.section({
+        name: 'tool:todo_tree',
+        order: 240,
+        text: staticText,
+      })
+    }
   }
-
-  // Inject reminder directly into the conversation flow via agent/pre-step.
-  // systemPrompt.section is only re-read at prompt assembly (background noise);
-  // agent/pre-step inserts a visible user-role message that the model sees each step.
-  // This is the mechanism used by time-context, repeat-tool-reminder, and plan-mode.
-  ctx.on('agent/pre-step', async (payload: any, next: any) => {
-    const decision = await next()
-    if (decision.kind === 'reject') return decision
-
-    const agent = payload?.agent
-    if (!agent) return decision
-    const events = agent.session?.events
-    if (!events || events.length === 0) return decision
-
-    // Count steps since last todo_tree call using step/start events.
-    let currentStep = 0
-    let lastTodoTreeStep = 0
-    let hasTree = false
-
-    for (const ev of events) {
-      if (ev.type === 'step/start') {
-        currentStep = (ev.data?.turn ?? 0) * 1000 + (ev.data?.step ?? 0)
-      }
-      if (ev.type === 'tool/call' && ev.data?.name === 'todo_tree') {
-        lastTodoTreeStep = currentStep
-      }
-      if (ev.type === 'todo_tree/create') {
-        hasTree = true
-      }
-    }
-
-    if (!hasTree || lastTodoTreeStep === 0) return decision
-    const gap = currentStep - lastTodoTreeStep
-    if (gap < 5) return decision
-
-    const text = `[REMINDER] You haven't updated todo_tree in ${gap} steps. Call \`todo_tree view\` to check current state, then \`add_step\` or \`complete\` to record your progress.`
-    return {
-      kind: 'enter',
-      messages: [
-        ...decision.messages,
-        createUserMessage({
-          content: [{ type: 'text', text }],
-          source: { kind: 'plugin', plugin: name, form: 'notice', summary: `todo_tree idle ${gap} steps` },
-        }),
-      ],
-    }
-  }, { prepend: true })
 }
 
 export { Config, apply, inject, name }
