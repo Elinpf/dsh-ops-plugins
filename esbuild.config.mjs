@@ -28,6 +28,8 @@ const EXTERNALS = [
   '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-ui-primitives',
+  '@deepseek-ai/dsh-client-ui-tool',
+  '@deepseek-ai/dsh-client-ui-tool/client',
   '@deepseek-ai/dsh-client-runtime/client',
 ]
 
