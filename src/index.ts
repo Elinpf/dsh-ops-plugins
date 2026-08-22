@@ -36,14 +36,14 @@ export const Config: z<Config> = z.object({
 // ── Registration types ───────────────────────────────────────────────────────
 
 /** A registered methodology prompt section. */
-interface MethodologyEntry {
+export interface MethodologyEntry {
   name: string
   order: number
   text: string
 }
 
 /** A registered dynamic reminder rule. */
-interface ReminderEntry {
+export interface ReminderEntry {
   name: string
   check: (agent: any) => string | null
 }

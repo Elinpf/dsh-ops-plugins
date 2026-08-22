@@ -4,8 +4,10 @@
   "description": "Ops prompt orchestration center — methodology prompts and dynamic reminders for ops preset.",
   "type": "module",
   "main": "lib/index.js",
+  "types": "lib/index.d.ts",
   "files": [
     "lib/index.js",
+    "lib/index.d.ts",
     "cordis.patch.yml"
   ],
   "dsh": {
