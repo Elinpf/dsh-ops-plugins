@@ -26,12 +26,12 @@ declare module '@deepseek-ai/cordis' {
       register(def: {
         key: string
         schema: unknown
-        init: () => TreeState | null
-        apply: (state: TreeState | null, event: FoldEvent) => TreeState | null
-        view: (state: TreeState | null) => TreeState | null
+        init: () => ForestState | null
+        apply: (state: ForestState | null, event: FoldEvent) => ForestState | null
+        view: (state: ForestState | null) => ForestState | null
         stateVersion: number
       }): () => void
-      snapshot(session: { id: string }): { values: { trace?: TreeState | null } }
+      snapshot(session: { id: string }): { values: { trace?: ForestState | null } }
     }
   }
 }
@@ -40,11 +40,21 @@ import type {
   NodeStatus,
   TreeState,
   TreeNode,
+  ForestState,
   TraceAction,
   TraceResult,
   TraceArgs,
   LinkPair,
 } from './types.ts'
+
+/** The active tree is the last unresolved one, or the last tree if all resolved. */
+function activeTree(forest: ForestState | null): TreeState | null {
+  if (!forest || forest.trees.length === 0) return null
+  for (let i = forest.trees.length - 1; i >= 0; i--) {
+    if (!forest.trees[i].resolved) return forest.trees[i]
+  }
+  return forest.trees[forest.trees.length - 1]
+}
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -140,7 +150,7 @@ interface FoldEvent {
   }
 }
 
-function foldEvent(state: TreeState | null, event: FoldEvent): TreeState | null {
+function foldEvent(state: ForestState | null, event: FoldEvent): ForestState | null {
   // Only fold tool/call events for the trace tool
   if (event.type !== 'tool/call') return state
   const data = event.data
@@ -156,77 +166,87 @@ function foldEvent(state: TreeState | null, event: FoldEvent): TreeState | null 
 
   const turn = data.turn ?? data.step ?? 0
   const action = args.action
-  const nodes = state?.nodes ? [...state.nodes] : []
+  const trees = state?.trees ? [...state.trees] : []
 
   switch (action) {
     case 'create_tree': {
-      // Idempotent: if a goal already exists (session replay), keep the original.
-      if (nodes.some((n) => n.id === 'goal')) return state
-      nodes.push({
-        id: 'goal', title: args.goal_title!, status: 'goal',
-        parent: null, turns: [turn], summary: null, caused_by: [],
-      })
-      return { nodes, resolved: false }
+      // Append a new tree to the forest
+      const newTree: TreeState = {
+        nodes: [{
+          id: 'goal', title: args.goal_title!, status: 'goal',
+          parent: null, turns: [turn], summary: null, caused_by: [],
+        }],
+        resolved: false,
+      }
+      return { trees: [...trees, newTree] }
     }
 
     case 'add_step':
     case 'add_milestone': {
+      const forest = state ?? { trees: [] }
+      const tree = activeTree(forest)
+      if (!tree) return state
       const kind = action === 'add_milestone' ? 'milestone' : 'step'
-      const existingIds = new Set(nodes.map((n) => n.id))
-      const nodeId = args.id!
-      existingIds.add(nodeId)
-      let tree = state ? { ...state, nodes } : { nodes, resolved: false }
-      tree = {
+      const updatedTree: TreeState = {
         ...tree,
         nodes: [...tree.nodes, {
-          id: nodeId, title: args.title!,
+          id: args.id!, title: args.title!,
           status: kind === 'milestone' ? 'goal' : 'pending',
           parent: args.parent_id!, turns: [turn], summary: null, caused_by: [],
         }],
       }
-      return tree
+      return replaceTree(forest, tree, updatedTree)
     }
 
     case 'start':
     case 'complete':
     case 'abandon':
     case 'reopen': {
+      const forest = state ?? { trees: [] }
+      const tree = activeTree(forest)
+      if (!tree) return state
       const newStatus: NodeStatus =
         action === 'start' || action === 'reopen' ? 'in_progress'
         : action === 'complete' ? 'done'
         : 'dead_end'
       const nodeIds: string[] = Array.isArray(args.ids) ? args.ids : (args.id ? [args.id] : [])
-      let tree: TreeState | null = state ? { ...state, nodes } : null
+      let updatedTree = tree
       for (const nid of nodeIds) {
-        tree = updateNode(tree, nid, turn, (n) => {
+        updatedTree = updateNodeInTree(updatedTree, nid, turn, (n) => {
           n.status = newStatus
           if (action === 'complete' && args.summary) n.summary = args.summary
-        })
+        }) ?? updatedTree
       }
-      return tree
+      return replaceTree(forest, tree, updatedTree)
     }
 
     case 'resolve': {
-      const goalId = 'goal'
-      const updated = updateNode(state ? { ...state, nodes } : null, goalId, turn, (n) => {
+      const forest = state ?? { trees: [] }
+      const tree = activeTree(forest)
+      if (!tree) return state
+      const updatedTree = updateNodeInTree(tree, 'goal', turn, (n) => {
         n.status = 'resolved'
         n.summary = args.summary!
       })
-      return updated ? { ...updated, resolved: true } : state
+      if (!updatedTree) return state
+      const resolvedTree: TreeState = { ...updatedTree, resolved: true }
+      return replaceTree(forest, tree, resolvedTree)
     }
 
     case 'link': {
-      // Support batch: links array [{id, caused_by}], or single {id, caused_by}
+      const forest = state ?? { trees: [] }
+      const tree = activeTree(forest)
+      if (!tree) return state
       const links: LinkPair[] = Array.isArray(args.links) ? args.links : [{id: args.id!, caused_by: args.caused_by!}]
-      let tree = state ? { ...state, nodes } : null
+      let updatedTree = tree
       for (const link of links) {
-        tree = updateNode(tree, link.id, turn, (n) => {
+        updatedTree = updateNodeInTree(updatedTree, link.id, turn, (n) => {
           if (!n.caused_by.includes(link.caused_by)) {
             n.caused_by = [...n.caused_by, link.caused_by]
           }
-        })
+        }) ?? updatedTree
       }
-      return tree
+      return replaceTree(forest, tree, updatedTree)
     }
 
     default:
@@ -234,23 +254,27 @@ function foldEvent(state: TreeState | null, event: FoldEvent): TreeState | null 
   }
 }
 
+/** Replace one tree in the forest (by reference identity). */
+function replaceTree(forest: ForestState, old: TreeState, updated: TreeState): ForestState {
+  return { trees: forest.trees.map(t => t === old ? updated : t) }
+}
+
 /** Pure helper: copy nodes, find target, create new copy without mutating the original. */
-function updateNode(
-  state: TreeState | null,
+function updateNodeInTree(
+  tree: TreeState,
   nodeId: string,
   turn: number,
   mutate: (n: TreeNode) => void,
 ): TreeState | null {
-  if (!state) return state
   let found = false
-  const nodes = state.nodes.map((n) => {
+  const nodes = tree.nodes.map((n) => {
     if (n.id !== nodeId) return n
     found = true
     const copy: TreeNode = { ...n, turns: n.turns.includes(turn) ? n.turns : [...n.turns, turn] }
     mutate(copy)
     return copy
   })
-  return found ? { ...state, nodes } : state
+  return found ? { ...tree, nodes } : null
 }
 
 // ── Summary builder (06: advisor, not gatekeeper) ───────────────────────────
@@ -301,7 +325,11 @@ const treeStateSchema = zod.object({
   resolved: zod.boolean(),
 })
 
-const todoTreeProjectionSchema = zod.union([treeStateSchema, zod.null()])
+const forestStateSchema = zod.object({
+  trees: zod.array(treeStateSchema),
+})
+
+const traceProjectionSchema = zod.union([forestStateSchema, zod.null()])
 
 // ── Tree renderers (model-visible output) ────────────────────────────────────
 
@@ -550,20 +578,20 @@ function renderOutput(args: TraceArgs, value: TraceResult): string {
  * events to the session log. On session start / replay, the projection's
  * snapshot seeds this map.
  */
-const sessionTrees = new Map<string, TreeState>()
+const sessionForests = new Map<string, ForestState>()
 
-function getSessionTree(sessionId: string): TreeState | null {
-  return sessionTrees.get(sessionId) ?? null
+function getSessionForest(sessionId: string): ForestState | null {
+  return sessionForests.get(sessionId) ?? null
 }
 
-function setSessionTree(sessionId: string, tree: TreeState | null): void {
-  if (tree === null) sessionTrees.delete(sessionId)
-  else sessionTrees.set(sessionId, tree)
+function setSessionForest(sessionId: string, forest: ForestState | null): void {
+  if (forest === null || forest.trees.length === 0) sessionForests.delete(sessionId)
+  else sessionForests.set(sessionId, forest)
 }
 
 /** Minimal projection-registry interface used by this plugin. */
 interface ProjectionRegistryLike {
-  snapshot(session: { id: string }): { values: { trace?: TreeState | null } }
+  snapshot(session: { id: string }): { values: { trace?: ForestState | null } }
 }
 
 function apply(ctx: Context, _config: Record<string, never>): void {
@@ -576,11 +604,11 @@ function apply(ctx: Context, _config: Record<string, never>): void {
     projectionRegistry = pctx.sessionProjections ?? null
     pctx.sessionProjections!.register({
       key: 'trace',
-      schema: todoTreeProjectionSchema,
+      schema: traceProjectionSchema,
       init: () => null,
       apply: foldEvent,
-      view: (s: TreeState | null) => s,
-      stateVersion: 1,
+      view: (s: ForestState | null) => s,
+      stateVersion: 2,
     })
   })
 
@@ -591,7 +619,7 @@ function apply(ctx: Context, _config: Record<string, never>): void {
   // stale entries in the map are harmless — they're overwritten on first
   // call and never cause cross-session contamination because the key is
   // the sessionId.
-  ctx.effect(() => () => { sessionTrees.clear() })
+  ctx.effect(() => () => { sessionForests.clear() })
 
   // ── Register model tool (06) ──────────────────────────────────────────────
   ctx.tools.register(defineTool({
@@ -713,51 +741,54 @@ function apply(ctx: Context, _config: Record<string, never>): void {
       const turn = currentTurn(exec)
       const sessionId = agent.session?.id ?? agent.id ?? 'default'
 
-      // Read current tree: prefer the in-process state (handles parallel calls
+      // Read current forest: prefer the in-process state (handles parallel calls
       // within the same turn); fall back to the projection snapshot (handles
       // session replay / first call after restart).
-      let currentTree: TreeState | null = getSessionTree(sessionId)
-      if (currentTree === null && projectionRegistry) {
+      let forest: ForestState = getSessionForest(sessionId) ?? { trees: [] }
+      if (forest.trees.length === 0 && projectionRegistry) {
         try {
           const snap = projectionRegistry.snapshot(agent.session)
-          currentTree = snap?.values?.trace ?? null
-          if (currentTree) setSessionTree(sessionId, currentTree)
+          const projForest = snap?.values?.trace ?? null
+          if (projForest && projForest.trees.length > 0) {
+            forest = projForest
+            setSessionForest(sessionId, forest)
+          }
         } catch {
-          currentTree = null
+          // projection not available yet
         }
       }
+
+      // The active tree is the last unresolved one, or the last tree if all resolved
+      let tree = activeTree(forest)
+
       switch (args.action as TraceAction) {
         case 'create_tree': {
           if (!args.goal_title) throw new Error('trace: goal_title is required for create_tree')
-          // Idempotent: if a tree already exists (e.g. session replay),
-          // return the existing tree instead of throwing.
-          if (currentTree) {
-            return { tree: currentTree!, summary: buildSummary(currentTree!) }
-          }
           const ev = { type: 'tool/call', data: { name: 'trace', turn, arguments: JSON.stringify(args) } }
-          const updated = foldEvent(currentTree, ev)
-          setSessionTree(sessionId, updated)
-          const result: TraceResult = { tree: updated!, summary: buildSummary(updated!) }
+          const updated = foldEvent(forest, ev)
+          setSessionForest(sessionId, updated)
+          const newTree = updated!.trees[updated!.trees.length - 1]
+          const result: TraceResult = { tree: newTree, summary: buildSummary(newTree) }
           return result
         }
 
         case 'add_step':
         case 'add_milestone': {
-          if (!currentTree) throw new Error('trace: no tree — call create_tree first')
+          if (!tree) throw new Error('trace: no tree — call create_tree first')
           if (!args.parent_id) throw new Error('trace: parent_id is required')
           if (!args.title) throw new Error('trace: title is required')
           if (!args.id) throw new Error('trace: id is required')
-          const parent = currentTree.nodes.find((n) => n.id === args.parent_id)
+          const parent = tree.nodes.find((n) => n.id === args.parent_id)
           if (!parent) throw new Error(`trace: parent node "${args.parent_id}" not found`)
-          if (currentTree.nodes.some((n) => n.id === args.id)) {
+          if (tree.nodes.some((n) => n.id === args.id)) {
             throw new Error(`trace: node id "${args.id}" already exists`)
           }
 
           const ev = { type: 'tool/call', data: { name: 'trace', turn, arguments: JSON.stringify(args) } }
-          const updated = foldEvent(currentTree, ev)
-          setSessionTree(sessionId, updated)
-
-          const result: TraceResult = { tree: updated!, summary: buildSummary(updated!) }
+          const updated = foldEvent(forest, ev)
+          setSessionForest(sessionId, updated)
+          const updatedTree = activeTree(updated!)!
+          const result: TraceResult = { tree: updatedTree, summary: buildSummary(updatedTree) }
           result.new_node = args.id
           return result
         }
@@ -766,7 +797,7 @@ function apply(ctx: Context, _config: Record<string, never>): void {
         case 'complete':
         case 'abandon':
         case 'reopen': {
-          if (!currentTree) throw new Error('trace: no tree')
+          if (!tree) throw new Error('trace: no tree')
           const nodeIds: string[] = Array.isArray(args.ids) ? args.ids : (args.id ? [args.id] : [])
           if (nodeIds.length === 0) throw new Error('trace: id (or ids array) is required')
           const targetStatus: NodeStatus =
@@ -776,7 +807,7 @@ function apply(ctx: Context, _config: Record<string, never>): void {
 
           // Validate transitions — idempotent if already at target status
           for (const nid of nodeIds) {
-            const node = currentTree.nodes.find((n) => n.id === nid)
+            const node = tree.nodes.find((n) => n.id === nid)
             if (!node) throw new Error(`trace: node "${nid}" not found`)
             if (node.status === targetStatus) continue // idempotent — already at target
             if (!canTransition(node.status, targetStatus)) {
@@ -785,32 +816,34 @@ function apply(ctx: Context, _config: Record<string, never>): void {
           }
 
           const ev = { type: 'tool/call', data: { name: 'trace', turn, arguments: JSON.stringify(args) } }
-          const updated = foldEvent(currentTree, ev)
-          setSessionTree(sessionId, updated)
-          const result: TraceResult = { tree: updated!, summary: buildSummary(updated!) }
+          const updated = foldEvent(forest, ev)
+          setSessionForest(sessionId, updated)
+          const updatedTree = activeTree(updated!)!
+          const result: TraceResult = { tree: updatedTree, summary: buildSummary(updatedTree) }
           return result
         }
 
         case 'resolve': {
-          if (!currentTree) throw new Error('trace: no tree')
+          if (!tree) throw new Error('trace: no tree')
           if (!args.summary) throw new Error('trace: summary is required for resolve')
-          const goal = currentTree.nodes.find((n) => n.id === 'goal')
+          const goal = tree.nodes.find((n) => n.id === 'goal')
           if (!goal) throw new Error('trace: no goal node to resolve')
           if (goal.status === 'resolved') {
-            return { tree: currentTree!, summary: buildSummary(currentTree!) }
+            return { tree: tree!, summary: buildSummary(tree!) }
           }
           if (!canTransition(goal.status, 'resolved')) {
             throw new Error(`trace: goal is "${goal.status}", cannot resolve`)
           }
           const ev = { type: 'tool/call', data: { name: 'trace', turn, arguments: JSON.stringify(args) } }
-          const updated = foldEvent(currentTree, ev)
-          setSessionTree(sessionId, updated)
-          const result: TraceResult = { tree: updated!, summary: buildSummary(updated!) }
+          const updated = foldEvent(forest, ev)
+          setSessionForest(sessionId, updated)
+          const updatedTree = updated!.trees[updated!.trees.length - 1]
+          const result: TraceResult = { tree: updatedTree, summary: buildSummary(updatedTree) }
           return result
         }
 
         case 'link': {
-          if (!currentTree) throw new Error('trace: no tree')
+          if (!tree) throw new Error('trace: no tree')
           const links: LinkPair[] = Array.isArray(args.links) ? args.links : [{id: args.id!, caused_by: args.caused_by!}]
           if (links.length === 0) throw new Error('trace: at least one link is required')
 
@@ -818,39 +851,41 @@ function apply(ctx: Context, _config: Record<string, never>): void {
           for (const link of links) {
             if (!link.id) throw new Error('trace: id is required for link')
             if (!link.caused_by) throw new Error('trace: caused_by is required for link')
-            const node = currentTree.nodes.find((n) => n.id === link.id)
+            const node = tree.nodes.find((n) => n.id === link.id)
             if (!node) throw new Error(`trace: node "${link.id}" not found`)
-            const target = currentTree.nodes.find((n) => n.id === link.caused_by)
+            const target = tree.nodes.find((n) => n.id === link.caused_by)
             if (!target) throw new Error(`trace: node "${link.caused_by}" not found`)
           }
 
           // Check if all links already exist (idempotent)
           const allExist = links.every(link => {
-            const node = currentTree!.nodes.find((n) => n.id === link.id)
+            const node = tree!.nodes.find((n) => n.id === link.id)
             return node && node.caused_by.includes(link.caused_by)
           })
           if (allExist) {
-            return { tree: currentTree!, summary: buildSummary(currentTree!) }
+            return { tree: tree!, summary: buildSummary(tree!) }
           }
 
           const ev = { type: 'tool/call', data: { name: 'trace', turn, arguments: JSON.stringify(args) } }
-          const updated = foldEvent(currentTree, ev)
-          setSessionTree(sessionId, updated)
-          const result: TraceResult = { tree: updated!, summary: buildSummary(updated!) }
+          const updated = foldEvent(forest, ev)
+          setSessionForest(sessionId, updated)
+          const updatedTree = activeTree(updated!)!
+          const result: TraceResult = { tree: updatedTree, summary: buildSummary(updatedTree) }
           return result
         }
 
         case 'view': {
-          if (args.status_filter && currentTree) {
+          if (!tree) throw new Error('trace: no tree — call create_tree first')
+          if (args.status_filter) {
             const filtered: TreeState = {
-              resolved: currentTree.resolved,
-              nodes: currentTree.nodes.filter((n) =>
+              resolved: tree.resolved,
+              nodes: tree.nodes.filter((n) =>
                 n.parent === null || n.id === 'goal' || n.status === args.status_filter
               ),
             }
-            return { tree: filtered, summary: buildSummary(currentTree!) }
+            return { tree: filtered, summary: buildSummary(tree!) }
           }
-          return { tree: currentTree!, summary: buildSummary(currentTree!) }
+          return { tree: tree!, summary: buildSummary(tree!) }
         }
 
         default:
@@ -880,7 +915,7 @@ function apply(ctx: Context, _config: Record<string, never>): void {
     'Unlike a flat todo list, the tree records the full exploration trail — dead ends stay visible, branches show parallel paths.',
     '',
     '### Actions',
-    '- `create_tree` — Create the tree with a goal (investigation target). Call this once at the start. Requires `goal_title`.',
+    '- `create_tree` — Create a new investigation tree with a goal. Call this at the start, or after resolving a previous tree to start a new investigation. Requires `goal_title`.',
     '- `add_milestone` — Add a milestone as a fixed anchor under goal. Requires `id` (semantic id), `parent_id`, `title`.',
     '- `add_step` — Add a step under a milestone (or another step). Requires `id` (semantic id), `parent_id`, `title`.',
     '- `start` — Mark nodes as in_progress. Pass `id` (single) or `ids` array (batch).',
@@ -917,6 +952,7 @@ function apply(ctx: Context, _config: Record<string, never>): void {
     '- Investigate: `add_step` under the relevant milestone, then `complete` with a summary of findings.',
     '- When a path doesn\'t work: `abandon` it.',
     '- When resolved: `resolve` with a summary.',
+    '- After resolve, you can `create_tree` again for a new investigation — the previous tree is preserved as history.',
   ].join('\n')
 
   // Register methodology and reminder through ops-prompts if available,

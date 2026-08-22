@@ -18,7 +18,7 @@ import {
   IconChevronDownOutline14,
   IconChevronUpOutline14,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { TreeState, TreeNode, NodeStatus } from './types.ts'
+import type { ForestState, TreeState, TreeNode, NodeStatus } from './types.ts'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -29,8 +29,14 @@ const inject = ['slots']
 
 const CSS = `
 /* Hide trace panel when the trajectory view tab is active (not the chat tab) */
-[data-phase]:has([role="tab"][aria-selected="true"]:not(:first-of-type)) .ops-trace-root {
+[data-phase]:has([role="tab"][aria-selected="true"]:not(:first-of-type)) .ops-trace-forest {
   display: none;
+}
+
+.ops-trace-forest {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .ops-trace-root {
@@ -401,29 +407,22 @@ function TreeNodeItem({ node, depth, nodes }: { node: TreeNode, depth: number, n
   )
 }
 
-// ── Dock component (mirrors TodoPanel structure exactly) ────────────────────
+// ── Single tree panel ───────────────────────────────────────────────────────
 
-function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown | undefined }): any {
-  let tree: TreeState | null = null
-  try {
-    if (useProjection) {
-      const val = useProjection('trace')
-      tree = (val as TreeState | null | undefined) ?? null
-    }
-  } catch {
-    tree = null
-  }
-
-  const [collapsed, setCollapsed] = useState(true)
-  if (!tree || !tree.nodes || tree.nodes.length === 0) return null
+function TreePanel({ tree, index, total }: { tree: TreeState, index: number, total: number }): any {
+  const isResolved = tree.resolved
+  // Resolved trees start collapsed; active tree starts expanded
+  const [collapsed, setCollapsed] = useState(isResolved)
+  if (!tree.nodes || tree.nodes.length === 0) return null
 
   const cache: Record<string, number> = {}
   const sorted = treeOrder(tree.nodes)
+  const title = total > 1 ? `Trace ${index + 1}` : 'Trace'
 
   return h('section', {
     className: 'ops-trace-root',
     'data-testid': 'ops-trace-panel',
-    'aria-label': 'Trace',
+    'aria-label': title,
   },
     h('div', { className: 'ops-trace-body' },
       h('button', {
@@ -433,7 +432,7 @@ function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown
         onClick: () => { setCollapsed(v => !v) },
       },
         h('span', { className: 'ops-trace-lead', 'aria-hidden': 'true' }, h(IconChecklistOutline14)),
-        h('span', { className: 'ops-trace-title' }, 'Trace'),
+        h('span', { className: 'ops-trace-title' }, title),
         h('span', { className: 'ops-trace-progress' }, progressLabel(tree)),
         h('span', { className: 'ops-trace-chevron', 'aria-hidden': 'true' },
           collapsed ? h(IconChevronUpOutline14) : h(IconChevronDownOutline14),
@@ -441,10 +440,32 @@ function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown
       ),
       !collapsed && h('ul', { className: 'ops-trace-list' },
         sorted.map(node => {
-          const depth = depthOf(tree!.nodes, node.id, cache)
-          return h(TreeNodeItem, { key: node.id, node, depth, nodes: tree!.nodes })
+          const depth = depthOf(tree.nodes, node.id, cache)
+          return h(TreeNodeItem, { key: node.id, node, depth, nodes: tree.nodes })
         }),
       ),
+    ),
+  )
+}
+
+// ── Dock component ───────────────────────────────────────────────────────────
+
+function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown | undefined }): any {
+  let forest: ForestState | null = null
+  try {
+    if (useProjection) {
+      const val = useProjection('trace')
+      forest = (val as ForestState | null | undefined) ?? null
+    }
+  } catch {
+    forest = null
+  }
+
+  if (!forest || !forest.trees || forest.trees.length === 0) return null
+
+  return h('div', { className: 'ops-trace-forest' },
+    forest.trees.map((tree, i) =>
+      h(TreePanel, { key: i, tree, index: i, total: forest!.trees.length })
     ),
   )
 }

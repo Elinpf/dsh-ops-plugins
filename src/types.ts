@@ -25,7 +25,7 @@ export type NodeStatus = 'goal' | 'pending' | 'in_progress' | 'done' | 'dead_end
  * Lane and depth are NOT stored here — they are derived client-side.
  */
 export interface TreeNode {
-  /** Unique id. The root node has id 'goal'. */
+  /** Unique id within the tree. The root node has id 'goal'. */
   id: string
   /** One-line description of this node. */
   title: string
@@ -42,13 +42,33 @@ export interface TreeNode {
 }
 
 /**
- * The full tree state carried in a projection snapshot.
+ * One investigation tree (goal + its milestones and steps).
  */
 export interface TreeState {
-  /** All nodes in the tree. */
+  /** All nodes in this tree. */
   nodes: TreeNode[]
-  /** Whether the final goal has been resolved. */
+  /** Whether this tree's goal has been resolved. */
   resolved: boolean
+}
+
+/**
+ * The full session state carried in a projection snapshot.
+ * A forest of independent investigation trees — resolved trees are kept
+ * for reference; the active tree is the latest unresolved one.
+ */
+export interface ForestState {
+  /** All trees in chronological order. */
+  trees: TreeState[]
+}
+
+/**
+ * The active tree is the last unresolved one, or the last tree if all are resolved.
+ */
+export function activeTree(forest: ForestState): TreeState | null {
+  for (let i = forest.trees.length - 1; i >= 0; i--) {
+    if (!forest.trees[i].resolved) return forest.trees[i]
+  }
+  return forest.trees.length > 0 ? forest.trees[forest.trees.length - 1] : null
 }
 
 // ── Session events (incremental, append-only) ────────────────────────────────
@@ -70,11 +90,12 @@ export type TraceAction =
 
 /**
  * Return value of every `trace` call.
+ * `tree` is the active tree that was operated on (or the resolved one).
  */
 export interface TraceResult {
-  /** Current full tree state. */
+  /** The active tree that was operated on. */
   tree: TreeState
-  /** Status summary to help the agent stay oriented. */
+  /** Status summary of the active tree. */
   summary: {
     total: number
     counts: Record<NodeStatus, number>
