@@ -84,6 +84,9 @@ const CSS = `
 }
 
 .ops-trace-switcher {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   flex: none;
   font-size: 13px;
   line-height: 22px;
@@ -98,6 +101,12 @@ const CSS = `
 
 .ops-trace-switcher:hover {
   background: var(--dsw-alias-bg-hover, #e9ecef);
+}
+
+.ops-trace-switcher-arrow {
+  display: grid;
+  place-items: center;
+  color: var(--dsw-alias-label-tertiary, #656d76);
 }
 
 .ops-trace-progress {
@@ -148,6 +157,72 @@ const CSS = `
 .ops-trace-chevron-btn:hover {
   background: var(--dsw-alias-bg-hover, #e9ecef);
   color: var(--dsw-alias-label-primary, #1f2328);
+}
+
+.ops-trace-selector-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ops-trace-selector-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary, #656d76);
+  border-radius: 4px;
+  text-align: left;
+}
+
+.ops-trace-selector-item:hover {
+  background: var(--dsw-alias-bg-hover, #e9ecef);
+}
+
+.ops-trace-selector-item-active {
+  background: var(--dsw-alias-bg-selected, #ddf4ff);
+  color: var(--dsw-alias-label-primary, #1f2328);
+  font-weight: 500;
+}
+
+.ops-trace-selector-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--dsw-alias-label-tertiary, #848d97);
+  background: transparent;
+}
+
+.ops-trace-selector-dot-active {
+  border-color: var(--dsw-alias-state-business-primary, #0969da);
+  background: var(--dsw-alias-state-business-primary, #0969da);
+}
+
+.ops-trace-selector-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ops-trace-selector-tag {
+  flex: none;
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(26,127,55,0.12);
+  color: #1a7f37;
 }
 
 .ops-trace-lead {
@@ -471,6 +546,7 @@ function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown
 
   const [activeIndex, setActiveIndex] = useState(0)
   const [collapsed, setCollapsed] = useState(false)
+  const [selectorOpen, setSelectorOpen] = useState(false)
 
   if (!forest || !forest.trees || forest.trees.length === 0) return null
 
@@ -491,14 +567,19 @@ function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown
       // Header row: icon + [Trace N/M switcher] + progress + chevron
       h('div', { className: 'ops-trace-header' },
         h('span', { className: 'ops-trace-lead', 'aria-hidden': 'true' }, h(IconChecklistOutline14)),
-        // "Trace 1/2" is a switch button (cycles to next tree on click)
+        // "Trace 1/2" — click to toggle the selector list
         hasMultiple
           ? h('button', {
               type: 'button',
               className: 'ops-trace-switcher',
-              onClick: () => { setActiveIndex((idx + 1) % total) },
-              title: `Switch to Trace ${(idx + 1) % total + 1}/${total}`,
-            }, headerTitle)
+              onClick: () => setSelectorOpen(v => !v),
+              'aria-expanded': selectorOpen,
+            },
+              headerTitle,
+              h('span', { className: 'ops-trace-switcher-arrow', 'aria-hidden': 'true' },
+                selectorOpen ? h(IconChevronUpOutline14) : h(IconChevronDownOutline14),
+              ),
+            )
           : h('span', { className: 'ops-trace-title' }, headerTitle),
         h('span', { className: 'ops-trace-progress' }, progressLabel(tree)),
         h('button', {
@@ -511,7 +592,31 @@ function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown
           collapsed ? h(IconChevronUpOutline14) : h(IconChevronDownOutline14),
         ),
       ),
-      // Tree content (same as todo — expand/collapse shows the list)
+      // Selector list — toggled by clicking "Trace N/M"
+      hasMultiple && selectorOpen && h('ul', { className: 'ops-trace-selector-list' },
+        forest.trees.map((t, i) => {
+          const tGoal = t.nodes[0]?.title ?? ''
+          const tResolved = t.resolved
+          const isActive = i === idx
+          return h('li', { key: i },
+            h('button', {
+              type: 'button',
+              className: isActive
+                ? 'ops-trace-selector-item ops-trace-selector-item-active'
+                : 'ops-trace-selector-item',
+              onClick: () => {
+                setActiveIndex(i)
+                setSelectorOpen(false)
+              },
+            },
+              h('span', { className: isActive ? 'ops-trace-selector-dot ops-trace-selector-dot-active' : 'ops-trace-selector-dot', 'aria-hidden': 'true' }),
+              h('span', { className: 'ops-trace-selector-title' }, tGoal),
+              tResolved && h('span', { className: 'ops-trace-selector-tag' }, 'resolved'),
+            ),
+          )
+        }),
+      ),
+      // Tree content — toggled by chevron
       !collapsed && (() => {
         const cache: Record<string, number> = {}
         const sorted = treeOrder(tree.nodes)
