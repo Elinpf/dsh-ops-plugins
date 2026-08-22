@@ -53,61 +53,6 @@ export interface TreeState {
 
 // ── Session events (incremental, append-only) ────────────────────────────────
 
-/**
- * Session event map extension for the ops-todo-tree plugin.
- *
- * Each event carries the turn number and only the data needed for that action.
- * The projection folds these incrementally into a {@link TreeState}.
- */
-export interface TodoTreeEventMap {
-  /** Create the tree: root problem + final goal. */
-  'todo_tree/create': {
-    turn: number
-    root_id: string
-    root_title: string
-    goal_id: string
-    goal_title: string
-  }
-  /** Add a node (step or milestone) as a child of an existing node. */
-  'todo_tree/add': {
-    turn: number
-    node_id: string
-    parent_id: string
-    title: string
-    /** 'step' → initial status `pending`; 'milestone' → initial status `goal`. */
-    kind: 'step' | 'milestone'
-    /** `true` → branch to a new lane; `false` → inherit parent's lane. */
-    branch: boolean
-  }
-  /** Start working on a node: → `in_progress`. */
-  'todo_tree/start': {
-    turn: number
-    node_id: string
-  }
-  /** Complete a node: → `done`. */
-  'todo_tree/complete': {
-    turn: number
-    node_id: string
-  }
-  /** Abandon a node (dead end): → `dead_end`. */
-  'todo_tree/abandon': {
-    turn: number
-    node_id: string
-  }
-  /** Resolve the final goal: → `resolved`, with a summary. */
-  'todo_tree/resolve': {
-    turn: number
-    goal_id: string
-    summary: string
-  }
-  /** Link a causal edge: node_id's root cause is caused_by_id. */
-  'todo_tree/link': {
-    turn: number
-    node_id: string
-    caused_by: string
-  }
-}
-
 // ── Tool action types ────────────────────────────────────────────────────────
 
 /** The 10 actions the `todo_tree` tool accepts. */
