@@ -40,7 +40,7 @@ const TRANSITIONS: Record<NodeStatus, NodeStatus[]> = {
   goal: ['in_progress', 'done', 'resolved'],
   pending: ['in_progress', 'done', 'dead_end'],
   in_progress: ['done', 'dead_end'],
-  done: ['in_progress', 'dead_end'],
+  done: ['in_progress', 'dead_end', 'done'],
   dead_end: ['in_progress'],
   resolved: [],
 }
@@ -435,11 +435,41 @@ function renderOutput(args: any, value: any): string {
     return parts.join(' | ')
   }
 
+  // link: render full tree to show the causal edge
+  if (action === 'link') {
+    return renderFull(value)
+  }
+
   // create_tree, add_step, add_milestone, resolve: return compact tree
   return renderCompact(value, value?.new_node)
 }
 
 // ── Tool implementation ─────────────────────────────────────────────────────
+
+/**
+ * In-process tree state keyed by session id.
+ * 
+ * The projection (sessionProjections) provides persistence and replay from the
+ * session log (tool/call events). But when the model makes PARALLEL tool calls
+ * in one message (e.g. 3 × add_milestone), each call reads the same projection
+ * snapshot — they don't see each other's mutations. This map is the live,
+ * synchronously-mutated source of truth during a turn, so parallel calls see
+ * each other immediately.
+ * 
+ * The projection catches up later when DSH framework appends the tool/call
+ * events to the session log. On session start / replay, the projection's
+ * snapshot seeds this map.
+ */
+const sessionTrees = new Map<string, TreeState>()
+
+function getSessionTree(sessionId: string): TreeState | null {
+  return sessionTrees.get(sessionId) ?? null
+}
+
+function setSessionTree(sessionId: string, tree: TreeState | null): void {
+  if (tree === null) sessionTrees.delete(sessionId)
+  else sessionTrees.set(sessionId, tree)
+}
 
 function apply(ctx: any, _config: Record<string, never>): void {
   // ── Register session projection (09) ──────────────────────────────────────
@@ -457,6 +487,11 @@ function apply(ctx: any, _config: Record<string, never>): void {
       view: (s: TreeState | null) => s,
       stateVersion: 1,
     })
+  })
+
+  // Clean up in-process tree state when a session is disposed.
+  ;(ctx.on as any)('session/disposed', (session: any) => {
+    if (session?.id) sessionTrees.delete(session.id)
   })
 
   // ── Register model tool (06) ──────────────────────────────────────────────
@@ -507,23 +542,21 @@ function apply(ctx: any, _config: Record<string, never>): void {
       const agent = exec.agent
       if (!agent) throw new Error('todo_tree requires an owning agent session')
       const turn = currentTurn(exec)
+      const sessionId = agent.session?.id ?? agent.id ?? 'default'
 
-      // Read current tree from the projection registry (host-side API).
-      // The projection folds tool/call events automatically (DSH framework
-      // appends tool/call events to the session log).
-      let currentTree: TreeState | null = null
-      if (projectionRegistry) {
+      // Read current tree: prefer the in-process state (handles parallel calls
+      // within the same turn); fall back to the projection snapshot (handles
+      // session replay / first call after restart).
+      let currentTree: TreeState | null = getSessionTree(sessionId)
+      if (currentTree === null && projectionRegistry) {
         try {
           const snap = projectionRegistry.snapshot(agent.session)
           currentTree = snap?.values?.todo_tree ?? null
+          if (currentTree) setSessionTree(sessionId, currentTree)
         } catch {
           currentTree = null
         }
       }
-
-      // We compute the return value by folding a synthetic tool/call event
-      // locally — the projection's eager fold may not have run yet, so
-      // snapshot() could return stale state.
 
       switch (args.action as TodoTreeAction) {
         case 'create_tree': {
@@ -532,6 +565,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
           if (!args.goal_title) throw new Error('todo_tree: goal_title is required for create_tree')
           const ev = { type: 'tool/call', data: { name: 'todo_tree', turn, arguments: JSON.stringify(args) } }
           const updated = foldEvent(currentTree, ev)
+          setSessionTree(sessionId, updated)
           const result: any = { tree: updated, summary: buildSummary(updated) }
           return result
         }
@@ -544,22 +578,30 @@ function apply(ctx: any, _config: Record<string, never>): void {
           const parent = currentTree.nodes.find((n) => n.id === args.parent_id)
           if (!parent) throw new Error(`todo_tree: parent node "${args.parent_id}" not found`)
 
-          // Compute the fold locally to get the return value
-          const ev = { type: 'tool/call', data: { name: 'todo_tree', turn, arguments: JSON.stringify(args) } }
-          const updated = foldEvent(currentTree, ev)
-
-          // Find the last added node id for the return value
+          // Validate ids don't already exist BEFORE folding
           const titles: string[] = Array.isArray(args.titles) ? args.titles : [args.title]
           const providedIds: (string | undefined)[] = Array.isArray(args.ids)
             ? args.ids
             : args.id ? [args.id] : Array(titles.length).fill(undefined)
+          if (providedIds.length !== titles.length) {
+            throw new Error(`todo_tree: ids array must have exactly ${titles.length} entry(ies) to match titles.`)
+          }
+
           const existingIds = new Set(currentTree.nodes.map((n) => n.id))
           const addedIds: string[] = []
           for (let i = 0; i < titles.length; i++) {
             const nodeId = providedIds[i] || slugify(titles[i], existingIds)
+            if (existingIds.has(nodeId)) {
+              throw new Error(`todo_tree: node id "${nodeId}" already exists`)
+            }
             existingIds.add(nodeId)
             addedIds.push(nodeId)
           }
+
+          const ev = { type: 'tool/call', data: { name: 'todo_tree', turn, arguments: JSON.stringify(args) } }
+          const updated = foldEvent(currentTree, ev)
+          setSessionTree(sessionId, updated)
+
           const result: any = { tree: updated, summary: buildSummary(updated) }
           if (addedIds.length === 1) result.new_node = addedIds[0]
           else result.new_nodes = addedIds
@@ -577,11 +619,12 @@ function apply(ctx: any, _config: Record<string, never>): void {
             : args.action === 'complete' ? 'done'
             : 'dead_end'
 
-          // Validate transitions before folding
+          // Validate transitions — idempotent if already at target status
           const nodeIds: string[] = Array.isArray(args.node_ids) ? args.node_ids : [args.node_id]
           for (const nid of nodeIds) {
             const node = currentTree.nodes.find((n) => n.id === nid)
             if (!node) throw new Error(`todo_tree: node "${nid}" not found`)
+            if (node.status === targetStatus) continue // idempotent — already at target
             if (!canTransition(node.status, targetStatus)) {
               throw new Error(`todo_tree: cannot transition "${nid}" from "${node.status}" to "${targetStatus}"`)
             }
@@ -589,6 +632,7 @@ function apply(ctx: any, _config: Record<string, never>): void {
 
           const ev = { type: 'tool/call', data: { name: 'todo_tree', turn, arguments: JSON.stringify(args) } }
           const updated = foldEvent(currentTree, ev)
+          setSessionTree(sessionId, updated)
           const result: any = { tree: updated, summary: buildSummary(updated) }
           return result
         }
@@ -599,11 +643,15 @@ function apply(ctx: any, _config: Record<string, never>): void {
           const goal = currentTree.nodes.find((n) => n.status === 'goal' && n.parent !== null && n.id !== 'root')
             ?? currentTree.nodes.find((n) => n.id === 'goal')
           if (!goal) throw new Error('todo_tree: no final goal node to resolve')
+          if (goal.status === 'resolved') {
+            return { tree: currentTree, summary: buildSummary(currentTree) }
+          }
           if (!canTransition(goal.status, 'resolved')) {
             throw new Error(`todo_tree: goal is "${goal.status}", cannot resolve`)
           }
           const ev = { type: 'tool/call', data: { name: 'todo_tree', turn, arguments: JSON.stringify(args) } }
           const updated = foldEvent(currentTree, ev)
+          setSessionTree(sessionId, updated)
           const result: any = { tree: updated, summary: buildSummary(updated) }
           return result
         }
@@ -621,14 +669,12 @@ function apply(ctx: any, _config: Record<string, never>): void {
           }
           const ev = { type: 'tool/call', data: { name: 'todo_tree', turn, arguments: JSON.stringify(args) } }
           const updated = foldEvent(currentTree, ev)
+          setSessionTree(sessionId, updated)
           const result: any = { tree: updated, summary: buildSummary(updated) }
           return result
         }
 
         case 'view': {
-          // No event to append — just return the current tree in full format.
-          // If status_filter is set, only include nodes matching that status
-          // (plus the root and goal for context).
           if (args.status_filter && currentTree) {
             const filtered: TreeState = {
               resolved: currentTree.resolved,
