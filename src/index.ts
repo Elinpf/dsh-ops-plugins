@@ -651,14 +651,6 @@ function renderOutput(args: TraceArgs, value: TraceResult): string {
  */
 const sessionForests = new Map<string, ForestState>()
 
-// TEMP DEBUG: module-instance identity — if this id differs across calls in
-// one session, the module was instantiated more than once and the map above
-// is NOT shared, which explains state divergence.
-const INSTANCE_ID = Math.random().toString(36).slice(2, 8)
-const debugLog = (...args: unknown[]): void => {
-  ;(globalThis as { console?: { error: (...a: unknown[]) => void } }).console?.error(...args)
-}
-
 function getSessionForest(sessionId: string): ForestState | null {
   return sessionForests.get(sessionId) ?? null
 }
@@ -827,6 +819,9 @@ function apply(ctx: Context, _config: Record<string, never>): void {
       // within the same turn); fall back to the projection snapshot (handles
       // session replay / first call after restart).
       let forest: ForestState = getSessionForest(sessionId) ?? { trees: [] }
+      // Whether this call seeded the map from the projection — if so, this
+      // very call may already be folded (the log append precedes execute),
+      // which the create_tree branch checks to avoid a duplicate phantom tree.
       let seededFromProjection = false
       if (forest.trees.length === 0 && projectionRegistry) {
         try {
@@ -841,8 +836,6 @@ function apply(ctx: Context, _config: Record<string, never>): void {
           // projection not available yet
         }
       }
-      // TEMP DEBUG
-      debugLog(`[ops-trace:debug] exec ${args.action} inst=${INSTANCE_ID} sid=${sessionId} trees=${forest.trees.length} nodes=${activeTree(forest)?.nodes.length ?? 0} seeded=${seededFromProjection}`)
 
       // The active tree is the last unresolved one, or the last tree if all resolved
       let tree = activeTree(forest)
@@ -850,6 +843,22 @@ function apply(ctx: Context, _config: Record<string, never>): void {
       switch (args.action as TraceAction) {
         case 'create_tree': {
           if (!args.goal_title) throw new Error('trace: goal_title is required for create_tree')
+          // The tool/call event is appended to the session log — and folded by
+          // the projection — BEFORE execute runs. If this call just seeded the
+          // in-process map from the projection, this very call is already
+          // folded: folding it again would append a duplicate phantom tree
+          // (goal-only), which later surfaces as the active tree once every
+          // real tree is resolved. Other actions are already idempotent under
+          // this double-fold (add dedups by id, link by caused_by); only
+          // create_tree appends unconditionally.
+          if (seededFromProjection) {
+            const last = forest.trees[forest.trees.length - 1]
+            if (last && !last.resolved && last.nodes.length === 1
+                && last.nodes[0].id === 'goal' && last.nodes[0].title === args.goal_title
+                && last.nodes[0].turns.includes(turn)) {
+              return { tree: last, summary: buildSummary(last) }
+            }
+          }
           const ev = { type: 'tool/call', data: { name: 'trace', turn, arguments: JSON.stringify(args) } }
           const updated = foldEvent(forest, ev)
           setSessionForest(sessionId, updated)
@@ -1142,21 +1151,13 @@ function apply(ctx: Context, _config: Record<string, never>): void {
   if (immediateOpsPrompts !== undefined) {
     registerThroughHandle(immediateOpsPrompts)
   } else {
-    const systemPrompt = ctx.get('systemPrompt') as
-      | { section(opts: { name: string, order: number, text: string }): unknown }
-      | undefined
-    const sectionResult = systemPrompt?.section({
-      name: 'tool:trace',
-      order: 240,
-      text: staticText,
-    })
-    // TEMP DEBUG: track fallback lifecycle to detect duplicate registration
-    debugLog('[ops-trace:debug] fallback section registered (opsPrompts not ready)')
-    const disposeFallback = typeof sectionResult === 'function' ? sectionResult as () => void : undefined
+    // No direct systemPrompt fallback: the bundle patch also mounts this
+    // plugin host-plane (for client-bundle discovery), where ops-prompts
+    // never arrives — a fallback section registered there would stay forever
+    // and duplicate the methodology text in every prompt. When ops-prompts is
+    // genuinely absent, the tool description and the help action still carry
+    // the usage documentation.
     ctx.inject(['opsPrompts'], (pctx: Context) => {
-      // TEMP DEBUG
-      debugLog('[ops-trace:debug] opsPrompts arrived — dispose fallback, register through handle')
-      disposeFallback?.()
       registerThroughHandle(pctx.opsPrompts!)
     })
   }
