@@ -48,6 +48,8 @@ import type {
 } from './types.js'
 import { activeTree } from './types.js'
 import { SessionForestStore } from './session-forests.js'
+import { buildReminderContext, createIdleRule, createNestingRule, ReminderLatch } from './reminders.js'
+import type { ReminderContext } from './reminders.js'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -920,8 +922,15 @@ function apply(ctx: Context, _config: Record<string, never>): void {
   // the group's plugins concurrently, so a one-shot ctx.get can lose the race
   // against ops-prompts' provide — fall back to ctx.inject, which defers until
   // the service arrives.
-  const idleLatchBySession = new Map<string, { step: number, fires: number }>()
-  const flatLatchBySession = new Map<string, { trees: number, steps: number, fires: number }>()
+  //
+  // Reminder rules are pure functions of a derived ReminderContext; the latches
+  // live here because they belong to the registration, not the rule.
+  const idleRule = createIdleRule(new ReminderLatch(5, 5))
+  const nestingRule = createNestingRule(new ReminderLatch(1, 5))
+  const runRule = (rule: (ctx: ReminderContext) => string | null) => (agent: unknown): string | null => {
+    const ctx = buildReminderContext(agent, store)
+    return ctx === null ? null : rule(ctx)
+  }
 
   const registerThroughHandle = (opsPrompts: OpsPromptsHandle): void => {
     // Register tool usage prompt as a methodology section
@@ -931,113 +940,8 @@ function apply(ctx: Context, _config: Record<string, never>): void {
       text: staticText,
     })
 
-    // Register the idle reminder rule. Latched per session: reminders are
-    // durably delivered through the agent inbox, so refire at most once per
-    // 5 further steps instead of nudging every pre-step while the gap holds.
-    opsPrompts.registerReminder({
-      name: 'trace:idle',
-      check: (agent: unknown) => {
-        const session = (agent as { session?: { id?: string, events?: FoldEvent[] } })?.session
-        const events = session?.events
-        if (!events || events.length === 0) return null
-        const sessionId = session?.id ?? 'default'
-
-        let currentStep = 0
-        let lastTraceStep = 0
-        let hasTree = false
-        let treeResolved = false
-
-        for (const ev of events) {
-          if (ev.type === 'step/start') {
-            currentStep = (ev.data?.turn ?? 0) * 1000 + (ev.data?.step ?? 0)
-            continue
-          }
-          if (ev.type !== 'tool/call' || ev.data?.name !== 'trace') continue
-          lastTraceStep = currentStep
-          try {
-            const a = typeof ev.data?.arguments === 'string' ? JSON.parse(ev.data.arguments) : ev.data?.arguments
-            if (a?.action === 'create_tree') { hasTree = true; treeResolved = false }
-            else if (a?.action === 'resolve') treeResolved = true
-          } catch {}
-        }
-
-        // A resolved investigation is closed — no cadence nagging afterwards.
-        if (!hasTree || treeResolved || lastTraceStep === 0) return null
-        const gap = currentStep - lastTraceStep
-        if (gap < 5) return null
-        const lastFired = idleLatchBySession.get(sessionId)
-          ?? { step: Number.NEGATIVE_INFINITY, fires: 0 }
-        if (currentStep - lastFired.step < 5 || lastFired.fires >= 5) return null
-        idleLatchBySession.set(sessionId, { step: currentStep, fires: lastFired.fires + 1 })
-
-        return `[REMINDER] 过去 ${gap} 步排查没有更新 trace。后续调查动作执行前先 add_step(写下要查什么), 拿到结果立即 complete 带 summary。迷失方向先 view。`
-      },
-    })
-
-    // Register the structural reminder: fires when steps pile up flat under
-    // milestones — no step nested under another step — while completed steps
-    // already carry findings worth digging into. Latched per session: refires
-    // only when the flat-step count grows.
-    opsPrompts.registerReminder({
-      name: 'trace:nesting',
-      check: (agent: unknown) => {
-        const session = (agent as { session?: { id?: string, events?: FoldEvent[] } })?.session
-        const events = session?.events
-        if (!events || events.length === 0) return null
-        const sessionId = session?.id ?? 'default'
-
-        const milestoneIds = new Set<string>()
-        const steps: { id: string, parent: string }[] = []
-        let hasFinding = false
-        let treeCount = 0
-        let treeResolved = false
-
-        for (const ev of events) {
-          if (ev.type !== 'tool/call' || ev.data?.name !== 'trace') continue
-          let a: TraceArgs | undefined
-          try {
-            a = typeof ev.data.arguments === 'string' ? JSON.parse(ev.data.arguments) : ev.data.arguments as TraceArgs | undefined
-          } catch { continue }
-          if (!a) continue
-          if (a.action === 'create_tree') {
-            // Only the active tree's shape matters. NOTE: the latch must NOT
-            // be reset here — this scan replays full history on every check,
-            // so a reset here would re-arm the reminder on every pre-step
-            // and the injected notice would keep the turn alive forever.
-            treeCount++
-            milestoneIds.clear()
-            steps.length = 0
-            hasFinding = false
-            treeResolved = false
-          } else if (a.action === 'resolve') {
-            treeResolved = true
-          } else if (a.action === 'add_milestone' && a.id) {
-            milestoneIds.add(a.id)
-          } else if (a.action === 'add_step' && a.id && a.parent_id) {
-            steps.push({ id: a.id, parent: a.parent_id })
-          } else if (a.action === 'complete' && a.summary) {
-            hasFinding = true
-          }
-        }
-
-        const flat = steps.length >= 3
-          && steps.every((s) => s.parent === 'goal' || milestoneIds.has(s.parent))
-        // A resolved investigation is closed — its shape is final.
-        if (!flat || !hasFinding || treeResolved) return null
-        // Latch: refire only when the flat-step count grows within the same
-        // tree, and never more than 5 times per session.
-        const latch = flatLatchBySession.get(sessionId)
-        const sameTree = latch !== undefined && latch.trees === treeCount
-        if (sameTree && (steps.length <= latch.steps || latch.fires >= 5)) return null
-        flatLatchBySession.set(sessionId, {
-          trees: treeCount,
-          steps: steps.length,
-          fires: (sameTree ? latch.fires : 0) + 1,
-        })
-
-        return '[REMINDER] 你的 step 全部直接挂在 milestone 下, 但已有 step 带着发现完成。后续 add_step 先问"我为什么现在要做这个动作?"——如果答案是某个 step 的发现, parent_id 用那个 step 的 id。'
-      },
-    })
+    opsPrompts.registerReminder({ name: 'trace:idle', check: runRule(idleRule) })
+    opsPrompts.registerReminder({ name: 'trace:nesting', check: runRule(nestingRule) })
   }
 
   const immediateOpsPrompts = ctx.get('opsPrompts')
