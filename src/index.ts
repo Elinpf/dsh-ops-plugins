@@ -175,7 +175,7 @@ function foldEvent(state: ForestState | null, event: FoldEvent): ForestState | n
       const newTree: TreeState = {
         nodes: [{
           id: 'goal', title: args.goal_title, status: 'goal',
-          parent: null, turns: [turn], summary: null, caused_by: [],
+          parent: null, turns: [turn], summary: null, detail: null, caused_by: [],
         }],
         resolved: false,
       }
@@ -199,7 +199,8 @@ function foldEvent(state: ForestState | null, event: FoldEvent): ForestState | n
         nodes: [...tree.nodes, {
           id: args.id, title: args.title,
           status: kind === 'milestone' ? 'goal' : 'pending',
-          parent: args.parent_id, turns: [turn], summary: null, caused_by: [],
+          parent: args.parent_id, turns: [turn], summary: null,
+          detail: args.detail ?? null, caused_by: [],
         }],
       }
       return replaceTree(forest, tree, updatedTree)
@@ -315,10 +316,56 @@ function buildSummary(tree: TreeState | null): TraceResult['summary'] {
 
 // ── Tool description ─────────────────────────────────────────────────────────
 
-const TOOL_DESCRIPTION = [
-  '维护事件排查的调查树。结构: goal → milestone(待验证假设) → step(探索动作, 可嵌套于 milestone 或其他 step 之下)。发现新问题时, 在当前节点下嵌套子节点。 ',
-  'Actions: create_tree, add_milestone, add_step, start, complete, abandon, reopen, resolve, link, view。',
-].join('')
+const TOOL_DESCRIPTION =
+  '维护事件排查的调查树: goal → milestone(待验证假设) → step(验证动作)。每个节点的 parent_id 是它的触发节点——让你此刻想做这个动作的那个节点。完整用法: action=help。'
+
+/**
+ * Full usage documentation, progressively disclosed: the system prompt only
+ * carries the minimal core plus a pointer; the model pulls this via
+ * `trace` action=help when it needs the details.
+ */
+const HELP_TEXT = [
+  '## trace — 调查树完整用法',
+  '',
+  '用 `trace` 维护事件排查的调查树。树形 = 推理链。',
+  '',
+  '### Actions',
+  '- create_tree(goal_title) — 开始新调查; 前一棵树作为历史保留。',
+  '- add_milestone(id, parent_id, title, detail?) — 立假设; detail 写 because 分句。',
+  '- add_step(id, parent_id, title, detail?) — 加验证动作; detail 写查证对象。',
+  '- start / complete / abandon / reopen(id 或 ids) — 状态流转; complete 可带 summary。',
+  '- resolve(summary) — 全案收口, 只调一次, 只作用于最终 goal。',
+  '- link(id, caused_by) 或 links 数组 — 跨分支因果边。',
+  '- view — 完整树; status_filter 可选。',
+  '',
+  '### 触发节点 — parent_id 的唯一规则',
+  'add_step / add_milestone 前问: "我为什么现在要做这个动作?"',
+  '- 答案是某个 step 的发现/异常输出 → parent 是那个 step (这就是下钻)',
+  '- 答案是一个待验证的假设 → parent 是那个 milestone',
+  '- 顶层 milestone → parent 是 "goal"',
+  '标题只写动作本身; 推理关系全部由 parent 表达。',
+  '',
+  '### step 先行',
+  '调查动作(bash/kubectl/查日志)执行前先 add_step(title = 要查什么), 拿到结果立即 complete 带 summary。',
+  '',
+  '### milestone = 可被证据判伪的假设',
+  '创建时必须能写出 "我怀疑 X, 因为看到了 Y", Y 是已有证据:',
+  '- 写得出 → add_milestone, because 分句写进 detail, title 只写假设本身',
+  '- 写不出 → 先取证, 把取证动作 add_step 到当前触发节点下',
+  '"Ceph 存储满了, 因为 osd.1 使用率 99%" ← 合格; "存储""网络" ← 没有 because 分句, 不是假设。',
+  '- 证实 → complete 带 summary; 证伪 → abandon',
+  '',
+  '### 下钻与收敛',
+  'complete 一个 step 前检查它的发现: 是否还悬着一个未解释的 "为什么"?',
+  '- 有 → 在该 step 下 add_step 追问, 收敛发生在追问之后',
+  '- 没有(已到物理/基础设施层事实: 磁盘满、内存耗尽、网络分区…) → 这一步收敛',
+  '没有新报错指引方向时, 回到最近一个还悬着 "为什么" 的节点继续。',
+  '',
+  '### 其他',
+  '- 死路 abandon, 保留在树上; 迷失方向先 view; 每 5 步排查至少更新 1 次 trace。',
+  '- link 只表达 parent 无法表达的因果边(跨分支); 父子关系已隐含触发链, 不重复 link。',
+  '- 新调查 create_tree; resolve 只调一次: 全案收口, 标记最终目标达成。假设的证实/证伪走 complete/abandon, 不用 resolve。',
+].join('\n')
 
 // ── Projection schema (validates the view for client transport) ─────────────
 
@@ -329,6 +376,7 @@ const treeNodeSchema = zod.object({
   parent: zod.string().nullable(),
   turns: zod.array(zod.number()),
   summary: zod.string().nullable(),
+  detail: zod.string().nullable(),
   caused_by: zod.array(zod.string()),
 })
 
@@ -454,6 +502,10 @@ function renderFull(value: TraceResult): string {
     const connector = isLast ? '└── ' : '├── '
     const turnStr = node.turns?.length ? ` (turn ${node.turns.join(',')})` : ''
     let line = `${prefix}${connector}${node.id}: ${labelStr}${node.title}${turnStr}`
+    // Inline detail (creation rationale)
+    if (node.detail) {
+      line += `  detail: ${node.detail}`
+    }
     // Inline caused_by
     if (node.caused_by.length > 0) {
       line += `  ← caused_by: ${node.caused_by.join(', ')}`
@@ -491,6 +543,7 @@ function renderStats(value: TraceResult): string {
   if (c.pending) parts.push(`${c.pending} pending`)
   if (c.dead_end) parts.push(`${c.dead_end} dead_end`)
   if (value.tree?.resolved) parts.push('resolved')
+  if (summary.warning) parts.push('WARN: ' + summary.warning)
   return parts.join(' | ')
 }
 
@@ -501,6 +554,9 @@ function renderNodeLine(node: TreeNode, marker: string): string {
   const label = STATUS_LABEL[node.status] || ''
   const labelStr = label ? `${label} ` : ''
   let line = `${marker} ${node.id}: ${labelStr}${node.title}`
+  if (node.detail) {
+    line += `  detail: ${node.detail}`
+  }
   if (node.caused_by.length > 0) {
     line += `  ← caused_by: ${node.caused_by.join(', ')}`
   }
@@ -521,6 +577,9 @@ function renderNodeLine(node: TreeNode, marker: string): string {
  */
 function renderOutput(args: TraceArgs, value: TraceResult): string {
   const action = args?.action
+
+  // help: full usage documentation, no tree needed
+  if (action === 'help') return HELP_TEXT
 
   // view: always full tree
   if (action === 'view') return renderFull(value)
@@ -592,6 +651,14 @@ function renderOutput(args: TraceArgs, value: TraceResult): string {
  */
 const sessionForests = new Map<string, ForestState>()
 
+// TEMP DEBUG: module-instance identity — if this id differs across calls in
+// one session, the module was instantiated more than once and the map above
+// is NOT shared, which explains state divergence.
+const INSTANCE_ID = Math.random().toString(36).slice(2, 8)
+const debugLog = (...args: unknown[]): void => {
+  ;(globalThis as { console?: { error: (...a: unknown[]) => void } }).console?.error(...args)
+}
+
 function getSessionForest(sessionId: string): ForestState | null {
   return sessionForests.get(sessionId) ?? null
 }
@@ -620,7 +687,7 @@ function apply(ctx: Context, _config: Record<string, never>): void {
       init: () => null,
       apply: foldEvent,
       view: (s: ForestState | null) => s,
-      stateVersion: 2,
+      stateVersion: 3,
     })
   })
 
@@ -640,13 +707,13 @@ function apply(ctx: Context, _config: Record<string, never>): void {
     parameters: {
       action: { type: 'string', required: true, enum: [
         'create_tree', 'add_step', 'add_milestone',
-        'start', 'complete', 'abandon', 'reopen', 'resolve', 'link', 'view',
-      ], description: 'The action to perform.' },
+        'start', 'complete', 'abandon', 'reopen', 'resolve', 'link', 'view', 'help',
+      ], description: 'The action to perform. help returns the full usage documentation.' },
 
       goal_title: { type: 'string', description: 'Title for the investigation goal (create_tree only).' },
 
       id: { type: 'string', description: 'Node id. For add_step/add_milestone: the new node\'s semantic id (e.g. "ceph-full"). For start/complete/abandon/reopen: single target node. For link: target node (use with caused_by).' },
-      parent_id: { type: 'string', description: 'Parent node id (add_step/add_milestone only). Use "goal" for top-level milestones.' },
+      parent_id: { type: 'string', description: 'Parent node id (add_step/add_milestone only) = 触发节点: 跟进某 step 的发现 → 那个 step; 验证某假设 → 该 milestone; 顶层 milestone → "goal"。' },
       title: { type: 'string', description: 'Node title (add_step/add_milestone only).' },
       ids: {
         type: 'array',
@@ -654,7 +721,9 @@ function apply(ctx: Context, _config: Record<string, never>): void {
         description: 'Array of node ids for batch mode (start/complete/abandon/reopen).',
       },
 
-      summary: { type: 'string', description: 'How the goal/node was resolved. Required for resolve. Optional for complete — records what was found/fixed.' },
+      summary: { type: 'string', description: 'How the goal/node was resolved. Required for resolve. Optional for complete — records what was found/fixed. add_step/add_milestone 的创建依据用 detail, 不是 summary。' },
+
+      detail: { type: 'string', description: 'Creation rationale (add_step/add_milestone only): 假设的 "因为 Y" 分句, 或 step 的具体查证对象。' },
 
       caused_by: { type: 'string', description: 'Node id that is the root cause (link only). Expresses: "id is caused by caused_by".' },
       links: {
@@ -696,6 +765,7 @@ function apply(ctx: Context, _config: Record<string, never>): void {
                     parent: { required: true, oneOf: [{ type: 'string' }, { type: 'null' }] },
                     turns: { type: 'array', required: true, items: { type: 'number' } },
                     summary: { required: true, oneOf: [{ type: 'string' }, { type: 'null' }] },
+                    detail: { required: true, oneOf: [{ type: 'string' }, { type: 'null' }] },
                     caused_by: { type: 'array', required: true, items: { type: 'string' } },
                   },
                 },
@@ -757,6 +827,7 @@ function apply(ctx: Context, _config: Record<string, never>): void {
       // within the same turn); fall back to the projection snapshot (handles
       // session replay / first call after restart).
       let forest: ForestState = getSessionForest(sessionId) ?? { trees: [] }
+      let seededFromProjection = false
       if (forest.trees.length === 0 && projectionRegistry) {
         try {
           const snap = projectionRegistry.snapshot(agent.session)
@@ -764,11 +835,14 @@ function apply(ctx: Context, _config: Record<string, never>): void {
           if (projForest && projForest.trees.length > 0) {
             forest = projForest
             setSessionForest(sessionId, forest)
+            seededFromProjection = true
           }
         } catch {
           // projection not available yet
         }
       }
+      // TEMP DEBUG
+      debugLog(`[ops-trace:debug] exec ${args.action} inst=${INSTANCE_ID} sid=${sessionId} trees=${forest.trees.length} nodes=${activeTree(forest)?.nodes.length ?? 0} seeded=${seededFromProjection}`)
 
       // The active tree is the last unresolved one, or the last tree if all resolved
       let tree = activeTree(forest)
@@ -837,6 +911,9 @@ function apply(ctx: Context, _config: Record<string, never>): void {
 
         case 'resolve': {
           if (!tree) throw new Error('trace: no tree')
+          if (args.id && args.id !== 'goal') {
+            throw new Error(`trace: resolve 只用于整棵树收口(最终 goal), 不接受 id "${args.id}"; 证实假设用 complete 带 summary, 证伪用 abandon`)
+          }
           if (!args.summary) throw new Error('trace: summary is required for resolve')
           const goal = tree.nodes.find((n) => n.id === 'goal')
           if (!goal) throw new Error('trace: no goal node to resolve')
@@ -900,6 +977,11 @@ function apply(ctx: Context, _config: Record<string, never>): void {
           return { tree: tree!, summary: buildSummary(tree!) }
         }
 
+        case 'help': {
+          // No state change — the render layer answers with HELP_TEXT.
+          return { tree: tree ?? { nodes: [], resolved: false }, summary: buildSummary(tree) }
+        }
+
         default:
           throw new Error(`trace: unknown action "${args.action}"`)
       }
@@ -919,65 +1001,27 @@ function apply(ctx: Context, _config: Record<string, never>): void {
   }))
 
   // ── System prompt section ──────────────────────────────────────────────────
-  // Static documentation (always present)
+  // Minimal always-on core: what the tree is, the trigger-node rule, and a
+  // pointer to the full documentation. The full doc is progressively
+  // disclosed through the `help` action instead of living in the system
+  // prompt — reminders deliver individual rules just-in-time.
   const staticText = [
     '## trace — 调查树',
-    '',
-    '用 `trace` 维护事件排查的调查树。死路保留可见, 分支展示并行路径。',
-    '',
-    '### Actions',
-    '- `create_tree` — 创建新的调查树。开始排查或解决上一棵树后调用。需要 `goal_title`。',
-    '- `add_milestone` — 添加待验证假设。milestone 是一个可验证的判断("我怀疑存储满了""我怀疑 DNS 异常")。需要 `id`, `parent_id`, `title`。',
-    '- `add_step` — 添加探索动作。step 是验证假设的具体动作("查 OSD 使用率""读 rbdplugin 日志")。可挂载于 milestone 或其他 step 下。需要 `id`, `parent_id`, `title`。',
-    '- `start` — 标记为进行中。传 `id` 或 `ids` 数组。',
-    '- `complete` — 标记为完成(可跳过 start)。可选 `summary` 记录发现。传 `id` 或 `ids` 数组。',
-    '- `abandon` — 标记为死路或已不相关。传 `id` 或 `ids` 数组。',
-    '- `reopen` — 将已完成或死路节点重新激活为进行中。传 `id` 或 `ids` 数组。',
-    '- `resolve` — 标记 goal 已解决。需要 `summary`。',
-    '- `link` — 连接因果边。单个: `id` + `caused_by`。批量: `links` 数组 [{id, caused_by}]。',
-    '- `view` — 获取完整调查树。可选 `status_filter`。',
-    '',
-    '### 树结构',
-    '- goal — 排查目标(你要查清什么)。',
-    '- milestone — 待验证假设。写成可验证的判断语句, 而非分类标签:',
-    '  - "Ceph 存储满了""DNS 解析异常""配置缺失" ← 合格',
-    '  - "存储""网络""第一阶段" ← 不合格',
-    '- step — 验证假设的具体动作。可嵌套于 milestone 或其他 step 下, 深度不限。',
-    '',
-    '### 下钻 — 核心纪律',
-    '当一个 step 的发现引出新问题时, 在该 step 下嵌套子 step:',
-    '  step: "查 OSD 使用率" → 发现 OSD-1 99% 满 → 下钻: "为什么 OSD-1 99% 满" → 再下钻: "查历史写入数据"',
-    '',
-    '嵌套深度就是调查路径。扁平的 step 列表丢失了"从症状到根因"的推理链, 嵌套的树则完整保留。',
-    '',
-    '### 输出格式',
-    '- `create_tree`: 展示新树。',
-    '- `add_step`/`add_milestone`: 展示新节点 + 父节点 + 统计行。',
-    '- `start`/`complete`/`abandon`/`reopen`: 展示 `= id: 状态` + 统计行。',
-    '- `link`: 展示 `~ id ← caused_by: ...` + 统计行。',
-    '- `resolve`: 展示 `= goal: resolved` + 统计行。',
-    '- `view`: 展示完整树。',
-    '',
-    '### 纪律',
-    '- 每 5 步排查至少更新 1 次 trace。',
-    '- 发现新问题: 在当前节点下嵌套子 step。',
-    '- 死路: abandon — 探索路径比结果更重要。',
-    '- 迷失方向: 调用 view。',
-    '',
-    '### 生命周期',
-    '- 开始: create_tree 设定 goal。',
-    '- 形成假设: 为每个待验证的判断 add_milestone。',
-    '- 探索: 在对应 milestone 下 add_step, 完成后 complete 带 summary。',
-    '- 下钻: 每个发现新问题的 step 下嵌套子 step。',
-    '- 死路: abandon。解决: resolve 带 summary。',
-    '- 新调查: 再次 create_tree — 前一棵树作为历史保留。',
+    '用 `trace` 维护事件排查的调查树: goal → milestone(假设, 创建时必须能写出"我怀疑 X, 因为看到了 Y") → step(验证动作)。',
+    'parent_id 的唯一规则 — 我为什么现在要做这个动作? 答案是某 step 的发现 → 挂那个 step; 是验证某假设 → 挂该 milestone; 顶层假设 → "goal"。',
+    '完整用法与纪律: 调 `trace` action=help。',
   ].join('\n')
 
-  // Register methodology and reminder through ops-prompts if available,
-  // otherwise fall back to direct systemPrompt.section registration.
-  const opsPrompts = ctx.get('opsPrompts')
+  // Register methodology and reminders through ops-prompts. The preset mounts
+  // the group's plugins concurrently, so a one-shot ctx.get can lose the race
+  // against ops-prompts' provide — fall back to ctx.inject, which defers until
+  // the service arrives. The static methodology text also falls back to a
+  // direct systemPrompt section so the prompt is never lost while waiting;
+  // the fallback is disposed once the handle path takes over.
+  const idleLatchBySession = new Map<string, { step: number, fires: number }>()
+  const flatLatchBySession = new Map<string, { trees: number, steps: number, fires: number }>()
 
-  if (opsPrompts !== undefined) {
+  const registerThroughHandle = (opsPrompts: OpsPromptsHandle): void => {
     // Register tool usage prompt as a methodology section
     opsPrompts.registerMethodology({
       name: 'trace:usage',
@@ -985,49 +1029,136 @@ function apply(ctx: Context, _config: Record<string, never>): void {
       text: staticText,
     })
 
-    // Register the idle reminder rule
+    // Register the idle reminder rule. Latched per session: reminders are
+    // durably delivered through the agent inbox, so refire at most once per
+    // 5 further steps instead of nudging every pre-step while the gap holds.
     opsPrompts.registerReminder({
       name: 'trace:idle',
       check: (agent: unknown) => {
-        const events = (agent as { session?: { events?: FoldEvent[] } })?.session?.events
+        const session = (agent as { session?: { id?: string, events?: FoldEvent[] } })?.session
+        const events = session?.events
         if (!events || events.length === 0) return null
+        const sessionId = session?.id ?? 'default'
 
         let currentStep = 0
         let lastTraceStep = 0
         let hasTree = false
+        let treeResolved = false
 
         for (const ev of events) {
           if (ev.type === 'step/start') {
             currentStep = (ev.data?.turn ?? 0) * 1000 + (ev.data?.step ?? 0)
+            continue
           }
-          if (ev.type === 'tool/call' && ev.data?.name === 'trace') {
-            lastTraceStep = currentStep
-          }
-          if (ev.type === 'tool/call' && ev.data?.name === 'trace') {
-            try {
-              const a = typeof ev.data?.arguments === 'string' ? JSON.parse(ev.data.arguments) : ev.data?.arguments
-              if (a?.action === 'create_tree') hasTree = true
-            } catch {}
+          if (ev.type !== 'tool/call' || ev.data?.name !== 'trace') continue
+          lastTraceStep = currentStep
+          try {
+            const a = typeof ev.data?.arguments === 'string' ? JSON.parse(ev.data.arguments) : ev.data?.arguments
+            if (a?.action === 'create_tree') { hasTree = true; treeResolved = false }
+            else if (a?.action === 'resolve') treeResolved = true
+          } catch {}
+        }
+
+        // A resolved investigation is closed — no cadence nagging afterwards.
+        if (!hasTree || treeResolved || lastTraceStep === 0) return null
+        const gap = currentStep - lastTraceStep
+        if (gap < 5) return null
+        const lastFired = idleLatchBySession.get(sessionId)
+          ?? { step: Number.NEGATIVE_INFINITY, fires: 0 }
+        if (currentStep - lastFired.step < 5 || lastFired.fires >= 5) return null
+        idleLatchBySession.set(sessionId, { step: currentStep, fires: lastFired.fires + 1 })
+
+        return `[REMINDER] 过去 ${gap} 步排查没有更新 trace。后续调查动作执行前先 add_step(写下要查什么), 拿到结果立即 complete 带 summary。迷失方向先 view。`
+      },
+    })
+
+    // Register the structural reminder: fires when steps pile up flat under
+    // milestones — no step nested under another step — while completed steps
+    // already carry findings worth digging into. Latched per session: refires
+    // only when the flat-step count grows.
+    opsPrompts.registerReminder({
+      name: 'trace:nesting',
+      check: (agent: unknown) => {
+        const session = (agent as { session?: { id?: string, events?: FoldEvent[] } })?.session
+        const events = session?.events
+        if (!events || events.length === 0) return null
+        const sessionId = session?.id ?? 'default'
+
+        const milestoneIds = new Set<string>()
+        const steps: { id: string, parent: string }[] = []
+        let hasFinding = false
+        let treeCount = 0
+        let treeResolved = false
+
+        for (const ev of events) {
+          if (ev.type !== 'tool/call' || ev.data?.name !== 'trace') continue
+          let a: TraceArgs | undefined
+          try {
+            a = typeof ev.data.arguments === 'string' ? JSON.parse(ev.data.arguments) : ev.data.arguments as TraceArgs | undefined
+          } catch { continue }
+          if (!a) continue
+          if (a.action === 'create_tree') {
+            // Only the active tree's shape matters. NOTE: the latch must NOT
+            // be reset here — this scan replays full history on every check,
+            // so a reset here would re-arm the reminder on every pre-step
+            // and the injected notice would keep the turn alive forever.
+            treeCount++
+            milestoneIds.clear()
+            steps.length = 0
+            hasFinding = false
+            treeResolved = false
+          } else if (a.action === 'resolve') {
+            treeResolved = true
+          } else if (a.action === 'add_milestone' && a.id) {
+            milestoneIds.add(a.id)
+          } else if (a.action === 'add_step' && a.id && a.parent_id) {
+            steps.push({ id: a.id, parent: a.parent_id })
+          } else if (a.action === 'complete' && a.summary) {
+            hasFinding = true
           }
         }
 
-        if (!hasTree || lastTraceStep === 0) return null
-        const gap = currentStep - lastTraceStep
-        if (gap < 5) return null
+        const flat = steps.length >= 3
+          && steps.every((s) => s.parent === 'goal' || milestoneIds.has(s.parent))
+        // A resolved investigation is closed — its shape is final.
+        if (!flat || !hasFinding || treeResolved) return null
+        // Latch: refire only when the flat-step count grows within the same
+        // tree, and never more than 5 times per session.
+        const latch = flatLatchBySession.get(sessionId)
+        const sameTree = latch !== undefined && latch.trees === treeCount
+        if (sameTree && (steps.length <= latch.steps || latch.fires >= 5)) return null
+        flatLatchBySession.set(sessionId, {
+          trees: treeCount,
+          steps: steps.length,
+          fires: (sameTree ? latch.fires : 0) + 1,
+        })
 
-        return `[REMINDER] You haven't updated trace in ${gap} steps. Call \`trace view\` to check current state, then \`add_step\` or \`complete\` to record your progress.`
+        return '[REMINDER] 你的 step 全部直接挂在 milestone 下, 但已有 step 带着发现完成。后续 add_step 先问"我为什么现在要做这个动作?"——如果答案是某个 step 的发现, parent_id 用那个 step 的 id。'
       },
     })
+  }
+
+  const immediateOpsPrompts = ctx.get('opsPrompts')
+  if (immediateOpsPrompts !== undefined) {
+    registerThroughHandle(immediateOpsPrompts)
   } else {
-    // Fallback: register directly if ops-prompts is not loaded
-    const systemPrompt = ctx.get('systemPrompt')
-    if (systemPrompt !== undefined) {
-      systemPrompt.section({
-        name: 'tool:trace',
-        order: 240,
-        text: staticText,
-      })
-    }
+    const systemPrompt = ctx.get('systemPrompt') as
+      | { section(opts: { name: string, order: number, text: string }): unknown }
+      | undefined
+    const sectionResult = systemPrompt?.section({
+      name: 'tool:trace',
+      order: 240,
+      text: staticText,
+    })
+    // TEMP DEBUG: track fallback lifecycle to detect duplicate registration
+    debugLog('[ops-trace:debug] fallback section registered (opsPrompts not ready)')
+    const disposeFallback = typeof sectionResult === 'function' ? sectionResult as () => void : undefined
+    ctx.inject(['opsPrompts'], (pctx: Context) => {
+      // TEMP DEBUG
+      debugLog('[ops-trace:debug] opsPrompts arrived — dispose fallback, register through handle')
+      disposeFallback?.()
+      registerThroughHandle(pctx.opsPrompts!)
+    })
   }
 }
 

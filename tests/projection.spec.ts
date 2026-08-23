@@ -105,6 +105,18 @@ describe('add nodes', () => {
     ])
     expect(state!.nodes.find((n) => n.id === 's2')!.parent).toBe('s1')
   })
+
+  it('add with detail stores it; without detail it is null', () => {
+    const state = foldAll([
+      { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
+      { turn: 1, args: { action: 'add_milestone', id: 'm1', parent_id: 'goal', title: 'Ceph full', detail: '因为 osd.1 使用率 99%' } },
+      { turn: 1, args: { action: 'add_step', id: 's1', parent_id: 'm1', title: 'Check logs' } },
+    ])
+    expect(state!.nodes.find((n) => n.id === 'm1')!.detail).toBe('因为 osd.1 使用率 99%')
+    expect(state!.nodes.find((n) => n.id === 's1')!.detail).toBeNull()
+    // summary stays null on add — summaries belong to complete/resolve
+    expect(state!.nodes.find((n) => n.id === 'm1')!.summary).toBeNull()
+  })
 })
 
 // ── Status transitions ──────────────────────────────────────────────────────

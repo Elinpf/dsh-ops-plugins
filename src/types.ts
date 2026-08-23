@@ -37,6 +37,9 @@ export interface TreeNode {
   turns: number[]
   /** Resolution summary (written by `complete` or `resolve`). */
   summary: string | null
+  /** Creation-time rationale (add_step/add_milestone): the hypothesis's
+   *  "because" clause or the step's concrete target. */
+  detail: string | null
   /** Causal edges: other node ids that are the root cause of this node. */
   caused_by: string[]
 }
@@ -75,7 +78,7 @@ export function activeTree(forest: ForestState): TreeState | null {
 
 // ── Tool action types ────────────────────────────────────────────────────────
 
-/** The 10 actions the `trace` tool accepts. */
+/** The 11 actions the `trace` tool accepts. */
 export type TraceAction =
   | 'create_tree'
   | 'add_step'
@@ -87,6 +90,7 @@ export type TraceAction =
   | 'resolve'
   | 'link'
   | 'view'
+  | 'help'
 
 /**
  * Return value of every `trace` call.
@@ -126,6 +130,7 @@ export interface TraceArgs {
   title?: string
   ids?: string[]
   summary?: string
+  detail?: string
   caused_by?: string
   links?: LinkPair[]
   status_filter?: NodeStatus
