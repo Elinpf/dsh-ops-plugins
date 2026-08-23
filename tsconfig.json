@@ -18,6 +18,6 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false
   },
-  "include": ["src/index.ts", "src/invariant.ts", "src/types.ts"],
+  "include": ["src/index.ts", "src/invariant.ts", "src/types.ts", "src/session-forests.ts"],
   "exclude": ["node_modules", "lib", "tests", "src/client.ts"]
 }

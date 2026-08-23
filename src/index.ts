@@ -45,16 +45,9 @@ import type {
   TraceResult,
   TraceArgs,
   LinkPair,
-} from './types.ts'
-
-/** The active tree is the last unresolved one, or the last tree if all resolved. */
-function activeTree(forest: ForestState | null): TreeState | null {
-  if (!forest || forest.trees.length === 0) return null
-  for (let i = forest.trees.length - 1; i >= 0; i--) {
-    if (!forest.trees[i].resolved) return forest.trees[i]
-  }
-  return forest.trees[forest.trees.length - 1]
-}
+} from './types.js'
+import { activeTree } from './types.js'
+import { SessionForestStore } from './session-forests.js'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -83,39 +76,6 @@ const TRANSITIONS: Record<NodeStatus, NodeStatus[]> = {
 /** Check whether a transition is legal per the 05 state machine. */
 function canTransition(from: NodeStatus, to: NodeStatus): boolean {
   return (TRANSITIONS[from] ?? []).includes(to)
-}
-
-// ── Node id generation ───────────────────────────────────────────────────────
-
-let nodeCounter = 0
-function generateId(): string {
-  nodeCounter++
-  return 'n' + nodeCounter
-}
-
-/** Generate a slug from a title.
- *  - ASCII alphanumerics are kept and lowercased.
- *  - Non-ASCII characters (Chinese, Japanese, etc.) are kept as-is.
- *  - Whitespace and punctuation become hyphens.
- *  e.g. "Check Ceph" → "check-ceph", "检查存储" → "检查存储",
- *       "baizeops 故障" → "baizeops-故障"
- *  If the slug already exists in the tree, append a numeric suffix. */
-function slugify(title: string, existingIds: Set<string>): string {
-  let slug = title
-    .toLowerCase()
-    .replace(/[\s_]+/g, '-')       // whitespace → -
-    .replace(/[^\p{L}\p{N}-]+/gu, '', ) // remove punctuation, keep letters/numbers/hyphens (unicode-aware)
-    .replace(/-{2,}/g, '-')        // collapse multiple hyphens
-    .replace(/^-+|-+$/g, '')      // trim leading/trailing hyphens
-    .slice(0, 40)
-  if (!slug) slug = 'node'
-  // Ensure uniqueness
-  let result = slug
-  let suffix = 2
-  while (existingIds.has(result)) {
-    result = `${slug}-${suffix++}`
-  }
-  return result
 }
 
 // ── Turn extraction (02) ─────────────────────────────────────────────────────
@@ -294,8 +254,6 @@ function updateNodeInTree(
 }
 
 // ── Summary builder (06: advisor, not gatekeeper) ───────────────────────────
-
-const ALL_STATUSES: NodeStatus[] = ['goal', 'pending', 'in_progress', 'done', 'dead_end', 'resolved']
 
 function buildSummary(tree: TreeState | null): TraceResult['summary'] {
   const nodes = tree?.nodes ?? []
@@ -635,31 +593,6 @@ function renderOutput(args: TraceArgs, value: TraceResult): string {
 
 // ── Tool implementation ─────────────────────────────────────────────────────
 
-/**
- * In-process tree state keyed by session id.
- * 
- * The projection (sessionProjections) provides persistence and replay from the
- * session log (tool/call events). But when the model makes PARALLEL tool calls
- * in one message (e.g. 3 × add_milestone), each call reads the same projection
- * snapshot — they don't see each other's mutations. This map is the live,
- * synchronously-mutated source of truth during a turn, so parallel calls see
- * each other immediately.
- * 
- * The projection catches up later when DSH framework appends the tool/call
- * events to the session log. On session start / replay, the projection's
- * snapshot seeds this map.
- */
-const sessionForests = new Map<string, ForestState>()
-
-function getSessionForest(sessionId: string): ForestState | null {
-  return sessionForests.get(sessionId) ?? null
-}
-
-function setSessionForest(sessionId: string, forest: ForestState | null): void {
-  if (forest === null || forest.trees.length === 0) sessionForests.delete(sessionId)
-  else sessionForests.set(sessionId, forest)
-}
-
 /** Minimal projection-registry interface used by this plugin. */
 interface ProjectionRegistryLike {
   snapshot(session: { id: string }): { values: { trace?: ForestState | null } }
@@ -683,14 +616,21 @@ function apply(ctx: Context, _config: Record<string, never>): void {
     })
   })
 
+  // The store owns the in-process forest map and the seeding protocol; the
+  // projection registry only feeds it snapshots.
+  const store = new SessionForestStore(
+    (session) => {
+      if (!projectionRegistry) return null
+      return projectionRegistry.snapshot(session).values?.trace ?? null
+    },
+    foldEvent,
+    (message) => ctx.logger('ops-trace').warn(message),
+  )
+
   // Clean up in-process tree state when the plugin's fiber is disposed
-  // (process restart, preset unmount). session/disposed is a Session-scoped
-  // event we can't hear from the plugin's global ctx; instead, the execute
-  // function falls back to the projection snapshot for session replay, so
-  // stale entries in the map are harmless — they're overwritten on first
-  // call and never cause cross-session contamination because the key is
-  // the sessionId.
-  ctx.effect(() => () => { sessionForests.clear() })
+  // (process restart, preset unmount); the store re-seeds from the projection
+  // on next access.
+  ctx.effect(() => () => { store.clear() })
 
   // ── Register model tool (06) ──────────────────────────────────────────────
   ctx.tools.register(defineTool({
@@ -814,61 +754,23 @@ function apply(ctx: Context, _config: Record<string, never>): void {
       if (!agent) throw new Error('trace requires an owning agent session')
       const turn = currentTurn(exec)
       const sessionId = agent.session?.id ?? agent.id ?? 'default'
+      const session = (agent.session ?? { id: sessionId }) as { id: string }
 
-      // Read current forest: prefer the in-process state (handles parallel calls
-      // within the same turn); fall back to the projection snapshot (handles
-      // session replay / first call after restart).
-      let forest: ForestState = getSessionForest(sessionId) ?? { trees: [] }
-      // Whether this call seeded the map from the projection — if so, this
-      // very call may already be folded (the log append precedes execute),
-      // which the create_tree branch checks to avoid a duplicate phantom tree.
-      let seededFromProjection = false
-      if (forest.trees.length === 0 && projectionRegistry) {
-        try {
-          const snap = projectionRegistry.snapshot(agent.session)
-          const projForest = snap?.values?.trace ?? null
-          if (projForest && projForest.trees.length > 0) {
-            forest = projForest
-            setSessionForest(sessionId, forest)
-            seededFromProjection = true
-          }
-        } catch {
-          // projection not available yet
-        }
-      }
-
-      // The active tree is the last unresolved one, or the last tree if all resolved
-      let tree = activeTree(forest)
+      // All state access goes through the store: it owns the map, the
+      // projection seeding, and the mutation critical section.
+      const activeNode = () => activeTree(store.current(session).forest)
 
       switch (args.action as TraceAction) {
         case 'create_tree': {
           if (!args.goal_title) throw new Error('trace: goal_title is required for create_tree')
-          // The tool/call event is appended to the session log — and folded by
-          // the projection — BEFORE execute runs. If this call just seeded the
-          // in-process map from the projection, this very call is already
-          // folded: folding it again would append a duplicate phantom tree
-          // (goal-only), which later surfaces as the active tree once every
-          // real tree is resolved. Other actions are already idempotent under
-          // this double-fold (add dedups by id, link by caused_by); only
-          // create_tree appends unconditionally.
-          if (seededFromProjection) {
-            const last = forest.trees[forest.trees.length - 1]
-            if (last && !last.resolved && last.nodes.length === 1
-                && last.nodes[0].id === 'goal' && last.nodes[0].title === args.goal_title
-                && last.nodes[0].turns.includes(turn)) {
-              return { tree: last, summary: buildSummary(last) }
-            }
-          }
-          const ev = { type: 'tool/call', data: { name: 'trace', turn, arguments: JSON.stringify(args) } }
-          const updated = foldEvent(forest, ev)
-          setSessionForest(sessionId, updated)
-          const newTree = updated!.trees[updated!.trees.length - 1]
-          const result: TraceResult = { tree: newTree, summary: buildSummary(newTree) }
+          const tree = activeTree(store.apply(session, args, turn))!
+          const result: TraceResult = { tree, summary: buildSummary(tree) }
           return result
         }
 
         case 'add_step':
         case 'add_milestone': {
+          const tree = activeNode()
           if (!tree) throw new Error('trace: no tree — call create_tree first')
           if (!args.parent_id) throw new Error('trace: parent_id is required')
           if (!args.title) throw new Error('trace: title is required')
@@ -879,10 +781,7 @@ function apply(ctx: Context, _config: Record<string, never>): void {
             throw new Error(`trace: node id "${args.id}" already exists`)
           }
 
-          const ev = { type: 'tool/call', data: { name: 'trace', turn, arguments: JSON.stringify(args) } }
-          const updated = foldEvent(forest, ev)
-          setSessionForest(sessionId, updated)
-          const updatedTree = activeTree(updated!)!
+          const updatedTree = activeTree(store.apply(session, args, turn))!
           const result: TraceResult = { tree: updatedTree, summary: buildSummary(updatedTree) }
           result.new_node = args.id
           return result
@@ -892,6 +791,7 @@ function apply(ctx: Context, _config: Record<string, never>): void {
         case 'complete':
         case 'abandon':
         case 'reopen': {
+          const tree = activeNode()
           if (!tree) throw new Error('trace: no tree')
           const nodeIds: string[] = Array.isArray(args.ids) ? args.ids : (args.id ? [args.id] : [])
           if (nodeIds.length === 0) throw new Error('trace: id (or ids array) is required')
@@ -910,15 +810,13 @@ function apply(ctx: Context, _config: Record<string, never>): void {
             }
           }
 
-          const ev = { type: 'tool/call', data: { name: 'trace', turn, arguments: JSON.stringify(args) } }
-          const updated = foldEvent(forest, ev)
-          setSessionForest(sessionId, updated)
-          const updatedTree = activeTree(updated!)!
+          const updatedTree = activeTree(store.apply(session, args, turn))!
           const result: TraceResult = { tree: updatedTree, summary: buildSummary(updatedTree) }
           return result
         }
 
         case 'resolve': {
+          const tree = activeNode()
           if (!tree) throw new Error('trace: no tree')
           if (args.id && args.id !== 'goal') {
             throw new Error(`trace: resolve 只用于整棵树收口(最终 goal), 不接受 id "${args.id}"; 证实假设用 complete 带 summary, 证伪用 abandon`)
@@ -927,20 +825,18 @@ function apply(ctx: Context, _config: Record<string, never>): void {
           const goal = tree.nodes.find((n) => n.id === 'goal')
           if (!goal) throw new Error('trace: no goal node to resolve')
           if (goal.status === 'resolved') {
-            return { tree: tree!, summary: buildSummary(tree!) }
+            return { tree, summary: buildSummary(tree) }
           }
           if (!canTransition(goal.status, 'resolved')) {
             throw new Error(`trace: goal is "${goal.status}", cannot resolve`)
           }
-          const ev = { type: 'tool/call', data: { name: 'trace', turn, arguments: JSON.stringify(args) } }
-          const updated = foldEvent(forest, ev)
-          setSessionForest(sessionId, updated)
-          const updatedTree = updated!.trees[updated!.trees.length - 1]
+          const updatedTree = activeTree(store.apply(session, args, turn))!
           const result: TraceResult = { tree: updatedTree, summary: buildSummary(updatedTree) }
           return result
         }
 
         case 'link': {
+          const tree = activeNode()
           if (!tree) throw new Error('trace: no tree')
           const links: LinkPair[] = Array.isArray(args.links) ? args.links : [{id: args.id!, caused_by: args.caused_by!}]
           if (links.length === 0) throw new Error('trace: at least one link is required')
@@ -957,22 +853,20 @@ function apply(ctx: Context, _config: Record<string, never>): void {
 
           // Check if all links already exist (idempotent)
           const allExist = links.every(link => {
-            const node = tree!.nodes.find((n) => n.id === link.id)
+            const node = tree.nodes.find((n) => n.id === link.id)
             return node && node.caused_by.includes(link.caused_by)
           })
           if (allExist) {
-            return { tree: tree!, summary: buildSummary(tree!) }
+            return { tree, summary: buildSummary(tree) }
           }
 
-          const ev = { type: 'tool/call', data: { name: 'trace', turn, arguments: JSON.stringify(args) } }
-          const updated = foldEvent(forest, ev)
-          setSessionForest(sessionId, updated)
-          const updatedTree = activeTree(updated!)!
+          const updatedTree = activeTree(store.apply(session, args, turn))!
           const result: TraceResult = { tree: updatedTree, summary: buildSummary(updatedTree) }
           return result
         }
 
         case 'view': {
+          const tree = activeNode()
           if (!tree) throw new Error('trace: no tree — call create_tree first')
           if (args.status_filter) {
             const filtered: TreeState = {
@@ -981,13 +875,14 @@ function apply(ctx: Context, _config: Record<string, never>): void {
                 n.parent === null || n.id === 'goal' || n.status === args.status_filter
               ),
             }
-            return { tree: filtered, summary: buildSummary(tree!) }
+            return { tree: filtered, summary: buildSummary(tree) }
           }
-          return { tree: tree!, summary: buildSummary(tree!) }
+          return { tree, summary: buildSummary(tree) }
         }
 
         case 'help': {
           // No state change — the render layer answers with HELP_TEXT.
+          const tree = activeNode()
           return { tree: tree ?? { nodes: [], resolved: false }, summary: buildSummary(tree) }
         }
 
@@ -1024,9 +919,7 @@ function apply(ctx: Context, _config: Record<string, never>): void {
   // Register methodology and reminders through ops-prompts. The preset mounts
   // the group's plugins concurrently, so a one-shot ctx.get can lose the race
   // against ops-prompts' provide — fall back to ctx.inject, which defers until
-  // the service arrives. The static methodology text also falls back to a
-  // direct systemPrompt section so the prompt is never lost while waiting;
-  // the fallback is disposed once the handle path takes over.
+  // the service arrives.
   const idleLatchBySession = new Map<string, { step: number, fires: number }>()
   const flatLatchBySession = new Map<string, { trees: number, steps: number, fires: number }>()
 
