@@ -1,13 +1,13 @@
 /**
  * Projection fold tests for ops-trace.
  *
- * Validates that foldEvent correctly builds TreeState from tool/call events.
+ * Validates that foldEvent correctly builds ForestState from tool/call events.
  * These are pure-function tests — no Cordis runtime needed.
  */
 
 import { describe, it, expect } from 'vitest'
 import { foldEvent } from '../src/index.ts'
-import type { TreeState } from '../src/types.ts'
+import type { ForestState, TreeState } from '../src/types.ts'
 
 /** Build a tool/call event for trace with the given action args. */
 function ev(turn: number, args: Record<string, unknown>) {
@@ -17,9 +17,32 @@ function ev(turn: number, args: Record<string, unknown>) {
   }
 }
 
-/** Fold a sequence of action args into a TreeState. */
+/** The active tree: last unresolved, or the last tree if all resolved. */
+function lastTree(state: ForestState | null): TreeState | null {
+  if (!state || state.trees.length === 0) return null
+  for (let i = state.trees.length - 1; i >= 0; i--) {
+    if (!state.trees[i].resolved) return state.trees[i]
+  }
+  return state.trees[state.trees.length - 1]
+}
+
+/** Fold a sequence of action args and return the active tree. */
 function foldAll(actions: Array<{ turn: number, args: Record<string, unknown> }>): TreeState | null {
-  let state: TreeState | null = null
+  let state: ForestState | null = null
+  for (const { turn, args } of actions) {
+    state = foldEvent(state, ev(turn, args))
+  }
+  return lastTree(state)
+}
+
+/** Fold one more event into a forest and return the active tree. */
+function fold1(forest: ForestState | null, turn: number, args: Record<string, unknown>): TreeState | null {
+  return lastTree(foldEvent(forest, ev(turn, args)))
+}
+
+/** Fold actions and return the whole forest. */
+function foldForest(actions: Array<{ turn: number, args: Record<string, unknown> }>): ForestState | null {
+  let state: ForestState | null = null
   for (const { turn, args } of actions) {
     state = foldEvent(state, ev(turn, args))
   }
@@ -42,7 +65,7 @@ describe('projection fold', () => {
     expect(state).toBe(null)
   })
 
-  it('create_tree builds goal node', () => {
+  it('create_tree builds a one-node tree', () => {
     const state = foldAll([
       { turn: 1, args: { action: 'create_tree', goal_title: 'Pod crashing' } },
     ])
@@ -57,15 +80,17 @@ describe('projection fold', () => {
     expect(goal.parent).toBeNull()
     expect(goal.turns).toEqual([1])
     expect(goal.caused_by).toEqual([])
+    expect(goal.detail).toBeNull()
   })
 
-  it('create_tree is idempotent on replay', () => {
-    const state = foldAll([
+  it('each logged create_tree appends a tree; the newest is active', () => {
+    const forest = foldForest([
       { turn: 1, args: { action: 'create_tree', goal_title: 'A' } },
-      { turn: 2, args: { action: 'create_tree', goal_title: 'A' } },
+      { turn: 2, args: { action: 'create_tree', goal_title: 'B' } },
     ])
-    expect(state!.nodes).toHaveLength(1)
-    expect(state!.nodes[0].title).toBe('A')
+    // Every logged call is a real call — replay must not collapse them.
+    expect(forest!.trees).toHaveLength(2)
+    expect(lastTree(forest)!.nodes[0].title).toBe('B')
   })
 })
 
@@ -122,31 +147,31 @@ describe('add nodes', () => {
 // ── Status transitions ──────────────────────────────────────────────────────
 
 describe('status transitions', () => {
-  function buildWithStep() {
-    return foldAll([
+  function buildWithStep(): ForestState | null {
+    return foldForest([
       { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
       { turn: 1, args: { action: 'add_step', id: 's1', parent_id: 'goal', title: 'S1' } },
     ])
   }
 
   it('start: pending → in_progress', () => {
-    const state = foldEvent(buildWithStep(), ev(2, { action: 'start', id: 's1' }))
+    const state = fold1(buildWithStep(), 2, { action: 'start', id: 's1' })
     expect(state!.nodes.find((n) => n.id === 's1')!.status).toBe('in_progress')
     expect(state!.nodes.find((n) => n.id === 's1')!.turns).toContain(2)
   })
 
   it('complete: pending → done (skips start)', () => {
-    const state = foldEvent(buildWithStep(), ev(2, { action: 'complete', id: 's1' }))
+    const state = fold1(buildWithStep(), 2, { action: 'complete', id: 's1' })
     expect(state!.nodes.find((n) => n.id === 's1')!.status).toBe('done')
   })
 
   it('complete with summary stores it', () => {
-    const state = foldEvent(buildWithStep(), ev(2, { action: 'complete', id: 's1', summary: 'Found OOM' }))
+    const state = fold1(buildWithStep(), 2, { action: 'complete', id: 's1', summary: 'Found OOM' })
     expect(state!.nodes.find((n) => n.id === 's1')!.summary).toBe('Found OOM')
   })
 
   it('abandon: pending → dead_end', () => {
-    const state = foldEvent(buildWithStep(), ev(2, { action: 'abandon', id: 's1' }))
+    const state = fold1(buildWithStep(), 2, { action: 'abandon', id: 's1' })
     expect(state!.nodes.find((n) => n.id === 's1')!.status).toBe('dead_end')
   })
 
@@ -237,15 +262,25 @@ describe('link', () => {
 // ── Resolve ─────────────────────────────────────────────────────────────────
 
 describe('resolve', () => {
-  it('sets goal status to resolved and flag', () => {
-    const state = foldAll([
+  it('sets goal status to resolved and closes the tree', () => {
+    const forest = foldForest([
       { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
       { turn: 5, args: { action: 'resolve', summary: 'Ceph was full' } },
     ])
-    expect(state!.resolved).toBe(true)
-    const goal = state!.nodes.find((n) => n.id === 'goal')
+    expect(forest!.trees[0].resolved).toBe(true)
+    const goal = forest!.trees[0].nodes.find((n) => n.id === 'goal')
     expect(goal!.status).toBe('resolved')
     expect(goal!.summary).toBe('Ceph was full')
+  })
+
+  it('after resolve, a new create_tree becomes the active tree', () => {
+    const forest = foldForest([
+      { turn: 1, args: { action: 'create_tree', goal_title: 'G1' } },
+      { turn: 2, args: { action: 'resolve', summary: 'done' } },
+      { turn: 3, args: { action: 'create_tree', goal_title: 'G2' } },
+    ])
+    expect(lastTree(forest)!.nodes[0].title).toBe('G2')
+    expect(forest!.trees[0].resolved).toBe(true)
   })
 })
 
@@ -253,17 +288,17 @@ describe('resolve', () => {
 
 describe('purity', () => {
   it('does not mutate input state', () => {
-    const state1 = foldAll([
+    const state1 = foldForest([
       { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
       { turn: 1, args: { action: 'add_step', id: 's1', parent_id: 'goal', title: 'S1' } },
     ])
-    const nodesBefore = state1!.nodes.length
+    const nodesBefore = lastTree(state1)!.nodes.length
     const state2 = foldEvent(state1, ev(2, { action: 'add_step', id: 's2', parent_id: 'goal', title: 'S2' }))
 
-    expect(state1!.nodes).toHaveLength(nodesBefore)
-    expect(state2!.nodes).toHaveLength(nodesBefore + 1)
+    expect(lastTree(state1)!.nodes).toHaveLength(nodesBefore)
+    expect(lastTree(state2)!.nodes).toHaveLength(nodesBefore + 1)
     expect(state1).not.toBe(state2)
-    expect(state1!.nodes).not.toBe(state2!.nodes)
+    expect(state1!.trees).not.toBe(state2!.trees)
   })
 })
 
