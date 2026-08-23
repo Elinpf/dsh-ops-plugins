@@ -121,14 +121,17 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   // agent/pre-step listener: evaluate all registered reminder rules.
-  // Injects non-null results as a single plugin-sourced notice message.
+  // Non-null results are delivered through agent.inject — the message goes
+  // through the durable inbox splice (agent/inbox/spliced), so the reminder
+  // is reconstructable from the session log (model-visible ⟺ logged) and is
+  // claimed at the next step boundary.
   if (config.reminderEnabled) {
     ;(ctx.on as any)('agent/pre-step', async (payload: any, next: any) => {
       const decision = await next()
       if (decision.kind === 'reject') return decision
 
       const agent = payload?.agent
-      if (!agent) return decision
+      if (!agent || typeof agent.inject !== 'function') return decision
 
       const results: string[] = []
       for (const reminder of reminders.values()) {
@@ -137,17 +140,11 @@ export function apply(ctx: Context, config: Config): void {
       }
       if (results.length === 0) return decision
 
-      const text = results.join('\n')
-      return {
-        kind: 'enter',
-        messages: [
-          ...decision.messages,
-          createUserMessage({
-            content: [{ type: 'text', text }],
-            source: { kind: 'plugin', plugin: name, form: 'notice', summary: 'ops reminder' },
-          }),
-        ],
-      }
+      agent.inject(createUserMessage({
+        content: [{ type: 'text', text: results.join('\n') }],
+        source: { kind: 'plugin', plugin: name, form: 'notice', summary: 'ops reminder' },
+      }))
+      return decision
     }, { prepend: true })
   }
 }
