@@ -1,163 +1,186 @@
 /**
- * Reminder rule specs: trace:idle (cadence) and trace:nesting (flat-tree
- * detector). Covers triggers, resolved-tree guard, latches, and fire caps.
+ * Reminder specs: buildReminderContext derivation, the two rules as pure
+ * functions of ReminderContext, and the ReminderLatch abstraction.
  *
- * The check functions replay the full event history on every call, so specs
- * build synthetic event logs and call the captured check directly.
+ * Rules no longer parse raw event history — contexts are hand-built, which is
+ * the point of the deepened module: tests construct a small state object
+ * instead of a synthetic event log.
  */
 
 import { describe, it, expect } from 'vitest'
-import { setup, agentWithEvents, stepStart, traceCall } from './harness.ts'
+import {
+  buildReminderContext, createIdleRule, createNestingRule, ReminderLatch,
+} from '../src/reminders.ts'
+import type { ReminderContext } from '../src/reminders.ts'
+import { SessionForestStore } from '../src/session-forests.ts'
+import { foldEvent } from '../src/index.ts'
+import type { NodeStatus, TreeNode, TreeState } from '../src/types.ts'
 
-type Check = (agent: unknown) => string | null
+// ── Builders ─────────────────────────────────────────────────────────────────
 
-function reminders(): { idle: Check, nesting: Check } {
-  const { opsPrompts } = setup()
+function node(id: string, parent: string | null, status: NodeStatus = 'pending', summary: string | null = null): TreeNode {
+  return { id, title: id, status, parent, turns: [1], summary, detail: null, caused_by: [] }
+}
+
+function treeWith(nodes: TreeNode[], resolved = false): TreeState {
+  return { nodes, resolved }
+}
+
+function ctxWith(overrides: Partial<ReminderContext> & { tree: TreeState | null }): ReminderContext {
   return {
-    idle: opsPrompts.reminders.get('trace:idle')!,
-    nesting: opsPrompts.reminders.get('trace:nesting')!,
+    sessionId: 's1',
+    currentStep: 10,
+    lastTraceStep: 1,
+    forest: { trees: overrides.tree ? [overrides.tree] : [] },
+    ...overrides,
   }
 }
 
-// ── trace:idle ───────────────────────────────────────────────────────────────
+/** goal → m1 → s1,s2,s3 (flat), all steps pending. */
+function flatTree(stepCount: number, opts: { finding?: boolean, nested?: boolean, resolved?: boolean } = {}) {
+  const nodes: TreeNode[] = [
+    node('goal', null, 'goal'),
+    node('m1', 'goal', 'goal'),
+  ]
+  for (let i = 1; i <= stepCount; i++) {
+    // When nested, s3 hangs under s2 instead of the milestone
+    const parent = opts.nested && i === 3 ? 's2' : 'm1'
+    nodes.push(node(`s${i}`, parent))
+  }
+  if (opts.finding) nodes[2].summary = 'found something'
+  return treeWith(nodes, opts.resolved ?? false)
+}
 
-describe('trace:idle', () => {
-  it('stays silent without events or without a tree', () => {
-    const { idle } = reminders()
-    expect(idle(agentWithEvents([]))).toBeNull()
-    expect(idle(agentWithEvents([stepStart(1, 1)]))).toBeNull()
+// ── ReminderLatch ────────────────────────────────────────────────────────────
+
+describe('ReminderLatch', () => {
+  it('fires on first version, then only after minGap advancement', () => {
+    const latch = new ReminderLatch(5, 10)
+    expect(latch.shouldFire('s', 10)).toBe(true)
+    expect(latch.shouldFire('s', 12)).toBe(false)
+    expect(latch.shouldFire('s', 15)).toBe(true)
   })
 
-  it('fires after 5 steps without a trace update', () => {
-    const { idle } = reminders()
-    const agent = agentWithEvents([
-      stepStart(1, 1),
-      traceCall({ action: 'create_tree', goal_title: 'G' }),
-      stepStart(1, 6),
-    ])
-    expect(idle(agent)).toContain('REMINDER')
+  it('caps fires per session', () => {
+    const latch = new ReminderLatch(1, 3)
+    expect([1, 2, 3, 4, 5].map((v) => latch.shouldFire('s', v))).toEqual([true, true, true, false, false])
   })
 
-  it('stays silent below the 5-step gap', () => {
-    const { idle } = reminders()
-    const agent = agentWithEvents([
-      stepStart(1, 1),
-      traceCall({ action: 'create_tree', goal_title: 'G' }),
-      stepStart(1, 4),
-    ])
-    expect(idle(agent)).toBeNull()
+  it('is idempotent against re-evaluating the same state (the history-replay regression)', () => {
+    const latch = new ReminderLatch(1, 5)
+    expect(latch.shouldFire('s', 3)).toBe(true)
+    // Replaying history yields the same version — no refire, no reset.
+    expect(latch.shouldFire('s', 3)).toBe(false)
+    expect(latch.shouldFire('s', 3)).toBe(false)
   })
 
-  it('latches: refires only after 5 further steps', () => {
-    const { idle } = reminders()
-    const base = [stepStart(1, 1), traceCall({ action: 'create_tree', goal_title: 'G' })]
-    expect(idle(agentWithEvents([...base, stepStart(1, 6)]))).toContain('REMINDER')
-    expect(idle(agentWithEvents([...base, stepStart(1, 7)]))).toBeNull()
-    expect(idle(agentWithEvents([...base, stepStart(1, 11)]))).toContain('REMINDER')
-  })
-
-  it('never fires once the tree is resolved', () => {
-    const { idle } = reminders()
-    const agent = agentWithEvents([
-      stepStart(1, 1),
-      traceCall({ action: 'create_tree', goal_title: 'G' }),
-      traceCall({ action: 'resolve', id: 'goal', summary: 'done' }),
-      stepStart(1, 20),
-    ])
-    expect(idle(agent)).toBeNull()
-  })
-
-  it('fires at most 5 times per session', () => {
-    const { idle } = reminders()
-    const base = [stepStart(1, 1), traceCall({ action: 'create_tree', goal_title: 'G' })]
-    const results: (string | null)[] = []
-    for (let s = 6; s <= 60; s += 5) {
-      results.push(idle(agentWithEvents([...base, stepStart(1, s)])))
-    }
-    expect(results.filter((r) => r !== null)).toHaveLength(5)
-    expect(results[results.length - 1]).toBeNull()
+  it('tracks sessions independently', () => {
+    const latch = new ReminderLatch(5, 2)
+    expect(latch.shouldFire('a', 1)).toBe(true)
+    expect(latch.shouldFire('b', 1)).toBe(true)
   })
 })
 
-// ── trace:nesting ────────────────────────────────────────────────────────────
+// ── trace:idle rule ──────────────────────────────────────────────────────────
 
-describe('trace:nesting', () => {
-  function flatTreeEvents(stepCount: number, opts: { finding?: boolean, nested?: boolean } = {}) {
-    const evs: any[] = [
-      stepStart(1, 1),
-      traceCall({ action: 'create_tree', goal_title: 'G' }),
-      traceCall({ action: 'add_milestone', id: 'm1', parent_id: 'goal', title: 'M1' }),
-    ]
-    for (let i = 1; i <= stepCount; i++) {
-      // When nested, s3 hangs under s2 instead of the milestone
-      const parent = opts.nested && i === 3 ? 's2' : 'm1'
-      evs.push(traceCall({ action: 'add_step', id: `s${i}`, parent_id: parent, title: `S${i}` }))
+describe('idle rule', () => {
+  const rule = () => createIdleRule(new ReminderLatch(5, 5))
+
+  it('silent without a tree or without any trace call', () => {
+    expect(rule()(ctxWith({ tree: null }))).toBeNull()
+    expect(rule()(ctxWith({ tree: flatTree(1), lastTraceStep: 0 }))).toBeNull()
+  })
+
+  it('fires at a 5+ step gap, silent below it', () => {
+    const r = rule()
+    expect(r(ctxWith({ tree: flatTree(1), currentStep: 100, lastTraceStep: 95 }))).toContain('REMINDER')
+    expect(rule()(ctxWith({ tree: flatTree(1), currentStep: 100, lastTraceStep: 97 }))).toBeNull()
+  })
+
+  it('silent once the tree is resolved', () => {
+    expect(rule()(ctxWith({ tree: flatTree(1, { resolved: true }), currentStep: 100, lastTraceStep: 1 }))).toBeNull()
+  })
+
+  it('latch refires every 5 steps, capped at 5 per session', () => {
+    const r = rule()
+    const results = []
+    for (let s = 10; s <= 60; s += 5) {
+      results.push(r(ctxWith({ tree: flatTree(1), currentStep: s, lastTraceStep: 1 })))
     }
-    if (opts.finding) evs.push(traceCall({ action: 'complete', id: 's1', summary: 'found something' }))
-    return evs
+    expect(results.filter((x) => x !== null)).toHaveLength(5)
+  })
+})
+
+// ── trace:nesting rule ───────────────────────────────────────────────────────
+
+describe('nesting rule', () => {
+  const rule = () => createNestingRule(new ReminderLatch(1, 5))
+
+  it('silent with fewer than 3 flat steps, or without a finding', () => {
+    expect(rule()(ctxWith({ tree: flatTree(2, { finding: true }) }))).toBeNull()
+    expect(rule()(ctxWith({ tree: flatTree(3) }))).toBeNull()
+  })
+
+  it('fires on a flat tree with findings', () => {
+    expect(rule()(ctxWith({ tree: flatTree(3, { finding: true }) }))).toContain('REMINDER')
+  })
+
+  it('silent once a step nests under another step (depth ≥ 3)', () => {
+    expect(rule()(ctxWith({ tree: flatTree(4, { finding: true, nested: true }) }))).toBeNull()
+  })
+
+  it('silent once the tree is resolved', () => {
+    expect(rule()(ctxWith({ tree: flatTree(3, { finding: true, resolved: true }) }))).toBeNull()
+  })
+
+  it('refires only when the flat count grows; a new tree generation re-arms it', () => {
+    const r = rule()
+    const t = flatTree(3, { finding: true })
+    expect(r(ctxWith({ tree: t }))).toContain('REMINDER')
+    // Same shape re-evaluated — no refire (regression: latch reset on replay)
+    expect(r(ctxWith({ tree: t }))).toBeNull()
+    // Flat count grows → refire
+    expect(r(ctxWith({ tree: flatTree(4, { finding: true }) }))).toContain('REMINDER')
+    // New tree (forest length grows) with its own flat shape → fires again
+    const t2 = flatTree(3, { finding: true })
+    expect(r(ctxWith({ tree: t2, forest: { trees: [t, t2] } }))).toContain('REMINDER')
+  })
+})
+
+// ── buildReminderContext ─────────────────────────────────────────────────────
+
+describe('buildReminderContext', () => {
+  const store = () => new SessionForestStore(() => null, foldEvent, () => {})
+
+  function agentWith(events: any[], id = 's1') {
+    return { session: { id, events } }
   }
 
-  it('stays silent with fewer than 3 steps', () => {
-    const { nesting } = reminders()
-    expect(nesting(agentWithEvents(flatTreeEvents(2, { finding: true })))).toBeNull()
+  it('returns null without a session or events', () => {
+    expect(buildReminderContext({}, store())).toBeNull()
+    expect(buildReminderContext(agentWith([]), store())).toBeNull()
   })
 
-  it('stays silent when no completed step carries a finding', () => {
-    const { nesting } = reminders()
-    expect(nesting(agentWithEvents(flatTreeEvents(3)))).toBeNull()
+  it('derives step positions without parsing call arguments', () => {
+    const s = store()
+    const ctx = buildReminderContext(agentWith([
+      { type: 'step/start', data: { turn: 1, step: 2 } },
+      { type: 'tool/call', data: { name: 'trace', arguments: '{broken json' } },
+      { type: 'tool/call', data: { name: 'bash', arguments: '{}' } },
+      { type: 'step/start', data: { turn: 1, step: 9 } },
+    ]), s)!
+    expect(ctx.currentStep).toBe(1009)
+    expect(ctx.lastTraceStep).toBe(1002)
+    expect(ctx.tree).toBeNull()
   })
 
-  it('fires when 3+ steps are flat under milestones and a finding exists', () => {
-    const { nesting } = reminders()
-    expect(nesting(agentWithEvents(flatTreeEvents(3, { finding: true })))).toContain('REMINDER')
-  })
-
-  it('stays silent once a step nests under another step', () => {
-    const { nesting } = reminders()
-    expect(nesting(agentWithEvents(flatTreeEvents(4, { finding: true, nested: true })))).toBeNull()
-  })
-
-  it('never fires once the tree is resolved', () => {
-    const { nesting } = reminders()
-    const evs = flatTreeEvents(3, { finding: true })
-    evs.push(traceCall({ action: 'resolve', id: 'goal', summary: 'done' }))
-    expect(nesting(agentWithEvents(evs))).toBeNull()
-  })
-
-  it('latches on flat-step count growth, not on replay of history', () => {
-    const { nesting } = reminders()
-    // Fire once with 3 flat steps
-    expect(nesting(agentWithEvents(flatTreeEvents(3, { finding: true })))).toContain('REMINDER')
-    // Same shape re-evaluated (the old latch-reset bug refired here)
-    expect(nesting(agentWithEvents(flatTreeEvents(3, { finding: true })))).toBeNull()
-    // A new flat step → refire once
-    expect(nesting(agentWithEvents(flatTreeEvents(4, { finding: true })))).toContain('REMINDER')
-  })
-
-  it('a new tree re-arms the rule', () => {
-    const { nesting } = reminders()
-    expect(nesting(agentWithEvents(flatTreeEvents(3, { finding: true })))).toContain('REMINDER')
-    // New investigation: shape resets, so no fire until the new tree goes flat again
-    const second = [traceCall({ action: 'create_tree', goal_title: 'G2' })]
-    expect(nesting(agentWithEvents([...flatTreeEvents(3, { finding: true }), ...second]))).toBeNull()
-    const flatAgain = [
-      ...flatTreeEvents(3, { finding: true }),
-      ...second,
-      traceCall({ action: 'add_milestone', id: 'm2', parent_id: 'goal', title: 'M2' }),
-      traceCall({ action: 'add_step', id: 'x1', parent_id: 'm2', title: 'X1' }),
-      traceCall({ action: 'add_step', id: 'x2', parent_id: 'm2', title: 'X2' }),
-      traceCall({ action: 'add_step', id: 'x3', parent_id: 'm2', title: 'X3' }),
-      traceCall({ action: 'complete', id: 'x1', summary: 'found' }),
-    ]
-    expect(nesting(agentWithEvents(flatAgain))).toContain('REMINDER')
-  })
-
-  it('fires at most 5 times per session', () => {
-    const { nesting } = reminders()
-    let fires = 0
-    for (let n = 3; n <= 10; n++) {
-      if (nesting(agentWithEvents(flatTreeEvents(n, { finding: true }))) !== null) fires++
-    }
-    expect(fires).toBe(5)
+  it('reads the live tree from the store', () => {
+    const s = store()
+    s.apply({ id: 's1' }, { action: 'create_tree', goal_title: 'G' }, 1)
+    const ctx = buildReminderContext(agentWith([
+      { type: 'step/start', data: { turn: 1, step: 1 } },
+    ]), s)!
+    expect(ctx.tree).not.toBeNull()
+    expect(ctx.tree!.nodes[0].title).toBe('G')
   })
 })

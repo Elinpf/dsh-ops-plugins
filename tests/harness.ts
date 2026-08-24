@@ -85,16 +85,3 @@ export function setup(opts: {
 
   return { tool, run, render, opsPrompts, registeredProjections, effectCleanups, sessionId }
 }
-
-/** Minimal agent shape the reminder checks read. */
-export function agentWithEvents(events: any[], sessionId = 'reminder-session') {
-  return { session: { id: sessionId, events } }
-}
-
-export function stepStart(turn: number, step: number) {
-  return { type: 'step/start', data: { turn, step } }
-}
-
-export function traceCall(args: Record<string, unknown>) {
-  return { type: 'tool/call', data: { name: 'trace', arguments: JSON.stringify(args) } }
-}

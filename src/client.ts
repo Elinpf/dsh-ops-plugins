@@ -19,6 +19,7 @@ import {
   IconChevronUpOutline14,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ForestState, TreeState, TreeNode, NodeStatus } from './types.ts'
+import { depthOf, flattenTree } from './tree-layout.ts'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -434,38 +435,9 @@ function progressLabel(tree: TreeState): string {
 }
 
 // ── Tree layout ──────────────────────────────────────────────────────────────
-
-function depthOf(nodes: TreeNode[], id: string, cache: Record<string, number> = {}): number {
-  if (id in cache) return cache[id]
-  const node = nodes.find(n => n.id === id)
-  if (!node || node.parent === null) { cache[id] = 0; return 0 }
-  const d = depthOf(nodes, node.parent, cache) + 1
-  cache[id] = d
-  return d
-}
-
-/** DFS traversal: children follow their parent, preserving insertion order. */
-function treeOrder(nodes: TreeNode[]): TreeNode[] {
-  const childrenOf: Record<string, TreeNode[]> = {}
-  let root: TreeNode | undefined
-  for (const n of nodes) {
-    if (n.parent === null) { root = n; continue }
-    const list = childrenOf[n.parent] ?? (childrenOf[n.parent] = [])
-    list.push(n)
-  }
-  const result: TreeNode[] = []
-  function visit(node: TreeNode): void {
-    result.push(node)
-    const kids = childrenOf[node.id]
-    if (kids) for (const k of kids) visit(k)
-  }
-  if (root) visit(root)
-  // Orphans (parent not found) appended at the end
-  for (const n of nodes) {
-    if (!result.includes(n)) result.push(n)
-  }
-  return result
-}
+// Shared with the host: src/tree-layout.ts is the single home for sibling
+// ordering, depth, and DFS flattening — the human sees the same layout the
+// model sees.
 
 function formatContent(node: TreeNode): string {
   let text = node.title
@@ -522,7 +494,36 @@ function TreeNodeItem({ node, depth, nodes }: { node: TreeNode, depth: number, n
 
 // ── Dock component ───────────────────────────────────────────────────────────
 
-function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown | undefined }): any {
+// Per-session panel UI state. The dock unmounts when switching conversations,
+// so React state resets on every switch-back — the panel re-expanded and the
+// tree selection jumped to the first tree. Keep the two UI choices in a
+// module-level map keyed by session so they survive unmount.
+// activeIndex null = follow the active tree (auto), set = user-pinned.
+interface DockUiState { collapsed: boolean, activeIndex: number | null }
+
+const dockUiState = new Map<string, DockUiState>()
+
+function uiStateFor(sessionKey: string): DockUiState {
+  let s = dockUiState.get(sessionKey)
+  if (!s) {
+    s = { collapsed: false, activeIndex: null }
+    dockUiState.set(sessionKey, s)
+  }
+  return s
+}
+
+/** Index of the tree an investigation is live in: the last unresolved one. */
+function activeTreeIndex(forest: ForestState): number {
+  for (let i = forest.trees.length - 1; i >= 0; i--) {
+    if (!forest.trees[i].resolved) return i
+  }
+  return forest.trees.length - 1
+}
+
+function TraceDock({ useProjection, session }: {
+  useProjection?: (key: string) => unknown | undefined
+  session?: { sessionId?: string }
+}): any {
   let forest: ForestState | null = null
   try {
     if (useProjection) {
@@ -533,14 +534,22 @@ function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown
     forest = null
   }
 
-  const [activeIndex, setActiveIndex] = useState(0)
-  const [collapsed, setCollapsed] = useState(false)
+  const sessionKey = session?.sessionId ?? 'default'
+  const ui = uiStateFor(sessionKey)
+  const [activeIndex, setActiveIndexState] = useState(ui.activeIndex)
+  const [collapsed, setCollapsedState] = useState(ui.collapsed)
   const [selectorOpen, setSelectorOpen] = useState(false)
+
+  // Setters write through to the per-session map so the choice survives
+  // unmount; the React state only exists to re-render this mount.
+  const setActiveIndex = (i: number | null) => { ui.activeIndex = i; setActiveIndexState(i) }
+  const setCollapsed = (v: boolean) => { ui.collapsed = v; setCollapsedState(v) }
 
   if (!forest || !forest.trees || forest.trees.length === 0) return null
 
   const total = forest.trees.length
-  const idx = Math.min(activeIndex, total - 1)
+  // No explicit selection → show the tree the investigation is live in.
+  const idx = Math.min(activeIndex ?? activeTreeIndex(forest), total - 1)
   const tree = forest.trees[idx]
   if (!tree || !tree.nodes || tree.nodes.length === 0) return null
 
@@ -559,14 +568,14 @@ function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown
         onClick: (e: any) => {
           // Don't toggle if clicking the switcher button
           if (e.target.closest('.ops-trace-switcher')) return
-          setCollapsed(v => !v)
+          setCollapsed(!collapsed)
         },
         role: 'button',
         tabIndex: 0,
         'aria-expanded': !collapsed,
         onKeyDown: (e: any) => {
           if (e.target.closest('.ops-trace-switcher')) return
-          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed(v => !v) }
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed(!collapsed) }
         },
       },
         h('span', { className: 'ops-trace-lead', 'aria-hidden': 'true' }, h(IconChecklistOutline14)),
@@ -616,7 +625,7 @@ function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown
       // Tree content — toggled by chevron
       !collapsed && (() => {
         const cache: Record<string, number> = {}
-        const sorted = treeOrder(tree.nodes)
+        const sorted = flattenTree(tree.nodes)
         return h('ul', { className: 'ops-trace-list' },
           sorted.map(node => {
             const depth = depthOf(tree.nodes, node.id, cache)
