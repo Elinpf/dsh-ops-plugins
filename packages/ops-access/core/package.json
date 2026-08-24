@@ -7,7 +7,8 @@
   "types": "lib/index.d.ts",
   "files": [
     "lib/index.js",
-    "lib/index.d.ts",
+    "lib/mention.js",
+    "lib/**/*.d.ts",
     "cordis.patch.yml"
   ],
   "dsh": {
@@ -27,13 +28,26 @@
     "zod": "^4.4.3"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1"
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.8"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
     "@types/node": "^22.0.0",
     "typescript": "^5.4.0",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.8"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./mention": {
+      "types": "./lib/mention.d.ts",
+      "default": "./lib/mention.js"
+    },
+    "./package.json": "./package.json"
+  }
 }

@@ -13,6 +13,7 @@ import { z as zod } from 'zod'
 import * as plugin from '../src/index.ts'
 import type { AccessProvider } from '../src/index.ts'
 import { setup } from './harness.ts'
+import { decodeAccessReferenceUri, formatAccessMention } from '../src/mention.ts'
 
 // ── Fixture provider ─────────────────────────────────────────────────────────
 
@@ -197,5 +198,125 @@ describe('help', () => {
   it('no providers registered: explicit empty marker', () => {
     const { handle } = setup()
     expect(handle.help()).toContain('- (none registered)')
+  })
+})
+
+// ── mention injection (agent/pre-step) ───────────────────────────────────────
+
+describe('mention injection', () => {
+  async function drivePreStep(h: ReturnType<typeof setup>, messages: any[]) {
+    const entry = h.listeners.find((l) => l.event === 'agent/pre-step')
+    expect(entry).toBeDefined()
+    return entry!.listener(
+      { agent: { id: 'a1' } },
+      async () => ({ kind: 'enter', messages }),
+    )
+  }
+
+  function textMessage(text: string, sourceKind = 'user') {
+    return { source: { kind: sourceKind }, content: [{ type: 'text', text }] }
+  }
+
+  it('registers one prepended agent/pre-step listener', () => {
+    const h = setup()
+    const entries = h.listeners.filter((l) => l.event === 'agent/pre-step')
+    expect(entries).toHaveLength(1)
+    expect(entries[0].options).toEqual({ prepend: true })
+  })
+
+  it('rewrites mentions to readable text and injects envelope context after the citing message', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    h.write(VALID_REGISTRY)
+    const mention = formatAccessMention({ kind: 'test', name: 'alpha' })
+    const decision: any = await drivePreStep(h, [textMessage(`看看 ${mention} 怎么了`)])
+    expect(decision.kind).toBe('enter')
+    expect(decision.messages).toHaveLength(2)
+    // Direct message: readable text, mention span gone.
+    expect(decision.messages[0].content[0].text).toBe('看看 @test/alpha 怎么了')
+    // Injected context: envelope only — never fields.
+    const injected = decision.messages[1].content[0].text
+    expect(injected).toContain('<referenced-access>')
+    expect(injected).toContain('- test/alpha [staging] — alpha 环境')
+    expect(injected).not.toContain('endpoint')
+    expect(injected).not.toContain('https://alpha.internal')
+  })
+
+  it('unknown profile degrades to a note, not an error', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    h.write(VALID_REGISTRY)
+    const mention = formatAccessMention({ kind: 'test', name: 'ghost' })
+    const decision: any = await drivePreStep(h, [textMessage(`看 ${mention}`)])
+    expect(decision.messages[1].content[0].text).toContain('- test/ghost — (not found')
+  })
+
+  it('deduplicates repeated mentions of the same profile', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    h.write(VALID_REGISTRY)
+    const mention = formatAccessMention({ kind: 'test', name: 'beta' })
+    const decision: any = await drivePreStep(h, [textMessage(`${mention} 还有 ${mention}`)])
+    const injected = decision.messages[1].content[0].text
+    expect(injected.match(/- test\/beta/g)).toHaveLength(1)
+  })
+
+  it('leaves messages without mentions and non-user sources untouched', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    const plain = textMessage('没有 mention')
+    const pluginMsg = textMessage(formatAccessMention({ kind: 'test', name: 'alpha' }), 'plugin')
+    const decision: any = await drivePreStep(h, [plain, pluginMsg])
+    expect(decision.messages).toEqual([plain, pluginMsg])
+  })
+
+  it('passes a reject decision through untouched', async () => {
+    const h = setup()
+    const entry = h.listeners.find((l) => l.event === 'agent/pre-step')!
+    const reject = { kind: 'reject', reason: 'nope' }
+    const result = await entry.listener({ agent: {} }, async () => reject)
+    expect(result).toBe(reject)
+  })
+})
+
+// ── mention candidate route (GET /ops-access/list) ───────────────────────────
+
+describe('mention candidate route', () => {
+  it('serves envelope-only candidates with decodable mentions', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    h.write(VALID_REGISTRY)
+    const { status, body } = await h.listRoute()
+    expect(status).toBe(200)
+    expect(body).toHaveLength(2)
+    const alpha = body.find((c: any) => c.name === 'alpha')
+    expect(alpha).toMatchObject({ kind: 'test', description: 'alpha 环境', environment: 'staging' })
+    // Envelope only — no fields anywhere.
+    const json = JSON.stringify(body)
+    expect(json).not.toContain('endpoint')
+    expect(json).not.toContain('https://alpha.internal')
+    // Mentions decode back to the same kind/name.
+    for (const c of body) {
+      const uri = c.mention.match(/\((dsh-access:[^)]+)\)/)?.[1]
+      expect(decodeAccessReferenceUri(uri!)).toEqual({ kind: c.kind, name: c.name })
+    }
+  })
+
+  it('filters by query against kind/name and description', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    h.write(VALID_REGISTRY)
+    expect((await h.listRoute('alpha')).body.map((c: any) => c.name)).toEqual(['alpha'])
+    expect((await h.listRoute('BETA')).body.map((c: any) => c.name)).toEqual(['beta'])
+    expect((await h.listRoute('环境')).body.map((c: any) => c.name)).toEqual(['alpha'])
+    expect((await h.listRoute('zzz')).body).toEqual([])
+  })
+
+  it('serves an empty list when the registry file does not exist', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    const { status, body } = await h.listRoute()
+    expect(status).toBe(200)
+    expect(body).toEqual([])
   })
 })

@@ -14,12 +14,39 @@ export function setup(opts: { registryFile?: string } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ops-access-'))
   const registryFile = opts.registryFile ?? join(dir, 'access.yaml')
   let handle: OpsAccess | undefined
+  const listeners: Array<{ event: string, listener: (...args: any[]) => unknown, options?: unknown }> = []
+  const routes: any[] = []
+  const wctx = {
+    effect: (fn: () => () => void) => { fn() },
+    webServer: { register: (route: any) => { routes.push(route); return () => {} } },
+  }
   const ctx: any = {
     provide: (key: string, value: any) => { if (key === 'opsAccess') handle = value },
+    on: (event: string, listener: (...args: any[]) => unknown, options?: unknown) => {
+      listeners.push({ event, listener, options })
+      return () => {}
+    },
+    inject: (deps: string[], cb: (c: any) => void) => {
+      if (deps.includes('webServer')) cb(wctx)
+    },
   }
   apply(ctx, { registryFile })
   return {
     handle: handle!,
+    listeners,
+    routes,
+    /** Drive the mention-candidate route; parses the JSON body. */
+    async listRoute(query = ''): Promise<{ status: number, body: any }> {
+      const route = routes.find((r) => r.path === '/ops-access/list')
+      if (!route) return { status: 404, body: null }
+      let status = 0
+      let body: any = null
+      await route.handler(
+        { url: `/ops-access/list?query=${encodeURIComponent(query)}` },
+        { writeHead: (s: number) => { status = s }, end: (text: string) => { body = JSON.parse(text) } },
+      )
+      return { status, body }
+    },
     dir,
     registryFile,
     write: (text: string) => writeFileSync(registryFile, text),

@@ -35,6 +35,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { parse as parseYaml } from 'yaml'
 import type { ZodType } from 'zod'
+import { createUserMessage, freezeMessage } from '@deepseek-ai/dsh-llm'
+import { formatAccessMention, parseAccessReferenceText } from './mention.js'
+import type { ParsedAccessReference } from './mention.js'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -185,6 +188,35 @@ function buildProfile(provider: AccessProvider, kind: string, profileName: strin
   return profile
 }
 
+// ── Mention injection (agent/pre-step) ──────────────────────────────────────
+
+/**
+ * Render the envelope context for referenced profiles. Envelope fields only —
+ * fields (paths, connection params) never cross into model context, keeping
+ * the structural secrecy discipline. Unknown profiles degrade to a note, not
+ * an error: a stale mention must not block the step.
+ */
+async function renderAccessReferences(
+  handle: OpsAccess,
+  references: readonly ParsedAccessReference[],
+): Promise<string> {
+  const seen = new Set<string>()
+  const lines: string[] = []
+  for (const ref of references) {
+    const key = `${ref.kind}/${ref.name}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    try {
+      const profile = await handle.resolve(ref.kind, ref.name)
+      const env = profile.environment ? ` [${profile.environment}]` : ''
+      const desc = profile.description ? ` — ${profile.description}` : ''
+      lines.push(`- ${key}${env}${desc}`)
+    } catch {
+      lines.push(`- ${key} — (not found in the access registry; run list_access to see available profiles)`)
+    }
+  }
+  return `<referenced-access>\nThe user explicitly referenced these access profiles (use them with the matching tools):\n${lines.join('\n')}\n</referenced-access>`
+}
 // ── Plugin apply ─────────────────────────────────────────────────────────────
 
 export function apply(ctx: Context, config: Config): void {
@@ -266,4 +298,69 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   ctx.provide('opsAccess', handle)
+
+  // ── Mention candidate route (GET /ops-access/list) ────────────────────────
+  // The browser's @ menu reads this. Preset-plane registration of a host
+  // webServer route: reaching the preset-realm opsAccess FROM the host plane
+  // would need stateful dsh internals (serviceForAgent), which dual-instance
+  // under an external package's node_modules — so the route lives here, next
+  // to the data. Envelope fields + ready-made mentions only; fields never
+  // cross. Mounted once per process with the standing preset mount.
+  ctx.inject(['webServer'], (wctx: Context) => {
+    wctx.effect(() => (wctx as any).webServer.register({
+      kind: 'exact',
+      path: '/ops-access/list',
+      handler: async (req: any, res: any) => {
+        const url = new URL(req.url, 'http://localhost')
+        const query = url.searchParams.get('query') ?? ''
+        const needle = query.toLocaleLowerCase()
+        const profiles = await handle.list()
+        const candidates = profiles
+          .filter((p) => needle === ''
+            || `${p.kind}/${p.name}`.toLocaleLowerCase().includes(needle)
+            || p.description?.toLocaleLowerCase().includes(needle) === true)
+          .map((p) => ({
+            kind: p.kind,
+            name: p.name,
+            ...p.description === undefined ? {} : { description: p.description },
+            ...p.environment === undefined ? {} : { environment: p.environment },
+            mention: formatAccessMention({ kind: p.kind, name: p.name }),
+          }))
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(candidates))
+      },
+    }))
+  })
+
+  // ── Mention resolution (agent/pre-step) ───────────────────────────────────
+  // Parse dsh-access mentions out of direct user messages: rewrite each to a
+  // readable `@kind/name` and place one envelope-context message immediately
+  // after the citing message — mirroring session-reference's pre-step shape.
+  // Preset-plane listener, same `(ctx.on as any)` pattern as ops-prompts.
+  ;(ctx.on as any)('agent/pre-step', async (payload: any, next: any) => {
+    const decision = await next()
+    if (decision.kind === 'reject') return decision
+
+    const messages = decision.messages as any[]
+    const out: any[] = []
+    let changed = false
+    for (const message of messages) {
+      if (message.source?.kind !== 'user') { out.push(message); continue }
+      const references: ParsedAccessReference[] = []
+      const content = (message.content as any[]).map((block: any) => {
+        if (block.type !== 'text') return block
+        const parsed = parseAccessReferenceText(block.text)
+        references.push(...parsed.references)
+        return parsed.references.length === 0 ? block : { ...block, text: parsed.text }
+      })
+      if (references.length === 0) { out.push(message); continue }
+      changed = true
+      out.push(freezeMessage({ ...message, content }))
+      out.push(createUserMessage({
+        source: { kind: 'plugin', plugin: name, form: 'recall' },
+        content: [{ type: 'text', text: await renderAccessReferences(handle, references) }],
+      }))
+    }
+    return changed ? { kind: 'enter', messages: out } : decision
+  }, { prepend: true })
 }
