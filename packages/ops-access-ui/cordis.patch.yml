@@ -1,0 +1,3 @@
+- insert:
+    - id: ops-access-ui
+      name: '@deepseek-ai/dsh-ops-access-ui'

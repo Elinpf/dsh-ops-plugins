@@ -50,9 +50,23 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 
 ### 访问档案 (AccessProfile)
 
-`resolve(kind, name)` 的返回：`{ kind, name, description?, environment?, fields }`。`description`/`environment` 是所有类型通用的 envelope 字段；`fields` 是提供方 schema 校验+加工后的类型特有字段（k8s 是 `kubeconfigPath`，ceph 是 `confPath`/`keyringPath`，ssh 是 `host`/`user`/`keyPath?`/`port?`）。
+`resolve(kind, name)` 的返回：`{ kind, name, description?, environment?, fields }`。`description`/`environment` 是所有类型通用的 envelope 字段；`fields` 是提供方 schema 校验+加工后的类型特有字段（k8s 是 `kubeconfigPath`，ceph 是 `confPath`/`keyringPath`/`name?`，ssh 是 `host`/`user`/`keyPath?`/`port?`）。
 
 **安全纪律是结构性的**：fields 里只有路径和连接参数，密钥内容永不过服务的手，因此日志、错误信息、模型上下文里天然不会出现秘密。`list_access` 工具的输出连 fields 都不带——只有名字和描述。
+
+### @ 档案引用 (dsh-access mention)
+
+在 web 输入框用 `@` 选中一个档案，落进消息的是结构化 mention `@[kind/name](dsh-access:<base64url>)`（仿官方 `dsh-session:` 模式，编解码在 `ops-access/core/src/mention.ts`）。链路分三段，各在一层：
+
+- **候选路由**：`GET /ops-access/list`（core 包在 preset 平面注册进 host webServer）——envelope-only + 现成 mention
+- **@ 菜单来源**：`ops-access-ui` 包的 client 半注册 `@` 的 `access` 来源，fetch 这个路由；它的 host 行只为 client bundle 发现而存在（apply 为空）
+- **结构化注入**：core 包的 `agent/pre-step` 监听器把 mention 改写成可读的 `@kind/name`，并紧跟注入一条 `<referenced-access>` 消息（envelope-only，找不到的档案降级为提示）
+
+配套：`.dsh-target` 的 profile patch 把官方 `session-reference` 行 disabled 了（@ 菜单的 session 半因此 404 降级为空——**deployment 级**，所有模式都看不到会话来源；恢复就删那行 patch）。按 preset 精细开关需要 dsh 本体给 ui-reference 加 config，未做。
+
+### 教训：外部包不要 runtime import 带模块状态的 dsh 包
+
+外部包的依赖按 monorepo 真实路径解析，和 dsh 本体用的是**两份模块实例**。纯函数（createUserMessage、defineTool）无所谓；带模块私有状态的（typert 的 remote 标记 WeakMap、agent-presets 的 mounts 表）会静默失效——标记记在我们那份，gateway 读它那份。所以 remote 路由走普通 HTTP（webServer.register + fetch），不走 TypertRemoteService。
 
 ### 审计门 (Audit Gate) — 未来的独立插件
 
