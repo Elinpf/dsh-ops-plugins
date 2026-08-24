@@ -1,11 +1,11 @@
 /**
- * Ops access provider for Kubernetes.
+ * Ops access provider for SSH.
  *
- * Validates `k8s` registry entries (`{ kubeconfig }`) and expands the
- * kubeconfig path, exposing it as `kubeconfigPath`. Registers into the
- * ops-access capability seam (ctx.opsAccess).
+ * Validates `ssh` registry entries (`{ host, user, keyPath?, port? }`) and
+ * expands `~` in the key path. Registers into the ops-access capability seam
+ * (ctx.opsAccess).
  *
- * @module @deepseek-ai/dsh-ops-access-k8s
+ * @module @deepseek-ai/dsh-ops-access-ssh
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -16,7 +16,7 @@ import { expandHome } from '@deepseek-ai/dsh-ops-access'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
-export const name = 'ops-access-k8s'
+export const name = 'ops-access-ssh'
 
 export const inject: string[] = []
 
@@ -24,17 +24,24 @@ export const Config = z.object({})
 
 // ── Provider ─────────────────────────────────────────────────────────────────
 
-/** Zod schema for one k8s registry entry (excluding name and envelope fields). */
+/** Zod schema for one ssh registry entry (excluding name and envelope fields). */
 export const entrySchema = zod.object({
-  kubeconfig: zod.string(),
+  host: zod.string(),
+  user: zod.string(),
+  keyPath: zod.string().optional(),
+  port: zod.number().optional(),
 })
 
 export const provider: AccessProvider = {
-  kind: 'k8s',
+  kind: 'ssh',
   schema: entrySchema,
+  fieldsDoc: 'host: hostname or IP; user: login user; keyPath: optional private-key path (~ is expanded); port: optional, default 22',
   process(entry) {
-    const { kubeconfig } = entry as zod.infer<typeof entrySchema>
-    return { kubeconfigPath: expandHome(kubeconfig) }
+    const { host, user, keyPath, port } = entry as zod.infer<typeof entrySchema>
+    const fields: Record<string, unknown> = { host, user }
+    if (keyPath !== undefined) fields.keyPath = expandHome(keyPath)
+    if (port !== undefined) fields.port = port
+    return fields
   },
 }
 

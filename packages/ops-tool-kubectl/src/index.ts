@@ -3,12 +3,10 @@
  *
  * Registers two model-facing tools on top of the ops-access capability seam:
  *
- * - `kubectl` — resolves a `k8s` profile through the ops-access seam
- *   (`ctx.get('opsAccess')` at call time; never a static inject — see the
- *   comment in execute)
- *   then runs the command through the host shell service (`ctx.shell`) with a
- *   fixed 30s timeout. The result shape and render format formalize the old
- *   k8s-plugin.js prototype: `{ exitCode, stdout, stderr, command, error? }`.
+ * - `kubectl` — resolves a `k8s` profile and runs the command via ctx.shell,
+ *   injecting the profile's --kubeconfig path. All shared machinery (result
+ *   shape, output schema, render, execute template) lives in
+ *   @deepseek-ai/dsh-ops-shell-tool.
  * - `list_access` — groups `ctx.opsAccess.list()` by kind. Envelope fields
  *   only (kind/name/description/environment); profile `fields` (paths,
  *   connection params) never appear in this tool's output.
@@ -19,10 +17,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { registerProfiledShellTool } from '@deepseek-ai/dsh-ops-shell-tool'
 import type { AccessProfile, OpsAccess } from '@deepseek-ai/dsh-ops-access'
-// Type-only import: pulls in the `ctx.shell: ShellExecutor` augmentation and
-// the ShellExecRequest/ShellExecSpec/ShellRunResult shapes we run against.
-import type { ShellExecRequest } from '@deepseek-ai/dsh-shell'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -34,16 +30,7 @@ export const inject = ['shell', 'tools']
 
 export const Config = z.object({})
 
-// ── Result types ─────────────────────────────────────────────────────────────
-
-/** kubectl tool result — mirrors the prototype's shape. */
-interface KubectlResult {
-  exitCode: number
-  stdout: string
-  stderr: string
-  command: string
-  error?: string
-}
+// ── list_access types ────────────────────────────────────────────────────────
 
 /** One list_access entry: envelope fields only, never `fields`. */
 interface ListedProfile {
@@ -55,12 +42,8 @@ interface ListedProfile {
 interface ListAccessResult {
   groups: Array<{ kind: string, profiles: ListedProfile[] }>
   total: number
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function errorMessage(e: unknown): string {
-  return String((e as Error | null)?.message || e)
+  /** Present when called with help: true — the registry management doc. */
+  help?: string
 }
 
 /** Strip a profile down to its envelope fields — `fields` never crosses into tool output. */
@@ -74,78 +57,32 @@ function toListedProfile(p: AccessProfile): ListedProfile {
 // ── Plugin apply ─────────────────────────────────────────────────────────────
 
 export function apply(ctx: Context, _config: Record<string, never>): void {
-  ctx.effect(() => ctx.tools.register(defineTool({
+  registerProfiledShellTool(ctx, {
     name: 'kubectl',
+    kind: 'k8s',
+    targetParam: 'cluster',
     description: 'Execute a kubectl command on a specified K8s cluster. The plugin automatically injects the correct --kubeconfig path. Use list_access to see available cluster names.',
-    parameters: {
-      cluster: { type: 'string', required: true, description: 'K8s cluster profile name. Use list_access to see options.' },
-      command: { type: 'string', required: true, description: 'kubectl subcommand WITHOUT the kubectl prefix. Examples: get pods -n default, describe node node-1' },
+    targetParamDescription: 'K8s cluster profile name. Use list_access to see options.',
+    commandDescription: 'kubectl subcommand WITHOUT the kubectl prefix. Examples: get pods -n default, describe node node-1',
+    buildCommand(fields, command) {
+      const { kubeconfigPath } = fields as { kubeconfigPath: string }
+      return `kubectl --kubeconfig="${kubeconfigPath}" ${command}`
     },
-    output: {
-      schema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          exitCode: { type: 'number', required: true },
-          stdout: { type: 'string', required: true },
-          stderr: { type: 'string', required: true },
-          command: { type: 'string', required: true },
-          error: { type: 'string' },
-        },
-      },
-      // Pure function of (args, value): same inputs, same text, no state touched.
-      render: (_args, value) => {
-        const parts: string[] = []
-        if (value.command) parts.push(`$ ${value.command}`)
-        if (value.stdout) parts.push(value.stdout)
-        if (value.stderr) parts.push(`[stderr]\n${value.stderr}`)
-        if (value.error) parts.push(`[error] ${value.error}`)
-        if (value.exitCode !== 0 && value.exitCode !== undefined && value.exitCode !== null) {
-          parts.push(`[exit code: ${value.exitCode}]`)
-        }
-        return [{ type: 'text' as const, text: parts.join('\n\n') || '(no output)' }]
-      },
-    },
-    async execute(args, exec): Promise<KubectlResult> {
-      let fullCommand = ''
-      try {
-        // Resolve the seam per call through ctx.get: the preset mounts this
-        // group concurrently, so 'opsAccess' must not be a static inject
-        // (deadlock risk against the definition row), and by tool-call time
-        // the service is long since provided. Same discipline as the
-        // registry file itself: resolve per operation, cache nothing.
-        const opsAccess = ctx.get('opsAccess') as OpsAccess | undefined
-        if (!opsAccess) {
-          const message = 'ops-access service unavailable — is the ops-access plugin mounted in this preset?'
-          return { error: message, exitCode: -1, stdout: '', stderr: message, command: '' }
-        }
-        const profile = await opsAccess.resolve('k8s', args.cluster)
-        const kubeconfigPath = profile.fields.kubeconfigPath
-        fullCommand = `kubectl --kubeconfig="${kubeconfigPath}" ${args.command}`
-        const request: ShellExecRequest = { command: fullCommand, timeoutMs: 30000, signal: exec.signal }
-        const spec = ctx.shell.resolve(request)
-        const result = await ctx.shell.run(spec)
-        // exitCode is null when the process died from a signal — normalize to -1.
-        return { exitCode: result.exitCode ?? -1, stdout: result.stdout.text, stderr: result.stderr.text, command: fullCommand }
-      } catch (e) {
-        // Unknown cluster names land here too — resolve's message already lists
-        // the available names, so pass it through verbatim.
-        const message = errorMessage(e)
-        return { error: message, exitCode: -1, stdout: '', stderr: message, command: fullCommand }
-      }
-    },
-  })))
+  })
 
   ctx.effect(() => ctx.tools.register(defineTool({
     name: 'list_access',
-    description: 'List all registered ops access profiles (e.g. K8s clusters), grouped by kind. Shows name, description, and environment only — no paths or connection details.',
-    parameters: {},
+    description: 'List all registered ops access profiles (e.g. K8s clusters), grouped by kind. Shows name, description, and environment only — no paths or connection details. Call with help: true to learn how to add or edit profiles in the registry file.',
+    parameters: {
+      help: { type: 'boolean', description: 'Return the registry management doc (file location, format, per-kind fields) instead of the profile listing.' },
+    },
     output: {
       schema: {
         type: 'object',
         additionalProperties: false,
         properties: {
           total: { type: 'integer', required: true },
+          help: { type: 'string' },
           groups: {
             type: 'array',
             required: true,
@@ -173,6 +110,9 @@ export function apply(ctx: Context, _config: Record<string, never>): void {
         },
       },
       render: (_args, value) => {
+        if (value.help) {
+          return [{ type: 'text' as const, text: value.help }]
+        }
         if (value.total === 0) {
           return [{ type: 'text' as const, text: 'No access profiles registered — the ops-access registry file is empty or does not exist.' }]
         }
@@ -188,10 +128,15 @@ export function apply(ctx: Context, _config: Record<string, never>): void {
         return [{ type: 'text' as const, text: `Registered access profiles (${value.total}):\n${lines.join('\n')}` }]
       },
     },
-    async execute(): Promise<ListAccessResult> {
+    async execute(args: { help?: boolean }): Promise<ListAccessResult> {
+      // Same discipline as the shell tools: resolve the seam per call through
+      // ctx.get, never a static inject, never cached.
       const opsAccess = ctx.get('opsAccess') as OpsAccess | undefined
       if (!opsAccess) {
         throw new Error('ops-access service unavailable — is the ops-access plugin mounted in this preset?')
+      }
+      if (args.help) {
+        return { groups: [], total: 0, help: opsAccess.help() }
       }
       const profiles = await opsAccess.list()
       const byKind = new Map<string, ListedProfile[]>()

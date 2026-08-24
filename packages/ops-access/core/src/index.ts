@@ -63,6 +63,13 @@ export interface AccessProvider {
   schema: ZodType
   /** Optional post-validation processing (e.g. `~` expansion). Input is the schema-validated entry. */
   process?(entry: unknown, name: string): Record<string, unknown>
+  /**
+   * One-line human doc of the entry's fields, surfaced by `help()` so the
+   * agent can learn how to write a registry entry for this kind. Keep it to
+   * the fields themselves, e.g. "kubeconfig: path to the kubeconfig file (~
+   * is expanded)". The schema is the machine contract; this is its prose.
+   */
+  fieldsDoc?: string
 }
 
 /** A resolved access profile: envelope fields plus the provider-processed type-specific fields. */
@@ -83,6 +90,13 @@ export interface OpsAccess {
   resolve(kind: string, name: string): Promise<AccessProfile>
   /** List all profiles across all registered kinds. Sections without a registered provider are skipped. */
   list(): Promise<AccessProfile[]>
+  /**
+   * The registry management doc: file location, format, envelope fields, and
+   * every registered kind's field doc. Progressive disclosure — the agent
+   * pulls this when it needs to edit the registry; nothing sits in the
+   * system prompt.
+   */
+  help(): string
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -219,6 +233,35 @@ export function apply(ctx: Context, config: Config): void {
         }
       }
       return profiles
+    },
+
+    help(): string {
+      const lines: string[] = [
+        'Ops access registry — how to manage credentials',
+        '',
+        `File: ${file}`,
+        'Re-read, re-parsed, and re-validated on EVERY call — edit it with the fs tools and the change takes effect immediately, no restart.',
+        '',
+        'Format:',
+        '  version: 1',
+        '  <kind>:',
+        '    <profile-name>:',
+        '      <kind-specific fields, see below>',
+        '      description: what this profile is for   # optional, shown by list_access',
+        '      environment: prod | staging | ...        # optional; the future audit gate reads this',
+        '',
+        'Registered kinds and their entry fields:',
+      ]
+      const kinds = [...providers.values()].sort((a, b) => a.kind.localeCompare(b.kind))
+      if (kinds.length === 0) {
+        lines.push('- (none registered)')
+      }
+      for (const p of kinds) {
+        lines.push(`- ${p.kind}: ${p.fieldsDoc ?? '(no field docs provided by this provider)'}`)
+      }
+      lines.push('')
+      lines.push('Secrets never go inline — fields carry file paths and connection params only, so logs and model context never contain secret material.')
+      return lines.join('\n')
     },
   }
 

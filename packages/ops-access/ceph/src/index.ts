@@ -1,11 +1,11 @@
 /**
- * Ops access provider for SSH.
+ * Ops access provider for Ceph.
  *
- * Validates `ssh` registry entries (`{ host, user, keyPath?, port? }`) and
- * expands `~` in the key path. Registers into the ops-access capability seam
+ * Validates `ceph` registry entries (`{ confPath, keyringPath }`) and expands
+ * `~` in both paths. Registers into the ops-access capability seam
  * (ctx.opsAccess).
  *
- * @module @deepseek-ai/dsh-ops-access-ssh
+ * @module @deepseek-ai/dsh-ops-access-ceph
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -16,7 +16,7 @@ import { expandHome } from '@deepseek-ai/dsh-ops-access'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
-export const name = 'ops-access-ssh'
+export const name = 'ops-access-ceph'
 
 export const inject: string[] = []
 
@@ -24,22 +24,21 @@ export const Config = z.object({})
 
 // ── Provider ─────────────────────────────────────────────────────────────────
 
-/** Zod schema for one ssh registry entry (excluding name and envelope fields). */
+/** Zod schema for one ceph registry entry (excluding name and envelope fields). */
 export const entrySchema = zod.object({
-  host: zod.string(),
-  user: zod.string(),
-  keyPath: zod.string().optional(),
-  port: zod.number().optional(),
+  confPath: zod.string(),
+  keyringPath: zod.string(),
+  name: zod.string().optional(),
 })
 
 export const provider: AccessProvider = {
-  kind: 'ssh',
+  kind: 'ceph',
   schema: entrySchema,
+  fieldsDoc: 'confPath: path to ceph.conf; keyringPath: path to the keyring file (~ is expanded in both); name: optional cephx user (e.g. client.dsh-test) — defaults to client.admin when omitted',
   process(entry) {
-    const { host, user, keyPath, port } = entry as zod.infer<typeof entrySchema>
-    const fields: Record<string, unknown> = { host, user }
-    if (keyPath !== undefined) fields.keyPath = expandHome(keyPath)
-    if (port !== undefined) fields.port = port
+    const { confPath, keyringPath, name } = entry as zod.infer<typeof entrySchema>
+    const fields: Record<string, unknown> = { confPath: expandHome(confPath), keyringPath: expandHome(keyringPath) }
+    if (name !== undefined) fields.name = name
     return fields
   },
 }

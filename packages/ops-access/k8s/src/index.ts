@@ -1,11 +1,11 @@
 /**
- * Ops access provider for Ceph.
+ * Ops access provider for Kubernetes.
  *
- * Validates `ceph` registry entries (`{ confPath, keyringPath }`) and expands
- * `~` in both paths. Registers into the ops-access capability seam
- * (ctx.opsAccess).
+ * Validates `k8s` registry entries (`{ kubeconfig }`) and expands the
+ * kubeconfig path, exposing it as `kubeconfigPath`. Registers into the
+ * ops-access capability seam (ctx.opsAccess).
  *
- * @module @deepseek-ai/dsh-ops-access-ceph
+ * @module @deepseek-ai/dsh-ops-access-k8s
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -16,7 +16,7 @@ import { expandHome } from '@deepseek-ai/dsh-ops-access'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
-export const name = 'ops-access-ceph'
+export const name = 'ops-access-k8s'
 
 export const inject: string[] = []
 
@@ -24,18 +24,18 @@ export const Config = z.object({})
 
 // ── Provider ─────────────────────────────────────────────────────────────────
 
-/** Zod schema for one ceph registry entry (excluding name and envelope fields). */
+/** Zod schema for one k8s registry entry (excluding name and envelope fields). */
 export const entrySchema = zod.object({
-  confPath: zod.string(),
-  keyringPath: zod.string(),
+  kubeconfig: zod.string(),
 })
 
 export const provider: AccessProvider = {
-  kind: 'ceph',
+  kind: 'k8s',
   schema: entrySchema,
+  fieldsDoc: 'kubeconfig: path to the kubeconfig file (~ is expanded)',
   process(entry) {
-    const { confPath, keyringPath } = entry as zod.infer<typeof entrySchema>
-    return { confPath: expandHome(confPath), keyringPath: expandHome(keyringPath) }
+    const { kubeconfig } = entry as zod.infer<typeof entrySchema>
+    return { kubeconfigPath: expandHome(kubeconfig) }
   },
 }
 

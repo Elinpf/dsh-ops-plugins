@@ -1,21 +1,19 @@
 /**
- * Test harness for ops-tool-kubectl: mounts the plugin against a minimal mock
- * context and captures the three surfaces the plugin touches — opsAccess
- * (programmable resolve/list), shell (captures every resolve request, run
+ * Test harness for ops-tool-ceph: mounts the plugin against a minimal mock
+ * context and captures the surfaces the plugin touches — opsAccess
+ * (programmable resolve), shell (captures every resolve request, run
  * returns a programmable result), and tools.register (captures definitions).
  */
 
 import { apply } from '../src/index.ts'
 import type { AccessProfile } from '@deepseek-ai/dsh-ops-access'
 
-export const DEFAULT_KUBECONFIG = '/home/test/.kube/prod.yaml'
-
 export const DEFAULT_PROFILE: AccessProfile = {
-  kind: 'k8s',
+  kind: 'ceph',
   name: 'prod',
-  description: '生产集群',
+  description: '生产 Ceph 集群',
   environment: 'prod',
-  fields: { kubeconfigPath: DEFAULT_KUBECONFIG },
+  fields: { confPath: '/etc/ceph/prod.conf', keyringPath: '/etc/ceph/prod.keyring' },
 }
 
 export interface ShellRunOutcome {
@@ -26,8 +24,8 @@ export interface ShellRunOutcome {
 
 export function setup(opts: {
   resolveImpl?: (kind: string, name: string) => Promise<AccessProfile>
-  listImpl?: () => Promise<AccessProfile[]>
   runImpl?: (spec: any) => Promise<ShellRunOutcome>
+  withOpsAccess?: boolean
 } = {}) {
   const tools: any[] = []
   const effectCleanups: Array<() => void> = []
@@ -36,7 +34,7 @@ export function setup(opts: {
   /** Every spec handed to shell.run, in order. */
   const shellRuns: any[] = []
 
-  const calls = { resolve: 0, list: 0, shellResolve: 0, shellRun: 0 }
+  const calls = { resolve: 0, shellResolve: 0, shellRun: 0 }
 
   const opsAccess = {
     register: () => () => {},
@@ -44,15 +42,11 @@ export function setup(opts: {
       calls.resolve++
       return (opts.resolveImpl ?? (async () => DEFAULT_PROFILE))(kind, name)
     },
-    list: () => {
-      calls.list++
-      return (opts.listImpl ?? (async () => []))()
-    },
-    help: () => 'REGISTRY HELP DOC',
+    list: async () => [],
   }
 
   const ctx: any = {
-    get: (key: string) => key === 'opsAccess' ? opsAccess : undefined,
+    get: (key: string) => key === 'opsAccess' && opts.withOpsAccess !== false ? opsAccess : undefined,
     shell: {
       resolve: (request: any) => {
         calls.shellResolve++
@@ -62,7 +56,7 @@ export function setup(opts: {
       run: async (spec: any) => {
         calls.shellRun++
         shellRuns.push(spec)
-        const outcome = await (opts.runImpl ?? (async () => ({ exitCode: 0, stdoutText: 'NAME\tREADY\npod-a\t1/1\n', stderrText: '' })))(spec)
+        const outcome = await (opts.runImpl ?? (async () => ({ exitCode: 0, stdoutText: 'HEALTH_OK\n', stderrText: '' })))(spec)
         return {
           exitCode: outcome.exitCode,
           signal: null,
@@ -85,22 +79,14 @@ export function setup(opts: {
 
   apply(ctx, {})
 
-  const kubectl = tools.find((t) => t.name === 'kubectl')
-  const listAccess = tools.find((t) => t.name === 'list_access')
+  const ceph = tools.find((t) => t.name === 'ceph')
 
   /** Fresh exec context with a real AbortSignal, so tests can assert passthrough. */
   const exec = () => ({ signal: new AbortController().signal })
-  const runKubectl = (args: Record<string, unknown>, e = exec()) =>
-    kubectl.execute(args, e).then((value: any) => ({ value, exec: e }))
-  const renderKubectl = (args: Record<string, unknown>, value: any): string =>
-    kubectl.output.render(args, value)[0].text
-  const runListAccess = (args: Record<string, unknown> = {}) => listAccess.execute(args, exec())
-  const renderListAccess = (value: any): string =>
-    listAccess.output.render({}, value)[0].text
+  const runCeph = (args: Record<string, unknown>, e = exec()) =>
+    ceph.execute(args, e).then((value: any) => ({ value, exec: e }))
+  const renderCeph = (args: Record<string, unknown>, value: any): string =>
+    ceph.output.render(args, value)[0].text
 
-  return {
-    tools, kubectl, listAccess,
-    runKubectl, renderKubectl, runListAccess, renderListAccess,
-    shellRequests, shellRuns, calls, effectCleanups,
-  }
+  return { tools, ceph, runCeph, renderCeph, shellRequests, shellRuns, calls, effectCleanups }
 }

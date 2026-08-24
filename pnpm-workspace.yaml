@@ -1,5 +1,6 @@
 packages:
   - packages/*
+  - packages/ops-access/*
 
 # Match the dsh profile's linker expectations (see
 # .dsh-target/profiles/dev-target/pnpm-workspace.yaml)

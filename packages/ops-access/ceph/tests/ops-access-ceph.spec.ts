@@ -1,5 +1,5 @@
 /**
- * Unit spec for ops-access-ssh: schema accept/reject, `~` expansion in
+ * Unit spec for ops-access-ceph: schema accept/reject, `~` expansion in
  * process, and registration/disposal through a mock opsAccess context.
  */
 
@@ -12,28 +12,24 @@ import type { AccessProvider } from '@deepseek-ai/dsh-ops-access'
 describe('export shape', () => {
   it('is a function plugin: named exports, no default', () => {
     expect('default' in plugin).toBe(false)
-    expect(plugin.name).toBe('ops-access-ssh')
+    expect(plugin.name).toBe('ops-access-ceph')
     expect(plugin.inject).toEqual([])
     expect(typeof plugin.apply).toBe('function')
-    expect(plugin.provider.kind).toBe('ssh')
+    expect(plugin.provider.kind).toBe('ceph')
   })
 })
 
 // ── Schema ───────────────────────────────────────────────────────────────────
 
 describe('entry schema', () => {
-  it('accepts a minimal entry (host + user)', () => {
-    expect(plugin.entrySchema.safeParse({ host: '10.0.0.11', user: 'ops' }).success).toBe(true)
+  it('accepts a valid entry', () => {
+    expect(plugin.entrySchema.safeParse({ confPath: '/etc/ceph/ceph.conf', keyringPath: '~/.ceph/keyring' }).success).toBe(true)
   })
 
-  it('accepts a full entry with keyPath and port', () => {
-    expect(plugin.entrySchema.safeParse({ host: '10.0.0.11', user: 'ops', keyPath: '~/.ssh/id_ed25519', port: 22 }).success).toBe(true)
-  })
-
-  it('rejects a missing host or user', () => {
-    expect(plugin.entrySchema.safeParse({ user: 'ops' }).success).toBe(false)
-    expect(plugin.entrySchema.safeParse({ host: '10.0.0.11' }).success).toBe(false)
-    expect(plugin.entrySchema.safeParse({ host: '10.0.0.11', user: 'ops', port: '22' }).success).toBe(false)
+  it('rejects when either required path is missing', () => {
+    expect(plugin.entrySchema.safeParse({ confPath: '/etc/ceph/ceph.conf' }).success).toBe(false)
+    expect(plugin.entrySchema.safeParse({ keyringPath: '/etc/ceph/keyring' }).success).toBe(false)
+    expect(plugin.entrySchema.safeParse({}).success).toBe(false)
   })
 })
 
@@ -47,15 +43,22 @@ describe('process', () => {
     else process.env.HOME = originalHome
   })
 
-  it('expands ~ in keyPath and passes host/user/port through', () => {
+  it('expands ~ in both paths', () => {
     process.env.HOME = '/home/tester'
-    const fields = plugin.provider.process!({ host: '10.0.0.11', user: 'ops', keyPath: '~/.ssh/id_ed25519', port: 22 }, 'node-1')
-    expect(fields).toEqual({ host: '10.0.0.11', user: 'ops', keyPath: '/home/tester/.ssh/id_ed25519', port: 22 })
+    const fields = plugin.provider.process!({ confPath: '~/ceph/ceph.conf', keyringPath: '~/ceph/keyring' }, 'main')
+    expect(fields).toEqual({ confPath: '/home/tester/ceph/ceph.conf', keyringPath: '/home/tester/ceph/keyring' })
   })
 
-  it('omits optional fields when absent', () => {
-    const fields = plugin.provider.process!({ host: '10.0.0.11', user: 'ops' }, 'node-1')
-    expect(fields).toEqual({ host: '10.0.0.11', user: 'ops' })
+  it('leaves absolute paths untouched', () => {
+    const fields = plugin.provider.process!({ confPath: '/etc/ceph/ceph.conf', keyringPath: '/etc/ceph/keyring' }, 'main')
+    expect(fields).toEqual({ confPath: '/etc/ceph/ceph.conf', keyringPath: '/etc/ceph/keyring' })
+  })
+
+  it('passes name through when present, omits it when absent', () => {
+    const withName = plugin.provider.process!({ confPath: '/etc/ceph/ceph.conf', keyringPath: '/etc/ceph/keyring', name: 'client.dsh-test' }, 'main')
+    expect(withName.name).toBe('client.dsh-test')
+    const without = plugin.provider.process!({ confPath: '/etc/ceph/ceph.conf', keyringPath: '/etc/ceph/keyring' }, 'main')
+    expect('name' in without).toBe(false)
   })
 })
 
@@ -87,4 +90,10 @@ describe('apply', () => {
     effectCleanups[0]()
     expect(disposed).toBe(true)
   })
+})
+
+// fieldsDoc feeds ops-access help() — the agent-facing registry doc.
+it('carries fieldsDoc for help()', () => {
+  expect(typeof plugin.provider.fieldsDoc).toBe('string')
+  expect(plugin.provider.fieldsDoc!.length).toBeGreaterThan(0)
 })

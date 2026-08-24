@@ -151,4 +151,15 @@ describe('list_access', () => {
     expect(value).toEqual({ groups: [], total: 0 })
     expect(h.renderListAccess(value)).toContain('empty or does not exist')
   })
+
+  it('help: true returns the registry management doc from opsAccess.help()', async () => {
+    const h = setup({ listImpl: async () => profiles })
+    const value = await h.runListAccess({ help: true })
+    expect(value.help).toBe('REGISTRY HELP DOC')
+    expect(value.groups).toEqual([])
+    expect(value.total).toBe(0)
+    // help short-circuits the listing — list() is never called.
+    expect(h.calls.list).toBe(0)
+    expect(h.renderListAccess(value)).toBe('REGISTRY HELP DOC')
+  })
 })
