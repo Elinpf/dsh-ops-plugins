@@ -300,11 +300,10 @@ describe('render output', () => {
 // ── Registration surface ─────────────────────────────────────────────────────
 
 describe('registration surface', () => {
-  it('registers the trace tool, the projection, methodology, and two reminders', () => {
+  it('registers the trace tool, methodology, and two reminders — but NOT the projection (ops-trace-ui owns it host-plane)', () => {
     const { tool, registeredProjections, opsPrompts } = setup()
     expect(tool.name).toBe('trace')
-    expect(registeredProjections).toHaveLength(1)
-    expect(registeredProjections[0].key).toBe('trace')
+    expect(registeredProjections).toHaveLength(0)
     expect(opsPrompts.methodologies.map((m) => m.name)).toEqual(['trace:usage'])
     expect([...opsPrompts.reminders.keys()].sort()).toEqual(['trace:idle', 'trace:nesting'])
   })
@@ -317,7 +316,7 @@ describe('registration surface', () => {
     expect(text.split('\n').length).toBeLessThanOrEqual(5)
   })
 
-  it('registers nothing prompt-related when ops-prompts is absent (host-plane mount)', () => {
+  it('registers nothing prompt-related when ops-prompts is absent', () => {
     const { opsPrompts } = setup({ withOpsPrompts: false })
     expect(opsPrompts.methodologies).toHaveLength(0)
     expect(opsPrompts.reminders.size).toBe(0)
