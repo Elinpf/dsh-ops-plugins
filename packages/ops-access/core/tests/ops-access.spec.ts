@@ -167,3 +167,35 @@ describe('registryFile', () => {
     expect(profile.fields.endpoint).toBe('https://beta.internal')
   })
 })
+
+// ── help ─────────────────────────────────────────────────────────────────────
+
+describe('help', () => {
+  it('composes the management doc: file path, format, envelope fields, per-kind docs', () => {
+    const { handle, registryFile } = setup()
+    handle.register({ ...testProvider, fieldsDoc: 'endpoint: the service URL' })
+    const text = handle.help()
+    expect(text).toContain(`File: ${registryFile}`)
+    expect(text).toContain('version: 1')
+    expect(text).toContain('description:')
+    expect(text).toContain('environment:')
+    expect(text).toContain('- test: endpoint: the service URL')
+    expect(text).toContain('Re-read')
+  })
+
+  it('sorts kinds and marks providers without fieldsDoc', () => {
+    const { handle } = setup()
+    handle.register({ kind: 'beta', schema: zod.object({}) })
+    handle.register({ kind: 'alpha', schema: zod.object({}), fieldsDoc: 'x: y' })
+    const text = handle.help()
+    const alphaIdx = text.indexOf('- alpha: x: y')
+    const betaIdx = text.indexOf('- beta: (no field docs')
+    expect(alphaIdx).toBeGreaterThan(-1)
+    expect(betaIdx).toBeGreaterThan(alphaIdx)
+  })
+
+  it('no providers registered: explicit empty marker', () => {
+    const { handle } = setup()
+    expect(handle.help()).toContain('- (none registered)')
+  })
+})

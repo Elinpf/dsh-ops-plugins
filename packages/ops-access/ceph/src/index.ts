@@ -28,14 +28,18 @@ export const Config = z.object({})
 export const entrySchema = zod.object({
   confPath: zod.string(),
   keyringPath: zod.string(),
+  name: zod.string().optional(),
 })
 
 export const provider: AccessProvider = {
   kind: 'ceph',
   schema: entrySchema,
+  fieldsDoc: 'confPath: path to ceph.conf; keyringPath: path to the keyring file (~ is expanded in both); name: optional cephx user (e.g. client.dsh-test) — defaults to client.admin when omitted',
   process(entry) {
-    const { confPath, keyringPath } = entry as zod.infer<typeof entrySchema>
-    return { confPath: expandHome(confPath), keyringPath: expandHome(keyringPath) }
+    const { confPath, keyringPath, name } = entry as zod.infer<typeof entrySchema>
+    const fields: Record<string, unknown> = { confPath: expandHome(confPath), keyringPath: expandHome(keyringPath) }
+    if (name !== undefined) fields.name = name
+    return fields
   },
 }
 

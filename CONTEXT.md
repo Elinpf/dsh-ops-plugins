@@ -46,6 +46,8 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 
 **每次解析现读现校验，不缓存**——改完文件立即生效，不用重启（对齐官方 credentials 缝的 per-operation 解析纪律）。
 
+**管理文档走渐进披露**：`help()` 组合出登记文件的管理文档（文件路径、格式、envelope 字段、各 kind 的字段说明——来自提供方的 `fieldsDoc`），agent 通过 `list_access` 的 `help: true` 参数需要时拉取，系统提示词里不放。
+
 ### 访问档案 (AccessProfile)
 
 `resolve(kind, name)` 的返回：`{ kind, name, description?, environment?, fields }`。`description`/`environment` 是所有类型通用的 envelope 字段；`fields` 是提供方 schema 校验+加工后的类型特有字段（k8s 是 `kubeconfigPath`，ceph 是 `confPath`/`keyringPath`，ssh 是 `host`/`user`/`keyPath?`/`port?`）。

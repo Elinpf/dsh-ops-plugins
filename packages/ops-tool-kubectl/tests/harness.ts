@@ -48,6 +48,7 @@ export function setup(opts: {
       calls.list++
       return (opts.listImpl ?? (async () => []))()
     },
+    help: () => 'REGISTRY HELP DOC',
   }
 
   const ctx: any = {
@@ -93,7 +94,7 @@ export function setup(opts: {
     kubectl.execute(args, e).then((value: any) => ({ value, exec: e }))
   const renderKubectl = (args: Record<string, unknown>, value: any): string =>
     kubectl.output.render(args, value)[0].text
-  const runListAccess = () => listAccess.execute({} as any, exec())
+  const runListAccess = (args: Record<string, unknown> = {}) => listAccess.execute(args, exec())
   const renderListAccess = (value: any): string =>
     listAccess.output.render({}, value)[0].text
 

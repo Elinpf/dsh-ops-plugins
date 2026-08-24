@@ -32,6 +32,7 @@ export const entrySchema = zod.object({
 export const provider: AccessProvider = {
   kind: 'k8s',
   schema: entrySchema,
+  fieldsDoc: 'kubeconfig: path to the kubeconfig file (~ is expanded)',
   process(entry) {
     const { kubeconfig } = entry as zod.infer<typeof entrySchema>
     return { kubeconfigPath: expandHome(kubeconfig) }

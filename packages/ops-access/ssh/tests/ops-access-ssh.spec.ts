@@ -88,3 +88,9 @@ describe('apply', () => {
     expect(disposed).toBe(true)
   })
 })
+
+// fieldsDoc feeds ops-access help() — the agent-facing registry doc.
+it('carries fieldsDoc for help()', () => {
+  expect(typeof plugin.provider.fieldsDoc).toBe('string')
+  expect(plugin.provider.fieldsDoc!.length).toBeGreaterThan(0)
+})

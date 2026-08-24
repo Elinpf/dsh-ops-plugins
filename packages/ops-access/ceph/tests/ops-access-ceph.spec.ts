@@ -53,6 +53,13 @@ describe('process', () => {
     const fields = plugin.provider.process!({ confPath: '/etc/ceph/ceph.conf', keyringPath: '/etc/ceph/keyring' }, 'main')
     expect(fields).toEqual({ confPath: '/etc/ceph/ceph.conf', keyringPath: '/etc/ceph/keyring' })
   })
+
+  it('passes name through when present, omits it when absent', () => {
+    const withName = plugin.provider.process!({ confPath: '/etc/ceph/ceph.conf', keyringPath: '/etc/ceph/keyring', name: 'client.dsh-test' }, 'main')
+    expect(withName.name).toBe('client.dsh-test')
+    const without = plugin.provider.process!({ confPath: '/etc/ceph/ceph.conf', keyringPath: '/etc/ceph/keyring' }, 'main')
+    expect('name' in without).toBe(false)
+  })
 })
 
 // ── Registration ─────────────────────────────────────────────────────────────
@@ -83,4 +90,10 @@ describe('apply', () => {
     effectCleanups[0]()
     expect(disposed).toBe(true)
   })
+})
+
+// fieldsDoc feeds ops-access help() — the agent-facing registry doc.
+it('carries fieldsDoc for help()', () => {
+  expect(typeof plugin.provider.fieldsDoc).toBe('string')
+  expect(plugin.provider.fieldsDoc!.length).toBeGreaterThan(0)
 })

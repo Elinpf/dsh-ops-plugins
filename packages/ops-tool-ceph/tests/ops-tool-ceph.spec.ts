@@ -36,6 +36,17 @@ describe('ceph', () => {
     expect(seen).toEqual([['ceph', 'staging']])
   })
 
+  it('injects --name when the profile carries a cephx user', async () => {
+    const h = setup({
+      resolveImpl: async () => ({
+        kind: 'ceph', name: 'rook-test',
+        fields: { confPath: '/etc/ceph/rook.conf', keyringPath: '/etc/ceph/rook.keyring', name: 'client.dsh-test' },
+      }),
+    })
+    const { value } = await h.runCeph({ cluster: 'rook-test', command: 'fsid' })
+    expect(value.command).toBe('ceph --conf="/etc/ceph/rook.conf" --keyring="/etc/ceph/rook.keyring" --name client.dsh-test fsid')
+  })
+
   it('normalizes a null exitCode (signal death) to -1', async () => {
     const h = setup({ runImpl: async () => ({ exitCode: null, stdoutText: '', stderrText: '' }) })
     const { value } = await h.runCeph({ cluster: 'prod', command: 'health' })

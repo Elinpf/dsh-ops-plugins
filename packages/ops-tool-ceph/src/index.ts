@@ -34,8 +34,11 @@ export function apply(ctx: Context): void {
     targetParamDescription: 'Ceph cluster profile name. Use list_access to see options.',
     commandDescription: 'ceph subcommand WITHOUT the ceph prefix. Examples: health detail, osd tree, df',
     buildCommand(fields, command) {
-      const { confPath, keyringPath } = fields as { confPath: string, keyringPath: string }
-      return `ceph --conf="${confPath}" --keyring="${keyringPath}" ${command}`
+      const { confPath, keyringPath, name } = fields as { confPath: string, keyringPath: string, name?: string }
+      // --name matters: a non-admin keyring without it still authenticates as
+      // client.admin and fails with RADOS permission denied.
+      const nameArg = name ? ` --name ${name}` : ''
+      return `ceph --conf="${confPath}" --keyring="${keyringPath}"${nameArg} ${command}`
     },
   })
 }

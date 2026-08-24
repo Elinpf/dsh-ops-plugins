@@ -42,6 +42,8 @@ interface ListedProfile {
 interface ListAccessResult {
   groups: Array<{ kind: string, profiles: ListedProfile[] }>
   total: number
+  /** Present when called with help: true — the registry management doc. */
+  help?: string
 }
 
 /** Strip a profile down to its envelope fields — `fields` never crosses into tool output. */
@@ -70,14 +72,17 @@ export function apply(ctx: Context, _config: Record<string, never>): void {
 
   ctx.effect(() => ctx.tools.register(defineTool({
     name: 'list_access',
-    description: 'List all registered ops access profiles (e.g. K8s clusters), grouped by kind. Shows name, description, and environment only — no paths or connection details.',
-    parameters: {},
+    description: 'List all registered ops access profiles (e.g. K8s clusters), grouped by kind. Shows name, description, and environment only — no paths or connection details. Call with help: true to learn how to add or edit profiles in the registry file.',
+    parameters: {
+      help: { type: 'boolean', description: 'Return the registry management doc (file location, format, per-kind fields) instead of the profile listing.' },
+    },
     output: {
       schema: {
         type: 'object',
         additionalProperties: false,
         properties: {
           total: { type: 'integer', required: true },
+          help: { type: 'string' },
           groups: {
             type: 'array',
             required: true,
@@ -105,6 +110,9 @@ export function apply(ctx: Context, _config: Record<string, never>): void {
         },
       },
       render: (_args, value) => {
+        if (value.help) {
+          return [{ type: 'text' as const, text: value.help }]
+        }
         if (value.total === 0) {
           return [{ type: 'text' as const, text: 'No access profiles registered — the ops-access registry file is empty or does not exist.' }]
         }
@@ -120,12 +128,15 @@ export function apply(ctx: Context, _config: Record<string, never>): void {
         return [{ type: 'text' as const, text: `Registered access profiles (${value.total}):\n${lines.join('\n')}` }]
       },
     },
-    async execute(): Promise<ListAccessResult> {
+    async execute(args: { help?: boolean }): Promise<ListAccessResult> {
       // Same discipline as the shell tools: resolve the seam per call through
       // ctx.get, never a static inject, never cached.
       const opsAccess = ctx.get('opsAccess') as OpsAccess | undefined
       if (!opsAccess) {
         throw new Error('ops-access service unavailable — is the ops-access plugin mounted in this preset?')
+      }
+      if (args.help) {
+        return { groups: [], total: 0, help: opsAccess.help() }
       }
       const profiles = await opsAccess.list()
       const byKind = new Map<string, ListedProfile[]>()

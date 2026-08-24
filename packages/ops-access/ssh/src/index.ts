@@ -35,6 +35,7 @@ export const entrySchema = zod.object({
 export const provider: AccessProvider = {
   kind: 'ssh',
   schema: entrySchema,
+  fieldsDoc: 'host: hostname or IP; user: login user; keyPath: optional private-key path (~ is expanded); port: optional, default 22',
   process(entry) {
     const { host, user, keyPath, port } = entry as zod.infer<typeof entrySchema>
     const fields: Record<string, unknown> = { host, user }
