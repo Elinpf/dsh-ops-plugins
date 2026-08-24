@@ -4,7 +4,7 @@
  * Agent-driven, append-only event log, tree + unique resolved convergence terminal.
  * See `.scratch/ops-trace/research/` for the full design.
  *
- * @module @deepseek-ai/dsh-ops-trace
+ * @module @deepseek-ai/dsh-ops-tool-trace
  */
 
 import z from '@deepseek-ai/schemastery'
@@ -22,6 +22,9 @@ import type { OpsPromptsHandle } from '@deepseek-ai/dsh-ops-prompts'
 declare module '@deepseek-ai/cordis' {
   interface Context {
     opsPrompts?: OpsPromptsHandle
+    // Declared once here (the shared home): the tool half reads snapshots,
+    // the ui half (ops-trace-ui) calls register. Splitting the declaration
+    // across packages would make the two augmentations conflict on merge.
     sessionProjections?: {
       register(def: {
         key: string
@@ -104,7 +107,7 @@ function currentTurn(exec: ToolRunContext): number {
  * No custom session event types are needed — tool/call is a known type.
  */
 /** Minimal event shape that foldEvent reads from the session log. */
-interface FoldEvent {
+export interface FoldEvent {
   type: string
   data: {
     name?: string
@@ -337,6 +340,20 @@ const forestStateSchema = zod.object({
 
 const traceProjectionSchema = zod.union([forestStateSchema, zod.null()])
 
+/**
+ * The shared projection definition, registered host-plane by ops-trace-ui
+ * (the panel's package) and consumed here through snapshots. One home for
+ * key/schema/fold/stateVersion so the two packages can never drift apart.
+ */
+export const traceProjection = {
+  key: 'trace',
+  schema: traceProjectionSchema,
+  init: (): ForestState | null => null,
+  apply: foldEvent,
+  view: (s: ForestState | null): ForestState | null => s,
+  stateVersion: 3,
+}
+
 // ── Tree renderers (model-visible output) ────────────────────────────────────
 
 /** Status → emoji for compact rendering. */
@@ -560,21 +577,15 @@ interface ProjectionRegistryLike {
 }
 
 function apply(ctx: Context, _config: Record<string, never>): void {
-  // ── Register session projection (09) ──────────────────────────────────────
-  // Store the registry reference so the tool's execute can read the current
-  // projection state via snapshot(session) — the host-side API (not faceOf,
-  // which is client-only).
+  // ── Session projection access (09) ─────────────────────────────────────────
+  // The projection itself is registered host-plane by ops-trace-ui (the
+  // panel's package) — see its src/index.ts. Here we only capture the
+  // registry reference so the tool's execute can read the current projection
+  // state via snapshot(session) — the host-side API (not faceOf, which is
+  // client-only).
   let projectionRegistry: ProjectionRegistryLike | null = null
   ctx.inject(['sessionProjections'], (pctx: Context) => {
     projectionRegistry = pctx.sessionProjections ?? null
-    pctx.sessionProjections!.register({
-      key: 'trace',
-      schema: traceProjectionSchema,
-      init: () => null,
-      apply: foldEvent,
-      view: (s: ForestState | null) => s,
-      stateVersion: 3,
-    })
   })
 
   // The store owns the in-process forest map and the seeding protocol; the
@@ -881,16 +892,14 @@ function apply(ctx: Context, _config: Record<string, never>): void {
   if (immediateOpsPrompts !== undefined) {
     registerThroughHandle(immediateOpsPrompts)
   } else {
-    // No direct systemPrompt fallback: the bundle patch also mounts this
-    // plugin host-plane (for client-bundle discovery), where ops-prompts
-    // never arrives — a fallback section registered there would stay forever
-    // and duplicate the methodology text in every prompt. When ops-prompts is
-    // genuinely absent, the tool description and the help action still carry
-    // the usage documentation.
+    // No direct systemPrompt fallback: this plugin is preset-plane only
+    // (ops-trace-ui owns the host-plane projection + panel). When ops-prompts
+    // is genuinely absent, the tool description and the help action still
+    // carry the usage documentation.
     ctx.inject(['opsPrompts'], (pctx: Context) => {
       registerThroughHandle(pctx.opsPrompts!)
     })
   }
 }
 
-export { Config, apply, inject, name, foldEvent }
+export { Config, apply, inject, name, foldEvent, traceProjectionSchema }

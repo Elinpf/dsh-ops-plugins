@@ -14,7 +14,7 @@
  * Everything here is a pure function of the node list — safe to call from
  * render paths that re-run on session-log replay.
  *
- * @module @deepseek-ai/dsh-ops-trace/tree-layout
+ * @module @deepseek-ai/dsh-ops-tool-trace/tree-layout
  */
 
 import type { TreeNode } from './types.js'

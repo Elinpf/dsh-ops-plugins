@@ -8,7 +8,7 @@
  * Bundled by esbuild into lib/client.js in the ModuleLoader lazy-CJS format.
  * React is an external (provided by the browser module table).
  *
- * @module @deepseek-ai/dsh-ops-trace/client
+ * @module @deepseek-ai/dsh-ops-trace-ui/client
  */
 
 import { createElement as h, useState } from 'react'
@@ -18,8 +18,8 @@ import {
   IconChevronDownOutline14,
   IconChevronUpOutline14,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { ForestState, TreeState, TreeNode, NodeStatus } from './types.ts'
-import { depthOf, flattenTree } from './tree-layout.ts'
+import type { ForestState, TreeState, TreeNode, NodeStatus } from '@deepseek-ai/dsh-ops-tool-trace/types'
+import { depthOf, flattenTree } from '@deepseek-ai/dsh-ops-tool-trace/tree-layout'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 

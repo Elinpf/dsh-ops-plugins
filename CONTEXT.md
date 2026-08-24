@@ -7,11 +7,15 @@
 
 ### 插件集合 (dsh-ops-plugins)
 
-面向运维场景的 dsh 插件集合。单仓库 monorepo，`packages/` 下每个包有独立版本号、独立发布到 npm。开发期跨包依赖写 `workspace:*`，发布时由 pnpm 改写成真实版本号。
+面向运维场景的 dsh 插件集合。单仓库 monorepo，`packages/` 下每个包有独立版本号、独立发布到 npm。开发期跨包依赖写 workspace 协议（`workspace:*` / `workspace:^x.y.z`），发布时由 pnpm 改写成真实版本号。注意：`dependencies` 里写裸 semver（如 `^0.1.0`）指向未发布的本仓库包，会让 pnpm 去 npm registry 找而 404——运行时依赖必须靠 workspace 协议；纯类型引用（`import type`）走 `peerDependencies` 裸 semver + `devDependencies` workspace 链接，peer 不会被拉取，是安全的。
 
-### ops-trace
+### ops-tool-trace
 
-**调查树** 工具插件。给 agent 一个 `trace` 工具，把事件排查组织成树形推理链，替代 todo 式的扁平清单。带一个 web 面板（`src/client.ts`）让人实时看到这棵树。
+**调查树** 工具插件（preset 平面，只对 ops 预设生效）。给 agent 一个 `trace` 工具，把事件排查组织成树形推理链，替代 todo 式的扁平清单。
+
+### ops-trace-ui
+
+**调查树面板** 插件（host 平面薄壳）。做两件事：注册共享的 `trace` 会话投影（定义唯一事实源在 ops-tool-trace 的 `traceProjection`），和携带 web 面板代码（`src/client.ts`）让浏览器发现。**不注册任何工具、不碰提示词**。必须在 host 平面——web 端靠扫描 host 组合条目发现面板代码，拿掉它面板就消失。这也是 trace 拆成两个包的原因：工具要按 preset 隔离，面板必须全局。
 
 ### ops-prompts
 
@@ -20,7 +24,7 @@
 - **方法论段落 (methodology section)** — 静态文本，进系统提示词
 - **提醒 (reminder)** — 一个检查函数，agent 每步执行前调用，条件成立就往 agent 的收件箱注入一条即时提示（持久、走 session 日志）
 
-ops-trace 通过它注册教义核心段和两条提醒规则；ops-prompts 自身不带业务内容。
+ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts 自身不带业务内容。
 
 ## 凭证体系 (ops-access)
 
@@ -138,7 +142,7 @@ session 事件日志是唯一真账本，树状态由事件 fold 而来。模型
 
 ### 树布局 (tree-layout)
 
-`src/tree-layout.ts`：排序（进行中优先、goal 最后）、索引、深度、DFS 展开的纯函数。**宿主渲染器和 web 面板共用同一份**——人看到的树和模型看到的树是同一个布局。
+`src/tree-layout.ts`：排序（进行中优先、goal 最后）、索引、深度、DFS 展开的纯函数。**宿主渲染器和 web 面板共用同一份**——人看到的树和模型看到的树是同一个布局。面板在另一个包（ops-trace-ui），通过 `@deepseek-ai/dsh-ops-tool-trace/tree-layout` 子路径导出共享。
 
 ## Web 面板词汇
 

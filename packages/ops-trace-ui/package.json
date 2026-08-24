@@ -1,0 +1,55 @@
+{
+  "name": "@deepseek-ai/dsh-ops-trace-ui",
+  "version": "0.1.0",
+  "description": "Host-plane half of the ops trace feature — registers the shared trace session projection and ships the web panel client bundle. The tool itself lives in @deepseek-ai/dsh-ops-tool-trace (preset plane).",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "lib/**/*.d.ts",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "build": "tsc && node esbuild.config.mjs",
+    "prepare": "npm run build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-ops-tool-trace": "workspace:^0.1.0",
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-session-projection": "^0.0.1-rc.1",
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-session-projection": "0.0.1-rc.1",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.11"
+  },
+  "license": "MIT"
+}
