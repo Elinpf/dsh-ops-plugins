@@ -1,0 +1,7 @@
+packages:
+  - packages/*
+
+# Match the dsh profile's linker expectations (see
+# .dsh-target/profiles/dev-target/pnpm-workspace.yaml)
+nodeLinker: hoisted
+autoInstallPeers: false
