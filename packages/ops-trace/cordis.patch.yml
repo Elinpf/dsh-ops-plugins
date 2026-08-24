@@ -1,0 +1,3 @@
+- insert:
+    - id: tool-ops-trace
+      name: '@deepseek-ai/dsh-ops-trace'
