@@ -1,0 +1,42 @@
+{
+  "name": "@deepseek-ai/dsh-ops-kubectl",
+  "version": "0.1.0",
+  "description": "kubectl tool consumer of the ops-access seam — resolves k8s profiles into kubeconfig paths and runs kubectl via ctx.shell; list_access surfaces registered profiles without secret fields.",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib/index.js",
+    "lib/index.d.ts",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-ops-access": "^0.1.0",
+    "@deepseek-ai/dsh-shell": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.0.1-rc.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-ops-access": "workspace:*",
+    "@deepseek-ai/dsh-shell": "0.0.1-rc.5",
+    "@deepseek-ai/dsh-tools": "0.0.1-rc.1",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.11"
+  },
+  "license": "MIT"
+}

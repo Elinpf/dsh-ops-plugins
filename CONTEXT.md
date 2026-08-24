@@ -22,6 +22,32 @@
 
 ops-trace 通过它注册教义核心段和两条提醒规则；ops-prompts 自身不带业务内容。
 
+## 凭证体系 (ops-access)
+
+### 能力缝三角色
+
+凭证体系按 dsh 的能力缝拆成三层，各是一个包：
+
+- **定义包 ops-access** — 拥有 `ctx.opsAccess` 服务和登记文件，定义词汇类型
+- **提供方 ops-access-k8s / -ceph / -ssh** — 每种凭证类型一个，只有两样东西：该类型的 zod schema 和字段加工（如 `~` 展开）。通过 `register(kind, provider)` 注册进定义包
+- **消费方 ops-tool-kubectl** — 模型工具（`kubectl`、`list_access`），按名字解析凭证后自己拼命令
+
+### 登记文件 (access.yaml)
+
+凭证清单的唯一事实源（默认 `~/.dsh-ops/access.yaml`，Config 里只有 `registryFile` 一个路径字段）。按类型分段：`version: 1` 顶字段，段落名是 kind，条目 key 是档案名。**只显式登记，无自动发现**——发现逻辑是退役原型 k8s-plugin.js 里最脆的部分。
+
+**每次解析现读现校验，不缓存**——改完文件立即生效，不用重启（对齐官方 credentials 缝的 per-operation 解析纪律）。
+
+### 访问档案 (AccessProfile)
+
+`resolve(kind, name)` 的返回：`{ kind, name, description?, environment?, fields }`。`description`/`environment` 是所有类型通用的 envelope 字段；`fields` 是提供方 schema 校验+加工后的类型特有字段（k8s 是 `kubeconfigPath`，ceph 是 `confPath`/`keyringPath`，ssh 是 `host`/`user`/`keyPath?`/`port?`）。
+
+**安全纪律是结构性的**：fields 里只有路径和连接参数，密钥内容永不过服务的手，因此日志、错误信息、模型上下文里天然不会出现秘密。`list_access` 工具的输出连 fields 都不带——只有名字和描述。
+
+### 审计门 (Audit Gate) — 未来的独立插件
+
+在 `tools/pre-execute`（waterfall 决策链）上挂监听器，读档案的 `environment` 标签做 allow/deny/ask 分级。不需要新事件：工具调用和审批结果本来就在 session 日志里；唯一可能新增的是一条 log-only 的"判定理由"事件。工具本身保持 dumb，策略不住工具里。
+
 ## 调查树 (Investigation Tree)
 
 ### 树 (Tree) 与 森林 (Forest)
@@ -140,4 +166,4 @@ session 事件日志是唯一真账本，树状态由事件 fold 而来。模型
 4. `systemctl restart dsh-ops` 重启测试实例
 5. web（127.0.0.1:3082）跑真实排查 session 验证行为
 
-测试实例在 `../.dsh-target`（profile `dev-target`），两个插件以 `link:` 方式接入。真实 session 的行为验证（提醒触发、树渲染）只能在这里做，单测替代不了。
+测试实例在 `../.dsh-target`（profile `dev-target`），所有插件以 `link:` 方式接入。真实 session 的行为验证（提醒触发、树渲染、凭证解析）只能在这里做，单测替代不了。

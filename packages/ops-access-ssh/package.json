@@ -1,0 +1,39 @@
+{
+  "name": "@deepseek-ai/dsh-ops-access-ssh",
+  "version": "0.1.0",
+  "description": "Ops access provider for SSH — validates ssh registry entries and expands key paths.",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib/index.js",
+    "lib/index.d.ts",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-ops-access": "^0.1.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-ops-access": "workspace:*",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.11"
+  },
+  "license": "MIT"
+}
