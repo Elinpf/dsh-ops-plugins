@@ -1,7 +1,7 @@
 {
-  "name": "@deepseek-ai/dsh-ops-kubectl",
+  "name": "@deepseek-ai/dsh-ops-tool-ceph",
   "version": "0.1.0",
-  "description": "kubectl tool consumer of the ops-access seam — resolves k8s profiles into kubeconfig paths and runs kubectl via ctx.shell; list_access surfaces registered profiles without secret fields.",
+  "description": "ceph tool consumer of the ops-access seam — resolves ceph profiles and runs commands via ctx.shell, injecting credential paths automatically.",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -26,9 +26,7 @@
     "@deepseek-ai/dsh-ops-shell-tool": "workspace:^0.1.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-ops-access": "^0.1.0",
-    "@deepseek-ai/dsh-tools": "^0.0.1-rc.1"
+    "@deepseek-ai/cordis": "^4.0.1"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",

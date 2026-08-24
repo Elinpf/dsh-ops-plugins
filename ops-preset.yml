@@ -286,3 +286,9 @@
 
     - id: ops-tool-kubectl
       name: '@deepseek-ai/dsh-ops-kubectl'
+
+    - id: ops-tool-ceph
+      name: '@deepseek-ai/dsh-ops-tool-ceph'
+
+    - id: ops-tool-ssh
+      name: '@deepseek-ai/dsh-ops-tool-ssh'

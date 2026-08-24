@@ -30,11 +30,15 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 
 ### 能力缝三角色
 
-凭证体系按 dsh 的能力缝拆成三层，各是一个包：
+凭证体系按 dsh 的能力缝拆成三层，全部收在 `packages/ops-access/` 大文件夹里（分层一眼可见）：
 
-- **定义包 ops-access** — 拥有 `ctx.opsAccess` 服务和登记文件，定义词汇类型
-- **提供方 ops-access-k8s / -ceph / -ssh** — 每种凭证类型一个，只有两样东西：该类型的 zod schema 和字段加工（如 `~` 展开）。通过 `register(kind, provider)` 注册进定义包
-- **消费方 ops-tool-kubectl** — 模型工具（`kubectl`、`list_access`），按名字解析凭证后自己拼命令
+- **定义包 ops-access/core**（npm 名 `@deepseek-ai/dsh-ops-access`，不变）— 拥有 `ctx.opsAccess` 服务和登记文件，定义词汇类型
+- **提供方 ops-access/{k8s,ceph,ssh}** — 每种凭证类型一个，只有两样东西：该类型的 zod schema 和字段加工（如 `~` 展开）。通过 `register(kind, provider)` 注册进定义包
+- **消费方 ops-tool-{kubectl,ceph,ssh}** — 模型工具，按名字解析凭证后拼命令。留在 `packages/` 顶层：它们是工具层，不是凭证层
+
+### ops-shell-tool
+
+**命令工具工厂**（`packages/ops-shell-tool`，纯库不是插件）。所有消费方共享的那套机器的唯一事实源：标准结果形状 `{ exitCode, stdout, stderr, command, error? }`、output schema、render、execute 模板（`ctx.get('opsAccess')` 现解析 → buildCommand 拼命令 → `ctx.shell` 执行，30s 超时，信号死亡 exitCode 归一为 -1，错误原样透传）。消费方只剩身份四件：工具名、解析的 kind、档案名参数名、`buildCommand`。
 
 ### 登记文件 (access.yaml)
 
