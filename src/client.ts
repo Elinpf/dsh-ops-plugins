@@ -19,6 +19,7 @@ import {
   IconChevronUpOutline14,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ForestState, TreeState, TreeNode, NodeStatus } from './types.ts'
+import { depthOf, flattenTree } from './tree-layout.ts'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -434,38 +435,9 @@ function progressLabel(tree: TreeState): string {
 }
 
 // ── Tree layout ──────────────────────────────────────────────────────────────
-
-function depthOf(nodes: TreeNode[], id: string, cache: Record<string, number> = {}): number {
-  if (id in cache) return cache[id]
-  const node = nodes.find(n => n.id === id)
-  if (!node || node.parent === null) { cache[id] = 0; return 0 }
-  const d = depthOf(nodes, node.parent, cache) + 1
-  cache[id] = d
-  return d
-}
-
-/** DFS traversal: children follow their parent, preserving insertion order. */
-function treeOrder(nodes: TreeNode[]): TreeNode[] {
-  const childrenOf: Record<string, TreeNode[]> = {}
-  let root: TreeNode | undefined
-  for (const n of nodes) {
-    if (n.parent === null) { root = n; continue }
-    const list = childrenOf[n.parent] ?? (childrenOf[n.parent] = [])
-    list.push(n)
-  }
-  const result: TreeNode[] = []
-  function visit(node: TreeNode): void {
-    result.push(node)
-    const kids = childrenOf[node.id]
-    if (kids) for (const k of kids) visit(k)
-  }
-  if (root) visit(root)
-  // Orphans (parent not found) appended at the end
-  for (const n of nodes) {
-    if (!result.includes(n)) result.push(n)
-  }
-  return result
-}
+// Shared with the host: src/tree-layout.ts is the single home for sibling
+// ordering, depth, and DFS flattening — the human sees the same layout the
+// model sees.
 
 function formatContent(node: TreeNode): string {
   let text = node.title
@@ -616,7 +588,7 @@ function TraceDock({ useProjection }: { useProjection?: (key: string) => unknown
       // Tree content — toggled by chevron
       !collapsed && (() => {
         const cache: Record<string, number> = {}
-        const sorted = treeOrder(tree.nodes)
+        const sorted = flattenTree(tree.nodes)
         return h('ul', { className: 'ops-trace-list' },
           sorted.map(node => {
             const depth = depthOf(tree.nodes, node.id, cache)

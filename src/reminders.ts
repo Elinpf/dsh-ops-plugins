@@ -20,6 +20,8 @@
 import { activeTree } from './types.js'
 import type { ForestState, TreeState } from './types.js'
 import type { SessionForestStore } from './session-forests.js'
+import { TRIGGER_NODE_QUESTION } from './doctrine.js'
+import { depthOf } from './tree-layout.js'
 
 /** What a reminder rule sees. Derived once per pre-step, shared by all rules. */
 export interface ReminderContext {
@@ -95,19 +97,6 @@ export class ReminderLatch {
   }
 }
 
-/** Depth of a node via its parent chain (root goal = 0). Cycle-safe. */
-function depthOf(tree: TreeState, id: string): number {
-  let depth = 0
-  let current = tree.nodes.find((n) => n.id === id)
-  const seen = new Set<string>()
-  while (current && current.parent !== null && !seen.has(current.id)) {
-    seen.add(current.id)
-    depth++
-    current = tree.nodes.find((n) => n.id === current!.parent)
-  }
-  return depth
-}
-
 /**
  * The idle rule: nudge when an active investigation hasn't updated trace in
  * 5+ steps. Silent when there is no tree or the tree is resolved.
@@ -140,7 +129,7 @@ export function createNestingRule(latch: ReminderLatch): (ctx: ReminderContext) 
     let flatCount = 0
     let hasDeep = false
     for (const n of nonRoot) {
-      const d = depthOf(tree, n.id)
+      const d = depthOf(tree.nodes, n.id)
       if (d === 2) flatCount++
       else if (d >= 3) hasDeep = true
     }
@@ -151,6 +140,6 @@ export function createNestingRule(latch: ReminderLatch): (ctx: ReminderContext) 
     // re-arms the rule.
     const version = ctx.forest.trees.length * 1000 + flatCount
     if (!latch.shouldFire(ctx.sessionId, version)) return null
-    return '[REMINDER] 你的 step 全部直接挂在 milestone 下, 但已有 step 带着发现完成。后续 add_step 先问"我为什么现在要做这个动作?"——如果答案是某个 step 的发现, parent_id 用那个 step 的 id。'
+    return `[REMINDER] 你的 step 全部直接挂在 milestone 下, 但已有 step 带着发现完成。后续 add_step 先问"${TRIGGER_NODE_QUESTION}"——如果答案是某个 step 的发现, parent_id 用那个 step 的 id。`
   }
 }

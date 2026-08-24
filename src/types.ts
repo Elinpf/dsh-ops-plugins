@@ -7,7 +7,9 @@
 // ── Node status (05 state machine) ──────────────────────────────────────────
 
 /**
- * The six node statuses from the state machine.
+ * The six node statuses from the state machine — the single source of truth
+ * for the status set. The zod projection schema, the tool's output JSON
+ * schema, and the status_filter enum all derive from this list.
  *
  * - `goal` — a stable target (milestone or final goal); uses dashed connectors
  * - `pending` — a step not yet started; uses thin dashed connectors
@@ -16,7 +18,9 @@
  * - `dead_end` — proven unviable; NOT a terminal state (can re-explore)
  * - `resolved` — final goal achieved; terminal state
  */
-export type NodeStatus = 'goal' | 'pending' | 'in_progress' | 'done' | 'dead_end' | 'resolved'
+export const NODE_STATUSES = ['goal', 'pending', 'in_progress', 'done', 'dead_end', 'resolved'] as const
+
+export type NodeStatus = typeof NODE_STATUSES[number]
 
 // ── Tree node (projection state) ─────────────────────────────────────────────
 
