@@ -108,6 +108,21 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
+// ── Provider registration helper ─────────────────────────────────────────────
+
+/**
+ * Register a provider into the seam from a provider plugin's `apply()`. The
+ * preset mounts sibling rows concurrently, so a static inject on 'opsAccess'
+ * can deadlock the loader against the definition row — this defers through
+ * `ctx.inject` and ties the registration to the plugin's effect lifecycle.
+ * Provider packages should call this and nothing else.
+ */
+export function registerAccessProvider(ctx: Context, provider: AccessProvider): void {
+  ctx.inject(['opsAccess'], (pctx: Context) => {
+    pctx.effect(() => pctx.opsAccess!.register(provider))
+  })
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Expand a leading `~` (or `~/`) to the user's home directory. */

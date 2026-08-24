@@ -12,7 +12,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import type { AccessProvider } from '@deepseek-ai/dsh-ops-access'
-import { expandHome } from '@deepseek-ai/dsh-ops-access'
+import { expandHome, registerAccessProvider } from '@deepseek-ai/dsh-ops-access'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -46,11 +46,5 @@ export const provider: AccessProvider = {
 // ── Plugin apply ─────────────────────────────────────────────────────────────
 
 export function apply(ctx: Context, _config: Record<string, never>): void {
-  // The preset mounts the group's rows concurrently, so a static inject on
-  // 'opsAccess' can deadlock the loader against the definition row. Defer via
-  // ctx.inject — the callback fires once the service arrives (same pattern as
-  // ops-trace → ops-prompts).
-  ctx.inject(['opsAccess'], (pctx: Context) => {
-    pctx.effect(() => pctx.opsAccess!.register(provider))
-  })
+  registerAccessProvider(ctx, provider)
 }

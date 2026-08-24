@@ -46,6 +46,36 @@ describe('export shape', () => {
   })
 })
 
+// ── registerAccessProvider ───────────────────────────────────────────────────
+
+describe('registerAccessProvider', () => {
+  it('defers through ctx.inject on opsAccess and ties registration to the effect lifecycle', () => {
+    const registered: AccessProvider[] = []
+    let disposed = false
+    const effectCleanups: Array<() => void> = []
+    const pctx: any = {
+      opsAccess: {
+        register: (p: AccessProvider) => {
+          registered.push(p)
+          return () => { disposed = true }
+        },
+      },
+      effect: (fn: () => () => void) => { effectCleanups.push(fn()) },
+    }
+    let injectedDeps: string[] = []
+    const ctx: any = {
+      inject: (deps: string[], cb: (c: any) => void) => { injectedDeps = deps; cb(pctx) },
+    }
+
+    plugin.registerAccessProvider(ctx, testProvider)
+    expect(injectedDeps).toEqual(['opsAccess'])
+    expect(registered).toEqual([testProvider])
+    expect(effectCleanups).toHaveLength(1)
+    effectCleanups[0]()
+    expect(disposed).toBe(true)
+  })
+})
+
 // ── register / dispose ───────────────────────────────────────────────────────
 
 describe('register', () => {
