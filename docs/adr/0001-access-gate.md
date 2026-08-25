@@ -32,9 +32,9 @@ dsh 源码验证（tag dsh-v0.1.0-rc.8）：`tools/pre-execute` payload 的 `exe
 
 申请入口采用**显式 `request_access` 工具**（agent 陈述方案、人一次批准、入账），代发点在 resolve（按 agent 上下文换发 rw）。初稿曾设想"pre-execute 逐调用 ask"——那本质仍是逐命令打断，与决策 4 的变更单模式相悖，spec 定稿时修正。
 
-### 6. rw 凭证不进 access.yaml
+### 6. rw 凭证不进 access.yaml；双文件归 core，门只做决策
 
-`access.yaml` 对 agent 明文可见（`list_access help` 甚至教它编辑此文件）。rw 由门独立保管。被否决的替代：加密 sqlite + 临时文件——加密防磁盘不防 agent（密码在进程内），临时文件反而制造守株待兔原语（盯临时目录等 rw 出现）且崩溃残留。
+`access.yaml` 对 agent 明文可见（`list_access help` 甚至教它编辑此文件），rw 必须另存。但 rw 文件的读取/校验**不由门管**——core 增加 `rwRegistryFile` 配置，用同一套机器管两个文件；门注册的 broker 是纯决策函数 `(kind, name, agent) => 'ro' | 'rw' | 拒绝`，从头到尾看不见凭证字段。策略与秘密材料彻底分离，延续"秘密不过服务的手"。被否决的替代：门自管 rw 文件（策略层碰凭证、读取纪律复刻一份）；加密 sqlite + 临时文件——加密防磁盘不防 agent（密码在进程内），临时文件反而制造守株待兔原语（盯临时目录等 rw 出现）且崩溃残留。
 
 ### 7. ssh 不分档，每次审批
 
@@ -59,6 +59,6 @@ Linux 无真只读 shell（能登录就能写 /tmp、跑程序），两档是伪
 
 ## 后果
 
-- 一期实现范围：`tools/pre-execute` 监听器 + 按 agent 分键的账本 + `ask` 审批 + TTL + rw 独立保管 + 审计日志。工具层、provider 层零改动。
+- 一期实现范围：core 管双文件 + broker 挂点；门包含按 agent 分键的账本、`request_access` 工具（原生审批通道）、纯决策 broker、审计日志。provider 层零改动，工具层仅工厂一处（透传 `exec.agent`）。
 - 架构上为二期留的口：provider 缝后不泄露凭证来源；"批准人"字段预留。
 - 已知接受的风险：agent 被强注入后可用 ro 做信息探测、可诱导人批准（审批说明由 agent 自述）。威胁模型 A 下接受。

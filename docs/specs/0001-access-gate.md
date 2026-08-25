@@ -48,8 +48,9 @@ ops 模式下，agent 默认拿着 `access.yaml` 里登记的全部凭证的全�
 ## Implementation Decisions
 
 - **新包 `ops-access-gate`**（preset 平面，npm 名 `@deepseek-ai/dsh-ops-access-gate`），收在 `packages/ops-access/` 大文件夹旁边或其中（动工时按现有布局惯例定）。core（ops-access/core）保持 dumb。
-- **rw 凭证独立文件**：默认 `~/.dsh-ops/access-rw.yaml`，与 access.yaml 同格式（kind 段 → profile 名 → 字段），用同一套 provider schema 校验、同样现读现校验不缓存。**校验逻辑不复制**——core 暴露一个可复用的校验/构建出口（具体函数签名实现时定），门把自己的文件喂给它。
-- **凭证代发点在 resolve**：ops-shell-tool 的 execute 把 `exec.agent` 传入 resolve 链路（工具工厂一处改动）；core 的 resolve 增加可选的 agent 上下文参数，并暴露一个 **broker 挂点**（门注册；无 broker 时行为与今天完全一致——直接发 access.yaml 里的档案）。门注册 broker 后：有授权 → 从 rw 文件代发对应字段；无授权 → 发 ro；ssh kind 无授权 → 拒绝并提示走 request_access。
+- **rw 凭证文件也归 core 管**：core 的 Config 增加 `rwRegistryFile`（默认 `~/.dsh-ops/access-rw.yaml`），与 access.yaml 同格式（kind 段 → profile 名 → 字段）、同一套 provider schema 校验、同样现读现校验不缓存。**校验与读取逻辑零复制**——就是 core 现有机器跑第二个文件。
+- **broker 是纯决策函数，门不碰凭证内容**：core 暴露 broker 挂点，门注册一个 `(kind, name, agent) => 'ro' | 'rw' | 拒绝` 的决策函数；core 依据决定从自己管的对应文件发档案。**门的世界里只有 kind、profile 名、session id、TTL——策略层从头到尾看不见凭证字段**，延续"秘密不过服务的手"的纪律。注册走 `registerAccessBroker(ctx, broker)` 帮手（与 `registerAccessProvider` 同款 `ctx.inject` 延迟挂载，防 loader 死锁）；无 broker 时 resolve 行为与今天完全一致。
+- **凭证代发点在 resolve**：ops-shell-tool 的 execute 把 `exec.agent` 传入 resolve 链路（工具工厂一处改动）；core 的 resolve 增加可选的 agent 上下文参数。broker 决定 'rw' → 从 rw 文件发；'ro' 或无 broker → 从 access.yaml 发；拒绝 → 报错并提示走 request_access（ssh kind 无授权走这条路）。
 - **新模型工具 `request_access`**（由门注册）：参数 `{ profile, reason, ttl? }`。触发 dsh 原生审批通道（人看到 profile、理由、时长，批准/拒绝）。批准即入账。**agent 显式申请**是流程入口——这实现"先出方案、统一给权限"，pre-execute 逐调用 ask 的模式不采用（审批疲劳）。
 - **账本形态**：进程内 `Map<SessionId, grants>` 或 `WeakMap<Agent, …>` 分键（遵循 dsh preset 平面共享实例的纪律）；不持久化——重启即清空，授权短命语义下可接受。grant 含批准人与理由。subagent 有独立 session id，天然不继承。
 - **fail-closed**：`exec.agent` 缺失（系统内部调用）一律按无授权。
