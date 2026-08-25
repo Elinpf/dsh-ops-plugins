@@ -54,21 +54,54 @@ export function setup(opts: { registryFile?: string, rwRegistryFile?: string } =
     },
   }
   apply(ctx, { registryFile, rwRegistryFile })
+  /** Minimal mock response that captures status + JSON body. */
+  const mockResponse = (): { writeHead: (s: number) => void, end: (text: string) => void, status: () => number, body: () => any } => {
+    let status = 0
+    let body: any = null
+    return {
+      writeHead: (s: number) => { status = s },
+      end: (text: string) => { body = JSON.parse(text) },
+      status: () => status,
+      body: () => body,
+    }
+  }
+  /** Drive a route by path, returning { status, body } from the mock response. */
+  async function driveRoute(path: string, req: any = {}): Promise<{ status: number, body: any }> {
+    const route = routes.find((r) => r.path === path)
+    if (!route) return { status: 404, body: null }
+    const res = mockResponse()
+    await route.handler(req, res)
+    return { status: res.status(), body: res.body() }
+  }
   return {
     handle: handle!,
     listeners,
     routes,
     /** Drive the mention-candidate route; parses the JSON body. */
     async listRoute(query = ''): Promise<{ status: number, body: any }> {
-      const route = routes.find((r) => r.path === '/ops-access/list')
-      if (!route) return { status: 404, body: null }
-      let status = 0
-      let body: any = null
-      await route.handler(
-        { url: `/ops-access/list?query=${encodeURIComponent(query)}` },
-        { writeHead: (s: number) => { status = s }, end: (text: string) => { body = JSON.parse(text) } },
-      )
-      return { status, body }
+      return driveRoute('/ops-access/list', { url: `/ops-access/list?query=${encodeURIComponent(query)}` })
+    },
+    /** Drive the admin list route. */
+    async adminListRoute(): Promise<{ status: number, body: any }> {
+      return driveRoute('/ops-access/admin/list')
+    },
+    /** Drive the admin kinds route. */
+    async adminKindsRoute(): Promise<{ status: number, body: any }> {
+      return driveRoute('/ops-access/admin/kinds')
+    },
+    /** Drive the admin entry route with a POST body or DELETE query params. */
+    async adminEntryRoute(opts: { method: 'POST' | 'DELETE', body?: string, query?: string }): Promise<{ status: number, body: any }> {
+      const req: any = { method: opts.method }
+      if (opts.method === 'POST') {
+        const bodyText = opts.body ?? ''
+        req.on = (event: string, cb: (chunk?: any) => void) => {
+          if (event === 'data') cb(bodyText)
+          if (event === 'end') cb()
+        }
+      } else {
+        req.url = `/ops-access/admin/entry${opts.query ?? ''}`
+      }
+      return driveRoute('/ops-access/admin/entry', req)
     },
     dir,
     registryFile,

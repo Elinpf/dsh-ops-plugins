@@ -29,12 +29,12 @@
  * @module @deepseek-ai/dsh-ops-access
  */
 
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { parse as parseYaml } from 'yaml'
-import type { ZodType } from 'zod'
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
+import { z as zod, type ZodType } from 'zod'
 import { createUserMessage, freezeMessage } from '@deepseek-ai/dsh-llm'
 import { formatAccessMention, parseAccessReferenceText } from './mention.js'
 import type { ParsedAccessReference } from './mention.js'
@@ -92,6 +92,33 @@ export interface AccessProfile {
   environment?: string
   /** Type-specific fields after provider schema validation and process. */
   fields: Record<string, unknown>
+}
+
+/** Envelope fields common to every entry (not provider-specific). */
+export interface EntryEnvelope {
+  description?: string
+  environment?: string
+}
+
+/** Validation status of one entry in one tier — `error` carries the zod reason, never field values. */
+export interface AdminTierStatus {
+  ok: boolean
+  error?: string
+}
+
+/** One entry in the merged admin view: envelope + per-tier validation status, never fields. */
+export interface AdminEntry {
+  kind: string
+  name: string
+  envelope: EntryEnvelope
+  tiers: { ro: AdminTierStatus, rw: AdminTierStatus }
+}
+
+/** One registered credential kind: its JSON Schema (from `zod.toJSONSchema`) and optional field docs. */
+export interface KindDescriptor {
+  kind: string
+  jsonSchema: Record<string, unknown>
+  fieldsDoc?: string
 }
 
 // ── Access gate (broker) ─────────────────────────────────────────────────────
@@ -161,6 +188,30 @@ export interface OpsAccess {
   resolve(kind: string, name: string, agent?: AccessAgent): Promise<AccessProfile>
   /** List all profiles across all registered kinds. Sections without a registered provider are skipped. */
   list(): Promise<AccessProfile[]>
+  /**
+   * Write (upsert) one entry into the chosen tier's registry file. Reads the
+   * file, merges the entry, validates it via the provider schema (buildProfile),
+   * and writes back. A validation failure throws and leaves the file untouched.
+   * Creates the file if it does not exist.
+   */
+  writeEntry(kind: string, name: string, tier: 'ro' | 'rw', fields: Record<string, unknown>, envelope?: EntryEnvelope): Promise<void>
+  /**
+   * Delete one entry from the chosen tier's registry file. Returns true when
+   * an entry was deleted, false when the file or entry did not exist.
+   */
+  deleteEntry(kind: string, name: string, tier: 'ro' | 'rw'): Promise<boolean>
+  /**
+   * List all entries across both tiers, merged by kind/name. Each entry
+   * carries its envelope (from whichever tier has it) and per-tier validation
+   * status via canResolve — never fields.
+   */
+  listAll(): Promise<AdminEntry[]>
+  /**
+   * List all registered credential kinds with their JSON Schema (serialized
+   * via `zod.toJSONSchema(provider.schema)`) and optional field docs.
+   * Unregistered kinds do not appear.
+   */
+  listKinds(): KindDescriptor[]
   /**
    * The registry management doc: file location, format, envelope fields, and
    * every registered kind's field doc. Progressive disclosure — the agent
@@ -284,6 +335,42 @@ function buildProfile(provider: AccessProvider, kind: string, profileName: strin
   return profile
 }
 
+/** Serialize a registry back to its YAML file with the version header. */
+async function saveRegistry(file: string, registry: Registry): Promise<void> {
+  const doc: Record<string, unknown> = { version: 1 }
+  for (const [kind, section] of Object.entries(registry)) {
+    doc[kind] = section
+  }
+  await writeFile(file, stringifyYaml(doc), 'utf8')
+}
+
+/** Read the full HTTP request body as a string. */
+function readRequestBody(req: { on: (event: string, cb: (chunk?: Buffer | string) => void) => void }): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = ''
+    req.on('data', (chunk?: Buffer | string) => { if (chunk !== undefined) data += chunk })
+    req.on('end', () => resolve(data))
+    req.on('error', reject)
+  })
+}
+
+/** Send a JSON error response — message from buildProfile carries zod paths, never field values. */
+function sendJsonError(res: { writeHead: (status: number, headers?: Record<string, string>) => void, end: (text: string) => void }, status: number, err: unknown): void {
+  res.writeHead(status, { 'content-type': 'application/json' })
+  res.end(JSON.stringify({ ok: false, error: String((err as Error | null)?.message ?? err) }))
+}
+
+/** Build an EntryEnvelope from raw entry data, taking each envelope field from the first source that has it. */
+function buildEnvelope(sources: Array<Record<string, unknown> | undefined>): EntryEnvelope {
+  const envelope: EntryEnvelope = {}
+  for (const source of sources) {
+    if (!isPlainObject(source)) continue
+    if (envelope.description === undefined && typeof source.description === 'string') envelope.description = source.description
+    if (envelope.environment === undefined && typeof source.environment === 'string') envelope.environment = source.environment
+  }
+  return envelope
+}
+
 // ── Mention injection (agent/pre-step) ──────────────────────────────────────
 
 /**
@@ -332,6 +419,9 @@ export function apply(ctx: Context, config: Config): void {
   let broker: AccessBroker | undefined
   let clearBroker: () => void = () => {}
 
+  /** Resolve a tier to its registry file path. */
+  const tierFile = (tier: 'ro' | 'rw'): string => tier === 'rw' ? rwFile : roFile
+
   const handle: OpsAccess = {
     register(provider: AccessProvider): () => void {
       if (providers.has(provider.kind)) {
@@ -365,7 +455,7 @@ export function apply(ctx: Context, config: Config): void {
     async canResolve(kind: string, profileName: string, tier: 'ro' | 'rw'): Promise<{ ok: boolean, error?: string }> {
       const provider = providers.get(kind)
       if (!provider) return { ok: false }
-      const file = tier === 'rw' ? rwFile : roFile
+      const file = tierFile(tier)
       // Load + locate the entry in its own try/catch: a missing or unparseable
       // file is a structural "not resolvable" with no validation reason — the
       // admin does not need a zod message to fix a file that isn't there.
@@ -409,7 +499,7 @@ export function apply(ctx: Context, config: Config): void {
         }
         if (decision === 'rw') tier = 'rw'
       }
-      const file = tier === 'rw' ? rwFile : roFile
+      const file = tierFile(tier)
       const registry = await loadRegistry(file)
       if (registry === null) {
         throw new Error(`ops-access: registry file not found: ${file}`)
@@ -471,6 +561,92 @@ export function apply(ctx: Context, config: Config): void {
       lines.push('Secrets never go inline — fields carry file paths and connection params only, so logs and model context never contain secret material.')
       return lines.join('\n')
     },
+
+    async writeEntry(kind: string, profileName: string, tier: 'ro' | 'rw', fields: Record<string, unknown>, envelope?: EntryEnvelope): Promise<void> {
+      const provider = providers.get(kind)
+      if (!provider) {
+        const registered = [...providers.keys()].sort()
+        throw new Error(`ops-access: unknown kind "${kind}" (no provider registered; registered kinds: ${registered.join(', ') || '(none)'})`)
+      }
+      const file = tierFile(tier)
+      // Construct the raw entry: provider fields + envelope fields.
+      const raw: Record<string, unknown> = { ...fields }
+      if (envelope?.description !== undefined) raw.description = envelope.description
+      if (envelope?.environment !== undefined) raw.environment = envelope.environment
+      // Read → merge → validate → write back. A missing file starts from an
+      // empty registry; an unparseable file throws (we will not overwrite a
+      // file we cannot read).
+      let registry: Registry = {}
+      const loaded = await loadRegistry(file)
+      if (loaded !== null) registry = loaded
+      if (!registry[kind]) registry[kind] = {}
+      registry[kind][profileName] = raw
+      // Validate via buildProfile BEFORE writing — a schema failure must not
+      // touch the file. buildProfile throws with zod issue paths + messages,
+      // never raw field values. (The in-memory merged entry is what we
+      // validate, matching the spec's read→merge→validate→write sequence.)
+      buildProfile(provider, kind, profileName, raw, file)
+      await saveRegistry(file, registry)
+    },
+
+    async deleteEntry(kind: string, profileName: string, tier: 'ro' | 'rw'): Promise<boolean> {
+      const file = tierFile(tier)
+      const registry = await loadRegistry(file)
+      if (registry === null) return false
+      const section = registry[kind]
+      if (!section || !(profileName in section)) return false
+      delete section[profileName]
+      // Clean up empty sections so the file stays tidy.
+      if (Object.keys(section).length === 0) delete registry[kind]
+      await saveRegistry(file, registry)
+      return true
+    },
+
+    async listAll(): Promise<AdminEntry[]> {
+      // Load both registries for enumeration. A parse error on one file does
+      // not hide entries from the other — canResolve reports { ok: false }
+      // for the broken tier.
+      let roRegistry: Registry = {}
+      let rwRegistry: Registry = {}
+      try { const ro = await loadRegistry(roFile); if (ro) roRegistry = ro } catch { /* canResolve reports the failure */ }
+      try { const rw = await loadRegistry(rwFile); if (rw) rwRegistry = rw } catch { /* canResolve reports the failure */ }
+      // Collect all (kind, name) pairs across both files, skipping kinds
+      // without a registered provider (consistent with list()).
+      const keys = new Set<string>()
+      for (const kind of new Set([...Object.keys(roRegistry), ...Object.keys(rwRegistry)])) {
+        if (!providers.has(kind)) continue
+        for (const name of Object.keys({ ...roRegistry[kind], ...rwRegistry[kind] })) {
+          keys.add(`${kind}/${name}`)
+        }
+      }
+      const result: AdminEntry[] = []
+      for (const key of [...keys].sort()) {
+        const slash = key.indexOf('/')
+        const kind = key.slice(0, slash)
+        const name = key.slice(slash + 1)
+        // Envelope: prefer ro for each field, fall back to rw.
+        const roRaw = roRegistry[kind]?.[name]
+        const rwRaw = rwRegistry[kind]?.[name]
+        const envelope = buildEnvelope([
+          isPlainObject(roRaw) ? roRaw : undefined,
+          isPlainObject(rwRaw) ? rwRaw : undefined,
+        ])
+        const roStatus = await handle.canResolve(kind, name, 'ro')
+        const rwStatus = await handle.canResolve(kind, name, 'rw')
+        result.push({ kind, name, envelope, tiers: { ro: roStatus, rw: rwStatus } })
+      }
+      return result
+    },
+
+    listKinds(): KindDescriptor[] {
+      return [...providers.values()]
+        .sort((a, b) => a.kind.localeCompare(b.kind))
+        .map((p) => {
+          const descriptor: KindDescriptor = { kind: p.kind, jsonSchema: zod.toJSONSchema(p.schema) }
+          if (p.fieldsDoc !== undefined) descriptor.fieldsDoc = p.fieldsDoc
+          return descriptor
+        })
+    },
   }
 
   ctx.provide('opsAccess', handle)
@@ -504,6 +680,84 @@ export function apply(ctx: Context, config: Config): void {
           }))
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify(candidates))
+      },
+    }))
+
+    // ── Admin routes (GET /admin/list, GET /admin/kinds, POST+DELETE /admin/entry) ─
+    // The webServer matches by path only (no HTTP method), so the entry route
+    // dispatches on req.method. All responses and errors exclude field values
+    // — buildProfile errors carry zod issue paths + messages, never raw values.
+    wctx.effect(() => (wctx as any).webServer.register({
+      kind: 'exact',
+      path: '/ops-access/admin/list',
+      handler: async (_req: any, res: any) => {
+        try {
+          const entries = await handle.listAll()
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(JSON.stringify(entries))
+        } catch (err) {
+          sendJsonError(res, 500, err)
+        }
+      },
+    }))
+
+    wctx.effect(() => (wctx as any).webServer.register({
+      kind: 'exact',
+      path: '/ops-access/admin/kinds',
+      handler: async (_req: any, res: any) => {
+        try {
+          const kinds = handle.listKinds()
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(JSON.stringify(kinds))
+        } catch (err) {
+          sendJsonError(res, 500, err)
+        }
+      },
+    }))
+
+    wctx.effect(() => (wctx as any).webServer.register({
+      kind: 'exact',
+      path: '/ops-access/admin/entry',
+      handler: async (req: any, res: any) => {
+        try {
+          if (req.method === 'POST') {
+            const body = await readRequestBody(req)
+            let parsed: Record<string, unknown>
+            try {
+              parsed = JSON.parse(body) as Record<string, unknown>
+            } catch {
+              sendJsonError(res, 400, new Error('request body must be valid JSON'))
+              return
+            }
+            const { kind, name, tier, fields, description, environment } = parsed
+            if (typeof kind !== 'string' || typeof name !== 'string' || (tier !== 'ro' && tier !== 'rw')) {
+              sendJsonError(res, 400, new Error('kind (string), name (string), and tier ("ro"|"rw") are required'))
+              return
+            }
+            const entryFields = isPlainObject(fields) ? fields : {}
+            const envelope = buildEnvelope([{ description, environment }])
+            await handle.writeEntry(kind, name, tier, entryFields, Object.keys(envelope).length > 0 ? envelope : undefined)
+            res.writeHead(200, { 'content-type': 'application/json' })
+            res.end(JSON.stringify({ ok: true }))
+          } else if (req.method === 'DELETE') {
+            const url = new URL(req.url, 'http://localhost')
+            const kind = url.searchParams.get('kind')
+            const name = url.searchParams.get('name')
+            const tier = url.searchParams.get('tier')
+            if (!kind || !name || (tier !== 'ro' && tier !== 'rw')) {
+              sendJsonError(res, 400, new Error('kind, name, and tier ("ro"|"rw") query parameters are required'))
+              return
+            }
+            const deleted = await handle.deleteEntry(kind, name, tier)
+            res.writeHead(200, { 'content-type': 'application/json' })
+            res.end(JSON.stringify(deleted ? { ok: true } : { ok: false, error: 'entry not found' }))
+          } else {
+            sendJsonError(res, 405, new Error('method not allowed'))
+          }
+        } catch (err) {
+          // buildProfile errors carry zod issue paths + messages, never field values.
+          sendJsonError(res, 400, err)
+        }
       },
     }))
   })

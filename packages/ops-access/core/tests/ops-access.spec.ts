@@ -5,7 +5,7 @@
  * no-caching guarantee, and `~` expansion of registryFile.
  */
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -622,5 +622,439 @@ describe('mention candidate route', () => {
     const { status, body } = await h.listRoute()
     expect(status).toBe(200)
     expect(body).toEqual([])
+  })
+})
+
+// ── writeEntry ───────────────────────────────────────────────────────────────
+
+describe('writeEntry', () => {
+  it('upserts a new entry → resolve can get it', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(VALID_REGISTRY)
+    await handle.writeEntry('test', 'gamma', 'ro', { endpoint: 'https://gamma.internal' }, { description: 'gamma env' })
+    const profile = await handle.resolve('test', 'gamma')
+    expect(profile.fields.endpoint).toBe('https://gamma.internal')
+    expect(profile.description).toBe('gamma env')
+  })
+
+  it('overwrites an existing entry → old value is replaced', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(VALID_REGISTRY)
+    await handle.writeEntry('test', 'alpha', 'ro', { endpoint: 'https://new-alpha.internal' })
+    const profile = await handle.resolve('test', 'alpha')
+    expect(profile.fields.endpoint).toBe('https://new-alpha.internal')
+    // The old description is gone — upsert replaces the whole entry.
+    expect(profile.description).toBeUndefined()
+  })
+
+  it('schema failure → does not write the file and throws', async () => {
+    const { handle, write, registryFile } = setup()
+    handle.register(testProvider)
+    write(VALID_REGISTRY)
+    const original = readFileSync(registryFile, 'utf8')
+    await expect(handle.writeEntry('test', 'alpha', 'ro', { wrong: 1 })).rejects.toThrow(/endpoint/)
+    // File is untouched.
+    expect(readFileSync(registryFile, 'utf8')).toBe(original)
+  })
+
+  it('rw file does not exist → creates the file', async () => {
+    const { handle, write, rwRegistryFile } = setup()
+    handle.register(testProvider)
+    write(VALID_REGISTRY)
+    // rw file deliberately not written
+    await handle.writeEntry('test', 'alpha', 'rw', { endpoint: 'https://rw-alpha.internal' })
+    const profile = await handle.canResolve('test', 'alpha', 'rw')
+    expect(profile).toEqual({ ok: true })
+    // File now exists and was written.
+    const text = readFileSync(rwRegistryFile, 'utf8')
+    expect(text).toContain('version: 1')
+    expect(text).toContain('https://rw-alpha.internal')
+  })
+
+  it('throws on unknown kind', async () => {
+    const { handle } = setup()
+    handle.register(testProvider)
+    await expect(handle.writeEntry('nope', 'alpha', 'ro', { endpoint: 'x' })).rejects.toThrow(/unknown kind "nope"/)
+  })
+
+  it('preserves other entries in the file when writing one', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(VALID_REGISTRY)
+    await handle.writeEntry('test', 'gamma', 'ro', { endpoint: 'https://gamma.internal' })
+    // alpha and beta are still there.
+    const alpha = await handle.resolve('test', 'alpha')
+    expect(alpha.fields.endpoint).toBe('https://alpha.internal')
+    const beta = await handle.resolve('test', 'beta')
+    expect(beta.fields.endpoint).toBe('https://beta.internal')
+  })
+
+  it('writes envelope fields alongside provider fields', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(VALID_REGISTRY)
+    await handle.writeEntry('test', 'gamma', 'ro',
+      { endpoint: 'https://gamma.internal' },
+      { description: 'gamma desc', environment: 'gamma-env' })
+    const profile = await handle.resolve('test', 'gamma')
+    expect(profile.description).toBe('gamma desc')
+    expect(profile.environment).toBe('gamma-env')
+    expect(profile.fields.endpoint).toBe('https://gamma.internal')
+  })
+})
+
+// ── deleteEntry ──────────────────────────────────────────────────────────────
+
+describe('deleteEntry', () => {
+  it('deletes an existing entry → resolve throws not found', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(VALID_REGISTRY)
+    const deleted = await handle.deleteEntry('test', 'alpha', 'ro')
+    expect(deleted).toBe(true)
+    await expect(handle.resolve('test', 'alpha')).rejects.toThrow(/no profile "alpha"/)
+    // Other entries survive.
+    const beta = await handle.resolve('test', 'beta')
+    expect(beta.fields.endpoint).toBe('https://beta.internal')
+  })
+
+  it('deleting a non-existent entry → returns false', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(VALID_REGISTRY)
+    const deleted = await handle.deleteEntry('test', 'ghost', 'ro')
+    expect(deleted).toBe(false)
+  })
+
+  it('file does not exist → returns false', async () => {
+    const { handle } = setup()
+    handle.register(testProvider)
+    const deleted = await handle.deleteEntry('test', 'alpha', 'rw')
+    expect(deleted).toBe(false)
+  })
+
+  it('deletes from the rw tier independently of ro', async () => {
+    const { handle, write, writeRw } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    writeRw(RW_REGISTRY)
+    const deleted = await handle.deleteEntry('test', 'alpha', 'rw')
+    expect(deleted).toBe(true)
+    // ro entry is untouched.
+    const profile = await handle.resolve('test', 'alpha')
+    expect(profile.fields.endpoint).toBe('https://ro-alpha.internal')
+  })
+})
+
+// ── listAll ──────────────────────────────────────────────────────────────────
+
+describe('listAll', () => {
+  it('ro has rw does not → ro.ok=true rw.ok=false', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(VALID_REGISTRY)
+    const entries = await handle.listAll()
+    const alpha = entries.find((e) => e.kind === 'test' && e.name === 'alpha')!
+    expect(alpha.tiers.ro).toEqual({ ok: true })
+    expect(alpha.tiers.rw).toEqual({ ok: false })
+  })
+
+  it('schema failure → ok=false with error carrying the reason', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write('test:\n  alpha:\n    endpoint: 5\n')
+    const entries = await handle.listAll()
+    const alpha = entries.find((e) => e.kind === 'test' && e.name === 'alpha')!
+    expect(alpha.tiers.ro.ok).toBe(false)
+    expect(alpha.tiers.ro.error).toMatch(/endpoint/)
+    // Error never carries the raw field value.
+    expect(alpha.tiers.ro.error).not.toContain('5')
+  })
+
+  it('same name in both tiers → merged into one row', async () => {
+    const { handle, write, writeRw } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    writeRw(RW_REGISTRY)
+    const entries = await handle.listAll()
+    const alphas = entries.filter((e) => e.kind === 'test' && e.name === 'alpha')
+    expect(alphas).toHaveLength(1)
+    expect(alphas[0].tiers.ro).toEqual({ ok: true })
+    expect(alphas[0].tiers.rw).toEqual({ ok: true })
+  })
+
+  it('response never contains fields', async () => {
+    const { handle, write, writeRw } = setup()
+    handle.register(testProvider)
+    write(VALID_REGISTRY)
+    writeRw(RW_REGISTRY)
+    const entries = await handle.listAll()
+    const json = JSON.stringify(entries)
+    expect(json).not.toContain('endpoint')
+    expect(json).not.toContain('https://')
+    expect(json).not.toContain('fields')
+  })
+
+  it('envelope comes from ro when present, falls back to rw', async () => {
+    const { handle, write, writeRw } = setup()
+    handle.register(testProvider)
+    write(VALID_REGISTRY) // alpha has description "alpha 环境", environment "staging"
+    writeRw('test:\n  beta:\n    endpoint: https://rw-beta.internal\n    description: rw-beta\n')
+    const entries = await handle.listAll()
+    const alpha = entries.find((e) => e.name === 'alpha')!
+    expect(alpha.envelope).toEqual({ description: 'alpha 环境', environment: 'staging' })
+    const beta = entries.find((e) => e.name === 'beta')!
+    expect(beta.envelope).toEqual({ description: 'rw-beta' })
+  })
+
+  it('returns empty when neither file exists', async () => {
+    const { handle } = setup()
+    handle.register(testProvider)
+    const entries = await handle.listAll()
+    expect(entries).toEqual([])
+  })
+
+  it('skips kinds without a registered provider', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(VALID_REGISTRY + 'unregistered:\n  x:\n    whatever: 1\n')
+    const entries = await handle.listAll()
+    expect(entries.every((e) => e.kind === 'test')).toBe(true)
+  })
+
+  it('entries are sorted by kind then name', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write('test:\n  zeta:\n    endpoint: https://z\n  alpha:\n    endpoint: https://a\n')
+    const entries = await handle.listAll()
+    expect(entries.map((e) => e.name)).toEqual(['alpha', 'zeta'])
+  })
+})
+
+// ── listKinds ────────────────────────────────────────────────────────────────
+
+describe('listKinds', () => {
+  it('returns all registered kinds with their jsonSchema', async () => {
+    const { handle } = setup()
+    handle.register(testProvider)
+    const kinds = handle.listKinds()
+    expect(kinds).toHaveLength(1)
+    expect(kinds[0].kind).toBe('test')
+    expect(kinds[0].jsonSchema).toBeDefined()
+    expect(kinds[0].jsonSchema.type).toBe('object')
+  })
+
+  it('jsonSchema contains field names and required', () => {
+    const { handle } = setup()
+    handle.register(testProvider)
+    const kinds = handle.listKinds()
+    const schema = kinds[0].jsonSchema
+    expect(schema.properties).toHaveProperty('endpoint')
+    expect(schema.required).toContain('endpoint')
+  })
+
+  it('includes fieldsDoc when the provider has one', () => {
+    const { handle } = setup()
+    handle.register({ ...testProvider, fieldsDoc: 'endpoint: the service URL' })
+    const kinds = handle.listKinds()
+    expect(kinds[0].fieldsDoc).toBe('endpoint: the service URL')
+  })
+
+  it('omits fieldsDoc when the provider has none', () => {
+    const { handle } = setup()
+    handle.register({ kind: 'bare', schema: zod.object({}) })
+    const kinds = handle.listKinds()
+    const bare = kinds.find((k) => k.kind === 'bare')!
+    expect(bare.fieldsDoc).toBeUndefined()
+  })
+
+  it('unregistered kinds do not appear', () => {
+    const { handle } = setup()
+    handle.register(testProvider)
+    const kinds = handle.listKinds()
+    expect(kinds.find((k) => k.kind === 'k8s')).toBeUndefined()
+  })
+
+  it('kinds are sorted alphabetically', () => {
+    const { handle } = setup()
+    handle.register({ kind: 'zzz', schema: zod.object({}) })
+    handle.register({ kind: 'aaa', schema: zod.object({}) })
+    handle.register(testProvider) // 'test'
+    const kinds = handle.listKinds()
+    expect(kinds.map((k) => k.kind)).toEqual(['aaa', 'test', 'zzz'])
+  })
+})
+
+// ── admin routes ─────────────────────────────────────────────────────────────
+
+describe('admin routes', () => {
+  it('GET /admin/list returns listAll() result without fields', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    h.write(VALID_REGISTRY)
+    const { status, body } = await h.adminListRoute()
+    expect(status).toBe(200)
+    expect(body).toHaveLength(2)
+    const alpha = body.find((e: any) => e.name === 'alpha')
+    expect(alpha.tiers.ro).toEqual({ ok: true })
+    expect(alpha.tiers.rw).toEqual({ ok: false })
+    expect(alpha.envelope).toEqual({ description: 'alpha 环境', environment: 'staging' })
+    // No fields in the response.
+    const json = JSON.stringify(body)
+    expect(json).not.toContain('endpoint')
+    expect(json).not.toContain('https://')
+  })
+
+  it('GET /admin/kinds returns listKinds() result with JSON Schema', async () => {
+    const h = setup()
+    h.handle.register({ ...testProvider, fieldsDoc: 'endpoint: the service URL' })
+    const { status, body } = await h.adminKindsRoute()
+    expect(status).toBe(200)
+    expect(body).toHaveLength(1)
+    expect(body[0].kind).toBe('test')
+    expect(body[0].jsonSchema.type).toBe('object')
+    expect(body[0].jsonSchema.properties).toHaveProperty('endpoint')
+    expect(body[0].jsonSchema.required).toContain('endpoint')
+    expect(body[0].fieldsDoc).toBe('endpoint: the service URL')
+  })
+
+  it('POST /admin/entry calls writeEntry and returns { ok: true }', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    h.write(VALID_REGISTRY)
+    const { status, body } = await h.adminEntryRoute({
+      method: 'POST',
+      body: JSON.stringify({ kind: 'test', name: 'gamma', tier: 'ro', fields: { endpoint: 'https://gamma.internal' } }),
+    })
+    expect(status).toBe(200)
+    expect(body).toEqual({ ok: true })
+    // Entry was actually written.
+    const profile = await h.handle.resolve('test', 'gamma')
+    expect(profile.fields.endpoint).toBe('https://gamma.internal')
+  })
+
+  it('POST /admin/entry with envelope fields', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    h.write(VALID_REGISTRY)
+    const { status, body } = await h.adminEntryRoute({
+      method: 'POST',
+      body: JSON.stringify({
+        kind: 'test', name: 'gamma', tier: 'ro',
+        fields: { endpoint: 'https://gamma.internal' },
+        description: 'gamma desc', environment: 'gamma-env',
+      }),
+    })
+    expect(status).toBe(200)
+    expect(body).toEqual({ ok: true })
+    const profile = await h.handle.resolve('test', 'gamma')
+    expect(profile.description).toBe('gamma desc')
+    expect(profile.environment).toBe('gamma-env')
+  })
+
+  it('POST /admin/entry schema failure → { ok: false, error } without field values', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    h.write(VALID_REGISTRY)
+    const { status, body } = await h.adminEntryRoute({
+      method: 'POST',
+      body: JSON.stringify({ kind: 'test', name: 'gamma', tier: 'ro', fields: { wrong: 1 } }),
+    })
+    expect(status).toBe(400)
+    expect(body.ok).toBe(false)
+    expect(body.error).toMatch(/endpoint/)
+    expect(body.error).not.toContain('wrong')
+  })
+
+  it('POST /admin/entry missing required fields → 400', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    const { status, body } = await h.adminEntryRoute({
+      method: 'POST',
+      body: JSON.stringify({ kind: 'test' }),
+    })
+    expect(status).toBe(400)
+    expect(body.ok).toBe(false)
+  })
+
+  it('POST /admin/entry invalid JSON → 400', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    const { status, body } = await h.adminEntryRoute({
+      method: 'POST',
+      body: 'not json',
+    })
+    expect(status).toBe(400)
+    expect(body.ok).toBe(false)
+    expect(body.error).toMatch(/JSON/)
+  })
+
+  it('DELETE /admin/entry deletes and returns { ok: true }', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    h.write(VALID_REGISTRY)
+    const { status, body } = await h.adminEntryRoute({
+      method: 'DELETE',
+      query: '?kind=test&name=alpha&tier=ro',
+    })
+    expect(status).toBe(200)
+    expect(body).toEqual({ ok: true })
+    await expect(h.handle.resolve('test', 'alpha')).rejects.toThrow(/no profile "alpha"/)
+  })
+
+  it('DELETE /admin/entry non-existent → { ok: false, error }', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    h.write(VALID_REGISTRY)
+    const { status, body } = await h.adminEntryRoute({
+      method: 'DELETE',
+      query: '?kind=test&name=ghost&tier=ro',
+    })
+    expect(status).toBe(200)
+    expect(body.ok).toBe(false)
+  })
+
+  it('DELETE /admin/entry missing query params → 400', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    h.write(VALID_REGISTRY)
+    const { status, body } = await h.adminEntryRoute({
+      method: 'DELETE',
+      query: '?kind=test',
+    })
+    expect(status).toBe(400)
+    expect(body.ok).toBe(false)
+  })
+
+  it('unsupported method on /admin/entry → 405', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    // The mock harness doesn't support GET on the entry route, but we can
+    // verify the route handles it — simulate with a method the handler
+    // doesn't recognize.
+    const route = h.routes.find((r) => r.path === '/ops-access/admin/entry')
+    let status = 0
+    let body: any = null
+    await route.handler({ method: 'GET', url: '/ops-access/admin/entry' },
+      { writeHead: (s: number) => { status = s }, end: (text: string) => { body = JSON.parse(text) } })
+    expect(status).toBe(405)
+    expect(body.ok).toBe(false)
+  })
+})
+
+// ── existing list route behavior unchanged ──────────────────────────────────
+
+describe('existing routes unchanged', () => {
+  it('GET /ops-access/list still serves envelope-only candidates', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    h.write(VALID_REGISTRY)
+    const { status, body } = await h.listRoute()
+    expect(status).toBe(200)
+    expect(body).toHaveLength(2)
+    const json = JSON.stringify(body)
+    expect(json).not.toContain('endpoint')
   })
 })
