@@ -72,7 +72,7 @@ The test instance lives at `../../.dsh-target` (profile `dev-target`), which dep
 
 - Secret material never passes through any service: profiles carry only paths and connection parameters, so logs, errors, and model context cannot contain secrets. `list_access` output omits even the fields — names and descriptions only.
 - The registry file is re-read and re-validated on every resolve (no caching) — edits take effect without restart.
-- The access-gate (credential brokering, ro/rw tiers, per-session grants, audit log) is **designed but not implemented**; see `docs/adr/0001-access-gate.md` and `docs/specs/0001-access-gate.md` before touching authorization. Its threat model is "prevent mistakes, not malice" — same-UID in-process secrecy is explicitly out of scope.
+- The access-gate (`packages/ops-access/gate`, credential brokering, ro/rw tiers, per-session grants, audit log) is **implemented and wired into the ops preset** (inside the `ops-access-registry` realm, alongside its `opsAccessGate` isolate symbol); see `docs/adr/0001-access-gate.md` and `docs/specs/0001-access-gate.md` before touching authorization. Its threat model is "prevent mistakes, not malice" — same-UID in-process secrecy is explicitly out of scope.
 
 ## General notes
 

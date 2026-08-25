@@ -281,6 +281,20 @@ describe('mention injection', () => {
     expect(decision.messages[1].content[0].text).toContain('- test/ghost — (not found')
   })
 
+  it('mention rendering never consults the broker — metadata display needs no grant', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    h.write(VALID_REGISTRY)
+    // A deny-everything broker (the gate's posture for approval-required
+    // kinds): envelope rendering must still work, and the broker must not run.
+    let consulted = 0
+    h.handle.registerBroker(() => { consulted++; return { deny: 'nope' } })
+    const mention = formatAccessMention({ kind: 'test', name: 'alpha' })
+    const decision: any = await drivePreStep(h, [textMessage(`看 ${mention}`)])
+    expect(decision.messages[1].content[0].text).toContain('- test/alpha [staging] — alpha 环境')
+    expect(consulted).toBe(0)
+  })
+
   it('deduplicates repeated mentions of the same profile', async () => {
     const h = setup()
     h.handle.register(testProvider)
@@ -306,6 +320,263 @@ describe('mention injection', () => {
     const reject = { kind: 'reject', reason: 'nope' }
     const result = await entry.listener({ agent: {} }, async () => reject)
     expect(result).toBe(reject)
+  })
+})
+
+// ── broker + rw registry ─────────────────────────────────────────────────────
+
+// Two registries with distinct field values so the source file is observable
+// in the resolved profile. ro lives in access.yaml, rw in access-rw.yaml.
+const RO_REGISTRY = `\
+version: 1
+test:
+  alpha:
+    endpoint: https://ro-alpha.internal
+`
+const RW_REGISTRY = `\
+version: 1
+test:
+  alpha:
+    endpoint: https://rw-alpha.internal
+`
+
+const SESSION_A = { id: 'sess-a' }
+const SESSION_B = { id: 'sess-b' }
+
+describe('broker + rw registry', () => {
+  it('with no broker registered, resolve is unchanged — fields come from the ro file', async () => {
+    const { handle, write, writeRw } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    writeRw(RW_REGISTRY)
+    // Even with an agent context, no broker means no escalation path.
+    const profile = await handle.resolve('test', 'alpha', SESSION_A)
+    expect(profile.fields.endpoint).toBe('https://ro-alpha.internal')
+  })
+
+  it("broker 'rw' decision serves fields from the rw file, not the ro file", async () => {
+    const { handle, write, writeRw } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    writeRw(RW_REGISTRY)
+    handle.registerBroker(() => 'rw')
+    const profile = await handle.resolve('test', 'alpha', SESSION_A)
+    expect(profile.fields.endpoint).toBe('https://rw-alpha.internal')
+  })
+
+  it("broker 'ro' decision serves fields from the ro file", async () => {
+    const { handle, write, writeRw } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    writeRw(RW_REGISTRY)
+    handle.registerBroker(() => 'ro')
+    const profile = await handle.resolve('test', 'alpha', SESSION_A)
+    expect(profile.fields.endpoint).toBe('https://ro-alpha.internal')
+  })
+
+  it('broker is consulted even without an agent — the no-agent ruling belongs to the broker', async () => {
+    const { handle, write, writeRw } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    writeRw(RW_REGISTRY)
+    const seen: unknown[] = []
+    handle.registerBroker((_kind, _name, agent) => { seen.push(agent); return 'rw' })
+    const profile = await handle.resolve('test', 'alpha') // no agent supplied
+    expect(seen).toEqual([undefined])
+    expect(profile.fields.endpoint).toBe('https://rw-alpha.internal')
+  })
+
+  it("a broker's deny on a no-agent call throws — core never silently falls back to ro", async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    handle.registerBroker((_kind, _name, agent) => agent ? 'ro' : { deny: 'no session, no credential' })
+    await expect(handle.resolve('test', 'alpha')).rejects.toThrow('ops-access: access denied for test/alpha: no session, no credential')
+  })
+
+  it('broker receives kind, name, and the agent', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    const seen: Array<{ kind: string, name: string, agent: unknown }> = []
+    handle.registerBroker((kind, name, agent) => { seen.push({ kind, name, agent }); return 'ro' })
+    await handle.resolve('test', 'alpha', SESSION_A)
+    expect(seen).toEqual([{ kind: 'test', name: 'alpha', agent: SESSION_A }])
+  })
+
+  it("broker 'deny' decision throws the broker's message verbatim (broker owns the guidance)", async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    handle.registerBroker(() => ({ deny: 'no active grant — call request_access' }))
+    await expect(handle.resolve('test', 'alpha', SESSION_A)).rejects.toThrow('ops-access: access denied for test/alpha: no active grant — call request_access')
+  })
+
+  it('rw-tier miss says the grant was approved but no rw credential is registered', async () => {
+    const { handle, write, writeRw, rwRegistryFile } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    writeRw(RW_REGISTRY.replace('alpha', 'other'))
+    handle.registerBroker(() => 'rw')
+    const err = await handle.resolve('test', 'alpha', SESSION_A).catch((e) => e)
+    expect(err.message).toContain(rwRegistryFile)
+    expect(err.message).toContain('no rw credential is registered')
+  })
+
+  it('registerBroker disposes: after dispose, escalation is gone', async () => {
+    const { handle, write, writeRw } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    writeRw(RW_REGISTRY)
+    const dispose = handle.registerBroker(() => 'rw')
+    expect((await handle.resolve('test', 'alpha', SESSION_A)).fields.endpoint).toBe('https://rw-alpha.internal')
+    dispose()
+    expect((await handle.resolve('test', 'alpha', SESSION_A)).fields.endpoint).toBe('https://ro-alpha.internal')
+  })
+
+  it('a replacement broker overrides the earlier one; disposing the new one clears escalation (old disposer stays inert)', async () => {
+    const { handle, write, writeRw } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    writeRw(RW_REGISTRY)
+    // Register broker A (ro-only), then replace it with B (rw). The new broker
+    // governs; disposing B must fall back to ro even though A's disposer was
+    // never called — B's disposal folds in the prior registration's cleanup.
+    handle.registerBroker(() => 'ro')
+    const disposeB = handle.registerBroker(() => 'rw')
+    expect((await handle.resolve('test', 'alpha', SESSION_A)).fields.endpoint).toBe('https://rw-alpha.internal')
+    disposeB()
+    // After the active broker is disposed, no broker is active → ro.
+    expect((await handle.resolve('test', 'alpha', SESSION_A)).fields.endpoint).toBe('https://ro-alpha.internal')
+  })
+
+  it('rw file missing on an rw decision errors with the rw file path, no secret leak', async () => {
+    const { handle, write, rwRegistryFile } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    // rw file deliberately not written
+    handle.registerBroker(() => 'rw')
+    await expect(handle.resolve('test', 'alpha', SESSION_A)).rejects.toThrow(`registry file not found: ${rwRegistryFile}`)
+  })
+
+  it('rw entry missing errors listing available names, without leaking field values', async () => {
+    const { handle, write, writeRw, rwRegistryFile } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    // rw file has the kind but not the profile
+    writeRw('test:\n  beta:\n    endpoint: https://rw-beta.internal\n')
+    handle.registerBroker(() => 'rw')
+    await expect(handle.resolve('test', 'alpha', SESSION_A)).rejects.toThrow(
+      new RegExp(`no profile "alpha" for kind "test" in registry file ${rwRegistryFile.replace(/[/.]/g, '\\$&')}.*available: beta`),
+    )
+  })
+
+  it('rw schema validation failure errors with location + issue, no field value leaked', async () => {
+    const { handle, write, writeRw, rwRegistryFile } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    // `endpoint` is the wrong type (fails validation); `note` carries a
+    // secret value that the provider schema strips — it must never appear in
+    // the thrown error.
+    writeRw('test:\n  alpha:\n    endpoint: 5\n    note: secret-value\n')
+    handle.registerBroker(() => 'rw')
+    const err = await handle.resolve('test', 'alpha', SESSION_A).catch((e) => e)
+    expect(err.message).toMatch(new RegExp(`invalid entry test\\.alpha in registry file ${rwRegistryFile.replace(/[/.]/g, '\\$&')}`))
+    expect(err.message).toMatch(/endpoint/)
+    // The stripped field value must not leak into the error.
+    expect(err.message).not.toContain('secret-value')
+  })
+
+  it('rw YAML syntax error errors with the rw file path, no file text leaked', async () => {
+    const { handle, write, writeRw, rwRegistryFile } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    writeRw('test: [unclosed')
+    handle.registerBroker(() => 'rw')
+    await expect(handle.resolve('test', 'alpha', SESSION_A)).rejects.toThrow(`failed to parse registry file ${rwRegistryFile}`)
+  })
+
+  it('list only surfaces the ro registry — rw profiles never appear', async () => {
+    const { handle, write, writeRw } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    writeRw('test:\n  beta:\n    endpoint: https://rw-beta.internal\n')
+    const profiles = await handle.list()
+    expect(profiles.map((p) => p.name)).toEqual(['alpha'])
+    expect(JSON.stringify(profiles)).not.toContain('rw-beta')
+  })
+})
+
+// ── canResolve ───────────────────────────────────────────────────────────────
+
+describe('canResolve', () => {
+  it('checks the chosen tier: existence AND provider-schema validity, returning only a boolean', async () => {
+    const { handle, write, writeRw } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    writeRw(RW_REGISTRY)
+    expect(await handle.canResolve('test', 'alpha', 'ro')).toBe(true)
+    expect(await handle.canResolve('test', 'alpha', 'rw')).toBe(true)
+    expect(await handle.canResolve('test', 'ghost', 'ro')).toBe(false)
+    expect(await handle.canResolve('ghost', 'alpha', 'ro')).toBe(false) // unknown kind
+  })
+
+  it('a schema-invalid entry is NOT resolvable — the precheck is as deep as real issuance', async () => {
+    const { handle, writeRw } = setup()
+    handle.register(testProvider)
+    writeRw('test:\n  alpha:\n    endpoint: 5\n')
+    expect(await handle.canResolve('test', 'alpha', 'rw')).toBe(false)
+  })
+
+  it('a missing registry file means nothing resolves from that tier', async () => {
+    const { handle } = setup()
+    handle.register(testProvider)
+    expect(await handle.canResolve('test', 'alpha', 'rw')).toBe(false)
+  })
+
+  it('an unparseable registry file means nothing resolves from that tier (no throw)', async () => {
+    const { handle, writeRw } = setup()
+    handle.register(testProvider)
+    writeRw('test: [unclosed')
+    expect(await handle.canResolve('test', 'alpha', 'rw')).toBe(false)
+  })
+
+  it('never consults the broker — it is a metadata query, not issuance', async () => {
+    const { handle, writeRw } = setup()
+    handle.register(testProvider)
+    writeRw(RW_REGISTRY)
+    let consulted = 0
+    handle.registerBroker(() => { consulted++; return 'rw' })
+    expect(await handle.canResolve('test', 'alpha', 'rw')).toBe(true)
+    expect(consulted).toBe(0)
+  })
+})
+
+// ── registerAccessBroker ─────────────────────────────────────────────────────
+
+describe('registerAccessBroker', () => {
+  it('defers through ctx.inject on opsAccess and ties registration to the effect lifecycle', () => {
+    const registered: Array<(kind: string, name: string, agent: { id: string }) => unknown> = []
+    let disposed = false
+    const effectCleanups: Array<() => void> = []
+    const pctx: any = {
+      opsAccess: {
+        registerBroker: (b: any) => { registered.push(b); return () => { disposed = true } },
+      },
+      effect: (fn: () => () => void) => { effectCleanups.push(fn()) },
+    }
+    let injectedDeps: string[] = []
+    const ctx: any = {
+      inject: (deps: string[], cb: (c: any) => void) => { injectedDeps = deps; cb(pctx) },
+    }
+
+    const broker = () => 'ro' as const
+    plugin.registerAccessBroker(ctx, broker)
+    expect(injectedDeps).toEqual(['opsAccess'])
+    expect(registered).toEqual([broker])
+    expect(effectCleanups).toHaveLength(1)
+    effectCleanups[0]()
+    expect(disposed).toBe(true)
   })
 })
 

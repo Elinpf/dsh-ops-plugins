@@ -1,6 +1,6 @@
 ---
 title: 审计门（ops-access-gate）— 按会话的凭证代发与授权
-status: ready-for-agent
+status: implemented
 date: 2026-08-25
 adr: docs/adr/0001-access-gate.md
 ---
@@ -87,3 +87,8 @@ ops 模式下，agent 默认拿着 `access.yaml` 里登记的全部凭证的全�
 - 用户故事 20（查看当前授权）可以做成 `request_access` 工具的 `list` 动作或 `list_access` 的扩展，实现时挑侵入小的。
 - dsh 原生审批通道的具体机制（`ask` 裁决 / approval 交互 API）实现前去 dsh 源码确认形状，参考 `docs/interaction` 相关文档。
 - 设计推演全过程见 ADR-0001；词汇以 CONTEXT.md "审计门" 一节为准。
+
+## 后续方向（架构走查 2026-08-25 记录，未定案）
+
+- **ro/rw 分档只是存放位置，无机制核验凭证的真实权限**——一个 admin 凭证躺进 ro 档就是默认全权限，门对此不可见。候选方向：provider 可选实现能力探针（k8s 用 `auth can-i` 自检，ceph/ssh 未必可行），或登记时人工声明 + 展示。下次架构走查若重提，先读这条。
+- **凭证管理没有 webui**——目前全部靠手编 YAML。候选方向：登记文件的浏览/校验界面（@ 菜单的候选路由 `/ops-access/list` 已是现成数据源），审批面板二期再谈。

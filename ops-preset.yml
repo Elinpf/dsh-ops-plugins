@@ -271,6 +271,7 @@
   group: true
   isolate:
     opsAccess: true
+    opsAccessGate: true
   config:
     - id: ops-access
       name: '@deepseek-ai/dsh-ops-access'
@@ -283,6 +284,21 @@
 
     - id: ops-access-ssh
       name: '@deepseek-ai/dsh-ops-access-ssh'
+
+    # The access gate: per-session credential brokering with human approval.
+    # Sits in this realm so its deferred `ctx.inject(['opsAccess'])` broker
+    # registration resolves THIS preset's opsAccess instance (registerAccessBroker
+    # uses the same deferred-mount discipline as registerAccessProvider — a static
+    # inject here would deadlock the loader against the ops-access definition
+    # row). It publishes `opsAccessGate` (the grant-ledger handle) into the same
+    # isolate realm — without `opsAccessGate` in the realm map above, that
+    # provide would land in the root realm and dsh-agent-presets rejects it as a
+    # process-global preset service. It also reads the host-plane `approval`
+    # service and registers the `request_access` tool into the host-plane `tools`
+    # registry (its `inject`). Without this row mounted, resolve is byte-for-byte
+    # the pre-gate ro behavior.
+    - id: ops-access-gate
+      name: '@deepseek-ai/dsh-ops-access-gate'
 
     - id: ops-tool-kubectl
       name: '@deepseek-ai/dsh-ops-kubectl'
