@@ -50,10 +50,19 @@ export const inject: string[] = []
 export interface Config {
   /** Path to the YAML access registry; a leading `~` expands to $HOME. */
   registryFile: string
+  /**
+   * Path to the rw (read-write) credential registry. Same format and the same
+   * per-call read/validate discipline as {@link registryFile}, but held
+   * separately so its contents never appear in the agent-readable access.yaml.
+   * Defaults to `~/.dsh-ops/access-rw.yaml`. Owned by core; the access gate
+   * only decides ro/rw, it never sees these fields.
+   */
+  rwRegistryFile: string
 }
 
 export const Config: z<Config> = z.object({
   registryFile: z.string().default('~/.dsh-ops/access.yaml'),
+  rwRegistryFile: z.string().default('~/.dsh-ops/access-rw.yaml'),
 })
 
 // ── Service contract ─────────────────────────────────────────────────────────
@@ -85,12 +94,53 @@ export interface AccessProfile {
   fields: Record<string, unknown>
 }
 
+// ── Access gate (broker) ─────────────────────────────────────────────────────
+
+/**
+ * Minimal caller-agent identity consulted by the broker. dsh's `Agent` (whose
+ * `id` is the session id) satisfies this structurally; core takes a narrow
+ * dependency on purpose — the broker is a pure decision function and never
+ * touches the rest of the agent.
+ */
+export interface AccessAgent {
+  /** Session id (`exec.agent.id`). Grants are keyed by this. */
+  readonly id: string
+}
+
+/**
+ * A broker's decision for one resolve call.
+ * - `'ro'` — serve the profile from the default registry (access.yaml)
+ * - `'rw'` — serve the profile from the rw registry (access-rw.yaml)
+ * - `{ deny }` — refuse; core throws an error pointing the agent at
+ *   `request_access` (ssh without authorization takes this path).
+ */
+export type AccessBrokerDecision = 'ro' | 'rw' | { deny: string }
+
+/**
+ * The pure decision function a gate registers. Receives only kind, profile
+ * name, and the caller agent — never credential fields. Called by resolve
+ * only when a broker is registered AND an agent context was supplied; absent
+ * either, resolve behaves exactly as it does without a gate (ro).
+ */
+export type AccessBroker = (kind: string, name: string, agent: AccessAgent) => AccessBrokerDecision
+
 /** The ops access handle exposed via ctx.get('opsAccess'). */
 export interface OpsAccess {
   /** Register a credential-kind provider. Throws if the kind is already registered. Returns a disposer. */
   register(provider: AccessProvider): () => void
-  /** Resolve one profile by kind and name. Throws on unknown kind, unknown name, or invalid entry. */
-  resolve(kind: string, name: string): Promise<AccessProfile>
+  /**
+   * Register an access broker (the gate). At most one broker is active; a later
+   * registration replaces an earlier one. Returns a disposer. Without a
+   * registered broker, resolve is unchanged from the broker-less behavior.
+   */
+  registerBroker(broker: AccessBroker): () => void
+  /**
+   * Resolve one profile by kind and name. Throws on unknown kind, unknown
+   * name, or invalid entry. When a broker is registered and `agent` is
+   * supplied, the broker decides whether the rw profile is served; otherwise
+   * the ro profile (from `registryFile`) is served, byte-for-byte as before.
+   */
+  resolve(kind: string, name: string, agent?: AccessAgent): Promise<AccessProfile>
   /** List all profiles across all registered kinds. Sections without a registered provider are skipped. */
   list(): Promise<AccessProfile[]>
   /**
@@ -120,6 +170,19 @@ declare module '@deepseek-ai/cordis' {
 export function registerAccessProvider(ctx: Context, provider: AccessProvider): void {
   ctx.inject(['opsAccess'], (pctx: Context) => {
     pctx.effect(() => pctx.opsAccess!.register(provider))
+  })
+}
+
+/**
+ * Register an access broker (the gate) from the gate plugin's `apply()`. Same
+ * deferred-mount discipline as {@link registerAccessProvider}: the preset
+ * mounts sibling rows concurrently, so a static inject on 'opsAccess' can
+ * deadlock the loader against the definition row — this defers through
+ * `ctx.inject` and ties the registration to the plugin's effect lifecycle.
+ */
+export function registerAccessBroker(ctx: Context, broker: AccessBroker): void {
+  ctx.inject(['opsAccess'], (pctx: Context) => {
+    pctx.effect(() => pctx.opsAccess!.registerBroker(broker))
   })
 }
 
@@ -235,8 +298,15 @@ async function renderAccessReferences(
 // ── Plugin apply ─────────────────────────────────────────────────────────────
 
 export function apply(ctx: Context, config: Config): void {
-  const file = expandHome(config.registryFile)
+  const roFile = expandHome(config.registryFile)
+  const rwFile = expandHome(config.rwRegistryFile)
   const providers = new Map<string, AccessProvider>()
+  // At most one broker is active; a later registration replaces an earlier one.
+  // The replaced broker's disposer is folded into the replacement's, so each
+  // registration's effect cleanup runs exactly once even under replacement or
+  // HMR unload — honoring the cordis effect-lifecycle discipline.
+  let broker: AccessBroker | undefined
+  let clearBroker: () => void = () => {}
 
   const handle: OpsAccess = {
     register(provider: AccessProvider): () => void {
@@ -247,12 +317,46 @@ export function apply(ctx: Context, config: Config): void {
       return () => { providers.delete(provider.kind) }
     },
 
-    async resolve(kind: string, profileName: string): Promise<AccessProfile> {
+    registerBroker(next: AccessBroker): () => void {
+      // Replace the active broker: fold the previous disposer into this one so
+      // the prior registration's cleanup still runs (once) under replacement
+      // or HMR unload, and the guard prevents a stale disposer clobbering a
+      // later broker.
+      const prev = clearBroker
+      broker = next
+      let active = true
+      const dispose = () => {
+        if (!active) return
+        active = false
+        if (broker === next) {
+          broker = undefined
+          clearBroker = () => {}
+        }
+        prev()
+      }
+      clearBroker = dispose
+      return dispose
+    },
+
+    async resolve(kind: string, profileName: string, agent?: AccessAgent): Promise<AccessProfile> {
       const provider = providers.get(kind)
       if (!provider) {
         const registered = [...providers.keys()].sort()
         throw new Error(`ops-access: unknown kind "${kind}" (no provider registered; registered kinds: ${registered.join(', ') || '(none)'})`)
       }
+      // The broker is consulted only when one is registered AND an agent
+      // context was supplied. No broker, or no agent (a system-internal call)
+      // → ro, byte-for-byte the pre-gate behavior. This is the fail-closed
+      // guarantee: rw is never issued without an agent to key the grant on.
+      let tier: 'ro' | 'rw' = 'ro'
+      if (broker && agent) {
+        const decision = broker(kind, profileName, agent)
+        if (typeof decision === 'object') {
+          throw new Error(`ops-access: access denied for ${kind}/${profileName}: ${decision.deny} (request rw access via the request_access tool)`)
+        }
+        if (decision === 'rw') tier = 'rw'
+      }
+      const file = tier === 'rw' ? rwFile : roFile
       const registry = await loadRegistry(file)
       if (registry === null) {
         throw new Error(`ops-access: registry file not found: ${file}`)
@@ -267,7 +371,7 @@ export function apply(ctx: Context, config: Config): void {
     },
 
     async list(): Promise<AccessProfile[]> {
-      const registry = await loadRegistry(file)
+      const registry = await loadRegistry(roFile)
       if (registry === null) return []
       const profiles: AccessProfile[] = []
       for (const [kind, section] of Object.entries(registry)) {
@@ -276,7 +380,7 @@ export function apply(ctx: Context, config: Config): void {
         const provider = providers.get(kind)
         if (!provider) continue
         for (const [profileName, entry] of Object.entries(section)) {
-          profiles.push(buildProfile(provider, kind, profileName, entry, file))
+          profiles.push(buildProfile(provider, kind, profileName, entry, roFile))
         }
       }
       return profiles
@@ -286,7 +390,7 @@ export function apply(ctx: Context, config: Config): void {
       const lines: string[] = [
         'Ops access registry — how to manage credentials',
         '',
-        `File: ${file}`,
+        `File: ${roFile}`,
         'Re-read, re-parsed, and re-validated on EVERY call — edit it with the fs tools and the change takes effect immediately, no restart.',
         '',
         'Format:',

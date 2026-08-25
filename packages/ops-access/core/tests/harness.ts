@@ -10,9 +10,10 @@ import { join } from 'node:path'
 import { apply } from '../src/index.ts'
 import type { OpsAccess } from '../src/index.ts'
 
-export function setup(opts: { registryFile?: string } = {}) {
+export function setup(opts: { registryFile?: string, rwRegistryFile?: string } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ops-access-'))
   const registryFile = opts.registryFile ?? join(dir, 'access.yaml')
+  const rwRegistryFile = opts.rwRegistryFile ?? join(dir, 'access-rw.yaml')
   let handle: OpsAccess | undefined
   const listeners: Array<{ event: string, listener: (...args: any[]) => unknown, options?: unknown }> = []
   const routes: any[] = []
@@ -28,9 +29,10 @@ export function setup(opts: { registryFile?: string } = {}) {
     },
     inject: (deps: string[], cb: (c: any) => void) => {
       if (deps.includes('webServer')) cb(wctx)
+      if (deps.includes('opsAccess') && handle) cb({ ...ctx, opsAccess: handle, effect: (fn: () => () => void) => { fn() } })
     },
   }
-  apply(ctx, { registryFile })
+  apply(ctx, { registryFile, rwRegistryFile })
   return {
     handle: handle!,
     listeners,
@@ -49,6 +51,8 @@ export function setup(opts: { registryFile?: string } = {}) {
     },
     dir,
     registryFile,
+    rwRegistryFile,
     write: (text: string) => writeFileSync(registryFile, text),
+    writeRw: (text: string) => writeFileSync(rwRegistryFile, text),
   }
 }

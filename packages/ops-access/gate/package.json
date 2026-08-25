@@ -1,0 +1,40 @@
+{
+  "name": "@deepseek-ai/dsh-ops-access-gate",
+  "version": "0.1.0",
+  "description": "Ops access gate — per-session credential brokering. Owns an in-process grant ledger keyed by agent.id and registers a pure-decision broker (ro/rw) into the ops-access seam. Never touches credential fields.",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib/index.js",
+    "lib/index.d.ts",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-ops-access": "^0.1.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-ops-access": "workspace:*",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.11",
+    "zod": "^4.4.3"
+  },
+  "license": "MIT"
+}

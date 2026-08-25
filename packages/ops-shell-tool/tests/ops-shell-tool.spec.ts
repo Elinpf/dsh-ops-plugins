@@ -31,7 +31,7 @@ interface ShellRunOutcome {
 }
 
 function setup(opts: {
-  resolveImpl?: (kind: string, name: string) => Promise<AccessProfile>
+  resolveImpl?: (kind: string, name: string, agent?: { id: string }) => Promise<AccessProfile>
   runImpl?: (spec: any) => Promise<ShellRunOutcome>
   withOpsAccess?: boolean
 } = {}) {
@@ -41,9 +41,9 @@ function setup(opts: {
   const calls = { resolve: 0, shellRun: 0 }
 
   const opsAccess = {
-    resolve: (kind: string, name: string) => {
+    resolve: (kind: string, name: string, agent?: { id: string }) => {
       calls.resolve++
-      return (opts.resolveImpl ?? (async () => PROFILE))(kind, name)
+      return (opts.resolveImpl ?? (async () => PROFILE))(kind, name, agent)
     },
   }
 
@@ -67,7 +67,7 @@ function setup(opts: {
 
   registerProfiledShellTool(ctx, SPEC)
   const tool = tools[0]
-  const exec = () => ({ signal: new AbortController().signal })
+  const exec = (agent?: { id: string }) => ({ signal: new AbortController().signal, agent })
   return { tools, tool, shellRequests, calls, effectCleanups, exec }
 }
 
@@ -99,6 +99,25 @@ describe('registerProfiledShellTool', () => {
     expect(value.stdout).toBe('ok\n')
     expect(h.shellRequests[0].timeoutMs).toBe(30000)
     expect(h.shellRequests[0].signal).toBe(e.signal)
+  })
+
+  it('forwards exec.agent into opsAccess.resolve (the gate keys grants on it)', async () => {
+    const seen: Array<{ kind: string, name: string, agent: unknown }> = []
+    const h = setup({
+      resolveImpl: async (kind, name, agent) => { seen.push({ kind, name, agent }); return PROFILE },
+    })
+    const agent = { id: 'sess-1' }
+    await h.tool.execute({ target: 'prod', command: 'status' }, h.exec(agent))
+    expect(seen).toEqual([{ kind: 'widget', name: 'prod', agent }])
+  })
+
+  it('resolve is called with undefined agent when exec carries none', async () => {
+    const seen: Array<unknown> = []
+    const h = setup({
+      resolveImpl: async (_kind, _name, agent) => { seen.push(agent); return PROFILE },
+    })
+    await h.tool.execute({ target: 'prod', command: 'status' }, h.exec())
+    expect(seen).toEqual([undefined])
   })
 
   it('normalizes a null exitCode (signal death) to -1', async () => {

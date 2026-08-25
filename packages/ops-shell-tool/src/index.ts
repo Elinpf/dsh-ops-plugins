@@ -17,7 +17,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { OpsAccess } from '@deepseek-ai/dsh-ops-access'
+import type { AccessAgent, OpsAccess } from '@deepseek-ai/dsh-ops-access'
 // Type-only import: pulls in the `ctx.shell: ShellExecutor` augmentation and
 // the ShellExecRequest/ShellRunResult shapes we run against.
 import type { ShellExecRequest } from '@deepseek-ai/dsh-shell'
@@ -86,6 +86,18 @@ const output = {
   },
 } as const
 
+/**
+ * The exec context the factory's execute runs under. Structurally a subset of
+ * dsh's ToolRunContext: `signal` (required there, optional here for tests)
+ * and the optional caller `agent`, whose `id` is the session the access gate
+ * keys grants on. The factory passes `agent` straight through to resolve —
+ * consumers stay identity-only and need no changes.
+ */
+export interface ShellToolExec {
+  signal?: ShellExecRequest['signal']
+  agent?: AccessAgent
+}
+
 // ── Factory ──────────────────────────────────────────────────────────────────
 
 /**
@@ -101,7 +113,7 @@ export function registerProfiledShellTool(ctx: Context, spec: ProfiledShellToolS
       command: { type: 'string', required: true, description: spec.commandDescription },
     },
     output,
-    async execute(args: Record<string, unknown>, exec: { signal?: ShellExecRequest['signal'] }): Promise<ShellToolResult> {
+    async execute(args: Record<string, unknown>, exec: ShellToolExec): Promise<ShellToolResult> {
       let fullCommand = ''
       try {
         // Resolve the seam per call through ctx.get: the preset mounts the
@@ -114,7 +126,9 @@ export function registerProfiledShellTool(ctx: Context, spec: ProfiledShellToolS
           const message = 'ops-access service unavailable — is the ops-access plugin mounted in this preset?'
           return { error: message, exitCode: -1, stdout: '', stderr: message, command: '' }
         }
-        const profile = await opsAccess.resolve(spec.kind, args[spec.targetParam] as string)
+        // Pass the caller agent through so the access gate (if mounted) can
+        // key grants on the session id. Without a gate this arg is inert.
+        const profile = await opsAccess.resolve(spec.kind, args[spec.targetParam] as string, exec.agent)
         fullCommand = spec.buildCommand(profile.fields, args.command as string)
         const request: ShellExecRequest = { command: fullCommand, timeoutMs: 30000, signal: exec.signal }
         const resolved = ctx.shell.resolve(request)
