@@ -68,7 +68,7 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 
 外部包的依赖按 monorepo 真实路径解析，和 dsh 本体用的是**两份模块实例**。纯函数（createUserMessage、defineTool）无所谓；带模块私有状态的（typert 的 remote 标记 WeakMap、agent-presets 的 mounts 表）会静默失效——标记记在我们那份，gateway 读它那份。所以 remote 路由走普通 HTTP（webServer.register + fetch），不走 TypertRemoteService。
 
-### 审计门 (Access Gate) — 未实现，设计已定稿
+### 审计门 (Access Gate) — 已实现
 
 按会话代发凭证的授权层。**决策与理由见 `docs/adr/0001-access-gate.md`，构建内容见 `docs/specs/0001-access-gate.md`**——这里只定义词汇：
 

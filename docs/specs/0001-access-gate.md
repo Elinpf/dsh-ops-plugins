@@ -1,6 +1,6 @@
 ---
 title: 审计门（ops-access-gate）— 按会话的凭证代发与授权
-status: ready-for-agent
+status: implemented
 date: 2026-08-25
 adr: docs/adr/0001-access-gate.md
 ---
