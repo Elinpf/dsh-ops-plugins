@@ -1,60 +1,98 @@
 /**
- * Ops access gate — per-session credential brokering.
+ * Ops access gate — per-session credential brokering with human approval.
  *
  * This plugin owns the **authorization ledger**: an in-process map keyed by
  * session id (`exec.agent.id`). It registers a **pure-decision broker** into
  * the ops-access seam via {@link registerAccessBroker}; that broker answers
  * `'rw'` when the calling session holds an unexpired grant for the profile,
- * `'ro'` otherwise. Core then serves the profile from the matching registry
- * file (ro → access.yaml, rw → access-rw.yaml). The gate never sees
- * credential fields — kind, profile name, and session id are its whole world.
+ * `'ro'` otherwise, and `{ deny }` for approval-required kinds (ssh) without
+ * a grant. Core then serves the profile from the matching registry file
+ * (ro → access.yaml, rw → access-rw.yaml). The gate never sees credential
+ * fields — kind, profile name, and session id are its whole world.
  *
- * Scope of this package (issue 01): the ledger, the broker, session-keyed
- * isolation, and the fail-closed guarantee (no agent → core serves ro, never
- * rw). Grant *creation* (the `request_access` approval flow), TTL expiry,
- * manual revoke, ssh denial, and the audit log land in a follow-up.
+ * Grants are created explicitly: the model calls the `request_access` tool
+ * with a profile and a reason, the gate asks the human through dsh's native
+ * approval channel (`ctx.approval`), and only an `'allowed-once'` outcome
+ * writes the grant. Grants carry a TTL — expiry is the only reliable
+ * fallback boundary (a web session has no dependable end event). Every
+ * grant, expiry, revoke, and elevated issue lands in a JSONL audit file.
  *
  * @module @deepseek-ai/dsh-ops-access-gate
  */
 
+import { appendFileSync, mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import type { AccessBroker } from '@deepseek-ai/dsh-ops-access'
-import { registerAccessBroker } from '@deepseek-ai/dsh-ops-access'
+import { defineTool } from '@deepseek-ai/dsh-tools'
+import type { AccessAgent, AccessBroker } from '@deepseek-ai/dsh-ops-access'
+import { expandHome, registerAccessBroker } from '@deepseek-ai/dsh-ops-access'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
 export const name = 'ops-access-gate'
 
-export const inject: string[] = []
+export const inject = ['tools']
 
-export const Config = z.object({})
+// ── Config ───────────────────────────────────────────────────────────────────
+
+export interface Config {
+  /** Kinds that require a grant for ANY use (no ro tier exists, e.g. ssh). */
+  approvalRequiredKinds: string[]
+  /** Default grant lifetime when request_access omits ttlMinutes. */
+  defaultTtlMinutes: number
+  /** Upper bound for a requested grant lifetime. */
+  maxTtlMinutes: number
+  /** JSONL audit log path; a leading `~` expands to $HOME. */
+  auditFile: string
+}
+
+export const Config: z<Config> = z.object({
+  approvalRequiredKinds: z.array(z.string()).default(['ssh']),
+  defaultTtlMinutes: z.number().default(30),
+  maxTtlMinutes: z.number().default(480),
+  auditFile: z.string().default('~/.dsh-ops/audit.log'),
+})
 
 // ── Grant + service contract ─────────────────────────────────────────────────
 
 /**
- * One authorization: session S may use rw credentials for `kind`/`name`.
- * Grants are short-lived and in-process only — a dsh restart clears them,
- * which is acceptable under the threat model (issue 01 scope: presence only;
- * TTL/approver/reason are added by the request_access flow).
+ * One authorization: session S may use elevated credentials for `kind`/`name`
+ * until `expiresAt`. Grants are in-process only — a dsh restart clears them,
+ * which is acceptable: they are short-lived by design.
  */
 export interface Grant {
   /** Session id (`exec.agent.id`) this grant is scoped to. */
   readonly session: string
   readonly kind: string
   readonly name: string
+  /** Epoch ms when the grant lapses. */
+  readonly expiresAt: number
+  /** The reason the model stated and the human approved. */
+  readonly reason: string
+  /** Who approved; 'user' via the approval channel. */
+  readonly approvedBy: string
+}
+
+/** A live grant as reported by `list` (session key omitted — it is the query). */
+export interface ActiveGrant {
+  readonly kind: string
+  readonly name: string
+  readonly expiresAt: number
+  readonly reason: string
+  readonly approvedBy: string
 }
 
 /** The gate handle exposed via ctx.get('opsAccessGate'). */
 export interface OpsAccessGate {
-  /**
-   * Record a grant. Idempotent for the same (session, kind, name) — recording
-   * twice does not extend or duplicate. Used by the `request_access` approval
-   * flow; tests inject grants directly.
-   */
+  /** Record a grant. Re-authorizing the same (session, kind, name) replaces the entry. */
   authorize(grant: Grant): void
-  /** Whether this session holds a grant for the profile (the broker's query). */
+  /** Whether this session holds an unexpired grant for the profile (the broker's query). */
   isAuthorized(session: string, kind: string, name: string): boolean
+  /** Drop a grant immediately. Returns false when no such grant existed. */
+  revoke(session: string, kind: string, name: string): boolean
+  /** This session's live (unexpired) grants. */
+  list(session: string): ActiveGrant[]
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -63,47 +101,264 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-// ── Ledger ────────────────────────────────────────────────────────────────────
+// ── Approval channel (structural — no dependency on the approval package) ────
+
+/** Closed outcome vocabulary, mirroring dsh's ApprovalOutcome. */
+type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
+
+/**
+ * The slice of dsh's approval service this plugin uses, declared structurally
+ * (same discipline as dsh's own sandbox escalation): the agent and callId are
+ * opaque pass-throughs, so no type dependency on dsh-agent/dsh-user-approval.
+ */
+interface ApprovalChannel {
+  request(req: {
+    agent: unknown
+    toolName: string
+    callId?: unknown
+    reason?: string
+    signal?: AbortSignal
+  }): Promise<ApprovalOutcome>
+}
+
+// ── Audit log ────────────────────────────────────────────────────────────────
+
+interface AuditEvent {
+  event: 'grant' | 'expire' | 'revoke' | 'rw-issue' | 'gated-issue'
+  session: string
+  kind: string
+  name: string
+  reason?: string
+  approvedBy?: string
+  expiresAt?: number
+}
+
+/**
+ * Append-only JSONL audit sink. Synchronous so a grant and its audit line can
+ * never be reordered by a crash in between, and so tests read deterministic
+ * output. A write failure must not break authorization — but an audit gap
+ * matters, so it shouts on the server log.
+ */
+function makeAudit(file: string): (e: AuditEvent) => void {
+  mkdirSync(dirname(file), { recursive: true })
+  return (e) => {
+    try {
+      appendFileSync(file, JSON.stringify({ ts: new Date().toISOString(), ...e }) + '\n')
+    } catch (err) {
+      console.error(`ops-access-gate: audit write failed for ${file} (authorization continues, audit has a gap):`, err)
+    }
+  }
+}
+
+// ── Ledger ───────────────────────────────────────────────────────────────────
 
 /**
  * Per-session grants. Preset-plane shared instance → keyed by session id, not
- * closure state. Each session maps to a Set of `kind\0name` keys, computed
- * once at authorize time so the per-resolve `isAuthorized` is a single
- * `Set.has` (O(1), no per-call string concat) — it runs on every profiled
- * shell call via the broker, hence on the resolve hot path.
+ * closure state. Expiry is lazy: a lapsed grant is evicted (and audit-logged)
+ * the first time it is consulted — TTL is the reliable boundary, there is no
+ * session-end event to hook.
  */
-type Ledger = Map<string, Set<string>>
+type Ledger = Map<string, Map<string, Grant>>
 
 /** Stable key for a (kind, name) pair within one session's grant set. */
 function grantKey(kind: string, name: string): string {
-  return `${kind}\0${name}`
+  return `${kind}${name}`
 }
 
-function makeGate(ledger: Ledger): OpsAccessGate {
+function makeGate(ledger: Ledger, audit: (e: AuditEvent) => void, now: () => number): OpsAccessGate {
+  /** Fetch a grant, evicting + audit-logging it when lapsed. */
+  function live(session: string, kind: string, name: string): Grant | undefined {
+    const grant = ledger.get(session)?.get(grantKey(kind, name))
+    if (!grant) return undefined
+    if (grant.expiresAt <= now()) {
+      ledger.get(session)!.delete(grantKey(kind, name))
+      audit({ event: 'expire', session, kind, name })
+      return undefined
+    }
+    return grant
+  }
+
   return {
     authorize(grant: Grant): void {
       let set = ledger.get(grant.session)
-      if (!set) ledger.set(grant.session, set = new Set())
-      set.add(grantKey(grant.kind, grant.name))
+      if (!set) ledger.set(grant.session, set = new Map())
+      set.set(grantKey(grant.kind, grant.name), grant)
     },
     isAuthorized(session: string, kind: string, name: string): boolean {
-      return ledger.get(session)?.has(grantKey(kind, name)) ?? false
+      return live(session, kind, name) !== undefined
+    },
+    revoke(session: string, kind: string, name: string): boolean {
+      return ledger.get(session)?.delete(grantKey(kind, name)) ?? false
+    },
+    list(session: string): ActiveGrant[] {
+      const out: ActiveGrant[] = []
+      for (const grant of ledger.get(session)?.values() ?? []) {
+        if (live(session, grant.kind, grant.name) === undefined) continue
+        out.push({ kind: grant.kind, name: grant.name, expiresAt: grant.expiresAt, reason: grant.reason, approvedBy: grant.approvedBy })
+      }
+      return out
     },
   }
 }
 
+// ── request_access tool ──────────────────────────────────────────────────────
+
+const REQUEST_ACCESS = 'request_access'
+
+/** The exec context the tool runs under (structural subset of dsh's ToolRunContext). */
+interface RequestAccessExec {
+  signal?: AbortSignal
+  agent?: AccessAgent
+  callId?: unknown
+}
+
+interface ToolResult {
+  ok: boolean
+  message: string
+}
+
+/** Split "kind/name" on the FIRST slash — profile names may themselves contain '@' etc. */
+function parseProfile(raw: unknown): { kind: string, profileName: string } | undefined {
+  if (typeof raw !== 'string') return undefined
+  const slash = raw.indexOf('/')
+  if (slash <= 0 || slash === raw.length - 1) return undefined
+  return { kind: raw.slice(0, slash), profileName: raw.slice(slash + 1) }
+}
+
 // ── Plugin apply ─────────────────────────────────────────────────────────────
 
-export function apply(ctx: Context, _config: Record<string, never>): void {
+export function apply(ctx: Context, config: Config): void {
+  const audit = makeAudit(expandHome(config.auditFile))
   const ledger: Ledger = new Map()
-  const gate = makeGate(ledger)
+  const gate = makeGate(ledger, audit, () => Date.now())
   ctx.provide('opsAccessGate', gate)
 
   // The broker is a pure decision function. Core only calls it when a broker
   // is registered AND an agent was supplied — so `agent` is always present
   // here; the agent-missing (fail-closed → ro) case is handled by core before
   // this function is ever reached.
-  const broker: AccessBroker = (kind, name, agent) =>
-    gate.isAuthorized(agent.id, kind, name) ? 'rw' : 'ro'
+  const broker: AccessBroker = (kind, profileName, agent) => {
+    const authorized = gate.isAuthorized(agent.id, kind, profileName)
+    // Approval-required kinds (ssh): the credential lives in the ro registry —
+    // the grant is a timed pass to use it at all.
+    if (config.approvalRequiredKinds.includes(kind)) {
+      if (authorized) {
+        audit({ event: 'gated-issue', session: agent.id, kind, name: profileName })
+        return 'ro'
+      }
+      return { deny: `${kind} has no read-only tier; request timed access via the ${REQUEST_ACCESS} tool (profile "${kind}/${profileName}", with a reason)` }
+    }
+    if (authorized) {
+      audit({ event: 'rw-issue', session: agent.id, kind, name: profileName })
+      return 'rw'
+    }
+    return 'ro'
+  }
   registerAccessBroker(ctx, broker)
+
+  ctx.effect(() => ctx.tools.register(defineTool({
+    name: REQUEST_ACCESS,
+    description:
+      'Request time-limited elevated access to an ops profile (a human approves each request), ' +
+      'list this session\'s active grants, or revoke one. Elevated (rw) credentials are issued ' +
+      'only after approval and lapse automatically at the TTL.',
+    parameters: {
+      action: { type: 'string', enum: ['request', 'list', 'revoke'], required: true, description: 'request: ask a human for a timed grant; list: show this session\'s active grants; revoke: drop a grant immediately.' },
+      profile: { type: 'string', description: '"kind/name", e.g. "k8s/prod". Required for request and revoke.' },
+      reason: { type: 'string', description: 'Why the access is needed — shown verbatim to the human approver. Required for request.' },
+      ttlMinutes: { type: 'number', description: `Requested grant lifetime in minutes (default ${config.defaultTtlMinutes}, max ${config.maxTtlMinutes}).` },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          message: { type: 'string', required: true },
+        },
+      },
+      // Pure function of (args, value): same inputs, same text, no state touched.
+      render: (_args: unknown, value: ToolResult) => [{ type: 'text' as const, text: value.message }],
+    },
+    async execute(args: Record<string, unknown>, exec: RequestAccessExec): Promise<ToolResult> {
+      const action = args.action as string
+      const agent = exec.agent
+      // Fail closed: no agent means an internal (non-session) caller, and
+      // grants have nothing to key on.
+      if (!agent) {
+        return { ok: false, message: `${REQUEST_ACCESS} requires a session context; internal calls cannot hold grants` }
+      }
+
+      if (action === 'list') {
+        const grants = gate.list(agent.id)
+        if (grants.length === 0) return { ok: true, message: 'No active grants in this session.' }
+        const lines = grants.map((g) => {
+          const remaining = Math.max(0, Math.round((g.expiresAt - Date.now()) / 60000))
+          return `- ${g.kind}/${g.name} — ${remaining} min left (approved by ${g.approvedBy}) — ${g.reason}`
+        })
+        return { ok: true, message: `Active grants:\n${lines.join('\n')}` }
+      }
+
+      const parsed = parseProfile(args.profile)
+      if (!parsed) {
+        return { ok: false, message: 'profile must be "kind/name", e.g. "k8s/prod"' }
+      }
+      const { kind, profileName } = parsed
+
+      if (action === 'revoke') {
+        const removed = gate.revoke(agent.id, kind, profileName)
+        if (removed) audit({ event: 'revoke', session: agent.id, kind, name: profileName })
+        return removed
+          ? { ok: true, message: `Revoked ${kind}/${profileName}; this session is back to read-only for it.` }
+          : { ok: false, message: `No active grant for ${kind}/${profileName} in this session.` }
+      }
+
+      // action === 'request'
+      const reason = typeof args.reason === 'string' ? args.reason.trim() : ''
+      if (reason === '') {
+        return { ok: false, message: 'request requires a non-empty reason — it is shown to the human approver' }
+      }
+
+      // Existence check through the ro path: resolve WITHOUT an agent, so the
+      // broker is never consulted and the answer is the plain registry.
+      const opsAccess = ctx.get('opsAccess')
+      if (!opsAccess) {
+        return { ok: false, message: 'ops-access service unavailable — is the ops-access plugin mounted in this preset?' }
+      }
+      try {
+        await opsAccess.resolve(kind, profileName)
+      } catch (err) {
+        // resolve's message already lists the available profiles — verbatim.
+        return { ok: false, message: String((err as Error | null)?.message || err) }
+      }
+
+      const requested = typeof args.ttlMinutes === 'number' ? args.ttlMinutes : config.defaultTtlMinutes
+      const ttl = Math.min(Math.max(1, Math.round(requested)), config.maxTtlMinutes)
+
+      const approval = ctx.get('approval') as ApprovalChannel | undefined
+      if (!approval) {
+        return { ok: false, message: 'No approval channel in this deployment (headless?). Ask the operator to grant access out of band.' }
+      }
+      let outcome: ApprovalOutcome
+      try {
+        outcome = await approval.request({
+          agent,
+          toolName: REQUEST_ACCESS,
+          callId: exec.callId,
+          reason: `elevated access to ${kind}/${profileName} for ${ttl} min — ${reason}`,
+          signal: exec.signal,
+        })
+      } catch (err) {
+        return { ok: false, message: `approval request failed: ${String((err as Error | null)?.message || err)}` }
+      }
+      if (outcome !== 'allowed-once') {
+        return { ok: false, message: `Access to ${kind}/${profileName} was not granted (${outcome}).` }
+      }
+
+      const expiresAt = Date.now() + ttl * 60000
+      gate.authorize({ session: agent.id, kind, name: profileName, expiresAt, reason, approvedBy: 'user' })
+      audit({ event: 'grant', session: agent.id, kind, name: profileName, reason, approvedBy: 'user', expiresAt })
+      return { ok: true, message: `Granted ${kind}/${profileName} until ${new Date(expiresAt).toISOString()} (${ttl} min). Elevated credentials apply to this session only.` }
+    },
+  })))
 }

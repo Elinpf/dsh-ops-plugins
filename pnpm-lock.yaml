@@ -80,6 +80,9 @@ importers:
 
   packages/ops-access/gate:
     dependencies:
+      '@deepseek-ai/dsh-tools':
+        specifier: ^0.0.1-rc.1
+        version: 0.0.1-rc.1(smc7k3zt7twsgl7bkikvuzym7i)
       '@deepseek-ai/schemastery':
         specifier: ^3.18.1
         version: 3.18.1

@@ -22,6 +22,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@deepseek-ai/dsh-tools": "^0.0.1-rc.1",
     "@deepseek-ai/schemastery": "^3.18.1"
   },
   "peerDependencies": {
@@ -31,6 +32,7 @@
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
     "@deepseek-ai/dsh-ops-access": "workspace:*",
+    "@deepseek-ai/dsh-tools": "0.0.1-rc.1",
     "@types/node": "^22.0.0",
     "typescript": "^5.4.0",
     "vitest": "^4.1.11",
