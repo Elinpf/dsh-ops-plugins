@@ -382,13 +382,23 @@ describe('broker + rw registry', () => {
     expect(seen).toEqual([{ kind: 'test', name: 'alpha', agent: SESSION_A }])
   })
 
-  it("broker 'deny' decision throws an error pointing to request_access", async () => {
+  it("broker 'deny' decision throws the broker's message verbatim (broker owns the guidance)", async () => {
     const { handle, write } = setup()
     handle.register(testProvider)
     write(RO_REGISTRY)
-    handle.registerBroker(() => ({ deny: 'no active grant' }))
-    await expect(handle.resolve('test', 'alpha', SESSION_A)).rejects.toThrow(/request_access/)
-    await expect(handle.resolve('test', 'alpha', SESSION_A)).rejects.toThrow(/no active grant/)
+    handle.registerBroker(() => ({ deny: 'no active grant — call request_access' }))
+    await expect(handle.resolve('test', 'alpha', SESSION_A)).rejects.toThrow('ops-access: access denied for test/alpha: no active grant — call request_access')
+  })
+
+  it('rw-tier miss says the grant was approved but no rw credential is registered', async () => {
+    const { handle, write, writeRw, rwRegistryFile } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    writeRw(RW_REGISTRY.replace('alpha', 'other'))
+    handle.registerBroker(() => 'rw')
+    const err = await handle.resolve('test', 'alpha', SESSION_A).catch((e) => e)
+    expect(err.message).toContain(rwRegistryFile)
+    expect(err.message).toContain('no rw credential is registered')
   })
 
   it('registerBroker disposes: after dispose, escalation is gone', async () => {
@@ -472,6 +482,23 @@ describe('broker + rw registry', () => {
     const profiles = await handle.list()
     expect(profiles.map((p) => p.name)).toEqual(['alpha'])
     expect(JSON.stringify(profiles)).not.toContain('rw-beta')
+  })
+})
+
+// ── hasRwEntry ───────────────────────────────────────────────────────────────
+
+describe('hasRwEntry', () => {
+  it('reports existence in the rw registry only, without touching fields', async () => {
+    const { handle, writeRw } = setup()
+    writeRw(RW_REGISTRY)
+    expect(await handle.hasRwEntry('test', 'alpha')).toBe(true)
+    expect(await handle.hasRwEntry('test', 'ghost')).toBe(false)
+    expect(await handle.hasRwEntry('ghost', 'alpha')).toBe(false)
+  })
+
+  it('a missing rw file means no rw entries', async () => {
+    const { handle } = setup()
+    expect(await handle.hasRwEntry('test', 'alpha')).toBe(false)
   })
 })
 

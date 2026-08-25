@@ -192,6 +192,7 @@ describe('request_access', () => {
   it('no approval channel → clear error, no grant', async () => {
     const h = setup()
     h.writeRo(RO_REGISTRY)
+    h.writeRw(RW_REGISTRY)
     const result = await h.callRequestAccess(
       { action: 'request', profile: 'test/prod', reason: 'restart the broken pod' },
       { agent: SESSION_A },
@@ -235,6 +236,7 @@ describe('request_access', () => {
   it('ttl is clamped to the configured maximum', async () => {
     const h = setup({ approvalOutcome: 'allowed-once', config: { maxTtlMinutes: 60 } })
     h.writeRo(RO_REGISTRY)
+    h.writeRw(RW_REGISTRY)
     const before = Date.now()
     const result = await h.callRequestAccess(
       { action: 'request', profile: 'test/prod', reason: 'long maintenance', ttlMinutes: 99999 },
@@ -246,6 +248,32 @@ describe('request_access', () => {
     expect(grants).toHaveLength(1)
     expect(grants[0].expiresAt).toBeGreaterThanOrEqual(before + 60 * 60000)
     expect(grants[0].expiresAt).toBeLessThan(Date.now() + 61 * 60000)
+  })
+
+  it('profile without an rw tier is refused BEFORE the human is asked (no undeliverable grants)', async () => {
+    const h = setup({ approvalOutcome: 'allowed-once' })
+    h.writeRo(RO_REGISTRY)
+    // rw registry deliberately lacks test/prod — the grant could never be fulfilled.
+    h.writeRw('test:\n  other:\n    endpoint: https://rw-other.internal\n')
+    const result = await h.callRequestAccess(
+      { action: 'request', profile: 'test/prod', reason: 'restart the broken pod' },
+      { agent: SESSION_A },
+    )
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('no rw tier registered')
+    expect(h.approvalRequests).toHaveLength(0)
+    expect(h.gate.isAuthorized('sess-a', 'test', 'prod')).toBe(false)
+  })
+
+  it('approval-required kinds (ssh) are exempt from the rw-tier check — their credential lives in the ro registry', async () => {
+    const h = setup({ approvalOutcome: 'allowed-once' })
+    h.writeRo(RO_REGISTRY + SSH_REGISTRY)
+    const result = await h.callRequestAccess(
+      { action: 'request', profile: 'ssh/box', reason: 'check disk' },
+      { agent: SESSION_A },
+    )
+    expect(result.ok).toBe(true)
+    expect(h.approvalRequests).toHaveLength(1)
   })
 })
 

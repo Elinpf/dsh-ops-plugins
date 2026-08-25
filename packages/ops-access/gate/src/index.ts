@@ -332,6 +332,14 @@ export function apply(ctx: Context, config: Config): void {
         return { ok: false, message: String((err as Error | null)?.message || err) }
       }
 
+      // Deliverability check BEFORE bothering the human: for tiered kinds a
+      // grant is only fulfillable when the rw registry actually carries this
+      // profile. (Approval-required kinds like ssh are exempt — their
+      // credential lives in the ro registry; the grant is the pass.)
+      if (!config.approvalRequiredKinds.includes(kind) && !(await opsAccess.hasRwEntry(kind, profileName))) {
+        return { ok: false, message: `${kind}/${profileName} has no rw tier registered (no entry in the rw registry), so a grant could not be fulfilled. Ask the operator to add the rw credential first. Approval was not requested.` }
+      }
+
       const requested = typeof args.ttlMinutes === 'number' ? args.ttlMinutes : config.defaultTtlMinutes
       const ttl = Math.min(Math.max(1, Math.round(requested)), config.maxTtlMinutes)
 

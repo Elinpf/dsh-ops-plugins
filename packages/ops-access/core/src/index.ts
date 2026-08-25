@@ -111,8 +111,8 @@ export interface AccessAgent {
  * A broker's decision for one resolve call.
  * - `'ro'` — serve the profile from the default registry (access.yaml)
  * - `'rw'` — serve the profile from the rw registry (access-rw.yaml)
- * - `{ deny }` — refuse; core throws an error pointing the agent at
- *   `request_access` (ssh without authorization takes this path).
+ * - `{ deny }` — refuse; core throws the broker's message verbatim (the
+ *   broker owns the guidance, e.g. pointing at `request_access`).
  */
 export type AccessBrokerDecision = 'ro' | 'rw' | { deny: string }
 
@@ -134,6 +134,12 @@ export interface OpsAccess {
    * registered broker, resolve is unchanged from the broker-less behavior.
    */
   registerBroker(broker: AccessBroker): () => void
+  /**
+   * Whether the rw registry has an entry for this profile — existence only,
+   * never fields. The gate uses it to reject requests for profiles that have
+   * no rw tier BEFORE bothering the human approver.
+   */
+  hasRwEntry(kind: string, name: string): Promise<boolean>
   /**
    * Resolve one profile by kind and name. Throws on unknown kind, unknown
    * name, or invalid entry. When a broker is registered and `agent` is
@@ -338,6 +344,11 @@ export function apply(ctx: Context, config: Config): void {
       return dispose
     },
 
+    async hasRwEntry(kind: string, profileName: string): Promise<boolean> {
+      const registry = await loadRegistry(rwFile)
+      return registry?.[kind]?.[profileName] !== undefined
+    },
+
     async resolve(kind: string, profileName: string, agent?: AccessAgent): Promise<AccessProfile> {
       const provider = providers.get(kind)
       if (!provider) {
@@ -352,7 +363,7 @@ export function apply(ctx: Context, config: Config): void {
       if (broker && agent) {
         const decision = broker(kind, profileName, agent)
         if (typeof decision === 'object') {
-          throw new Error(`ops-access: access denied for ${kind}/${profileName}: ${decision.deny} (request rw access via the request_access tool)`)
+          throw new Error(`ops-access: access denied for ${kind}/${profileName}: ${decision.deny}`)
         }
         if (decision === 'rw') tier = 'rw'
       }
@@ -365,7 +376,11 @@ export function apply(ctx: Context, config: Config): void {
       const entry = section?.[profileName]
       if (entry === undefined) {
         const available = Object.keys(section ?? {}).sort()
-        throw new Error(`ops-access: no profile "${profileName}" for kind "${kind}" in registry file ${file} (available: ${available.join(', ') || '(none)'})`)
+        // On the rw tier the grant was already approved — say so, so the agent
+        // reports "no rw credential registered" to the operator instead of
+        // re-requesting a grant that can never be fulfilled.
+        const hint = tier === 'rw' ? ' — a grant was approved but no rw credential is registered; ask the operator to add it to the rw registry' : ''
+        throw new Error(`ops-access: no profile "${profileName}" for kind "${kind}" in registry file ${file} (available: ${available.join(', ') || '(none)'})${hint}`)
       }
       return buildProfile(provider, kind, profileName, entry, file)
     },
