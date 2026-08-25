@@ -141,8 +141,15 @@ export interface OpsAccess {
    * now: the entry exists AND passes the provider schema. Never returns
    * fields, never consults the broker — the gate uses it to reject
    * undeliverable requests BEFORE bothering the human approver.
+   *
+   * Returns `{ ok: true }` when the entry exists and validates. Returns
+   * `{ ok: false, error }` when the entry exists but fails provider-schema
+   * validation — `error` is built from the zod issue paths and messages
+   * (never raw field values). Returns `{ ok: false }` (no `error`) for
+   * structural failures: unknown kind, missing file, unparseable file, or
+   * missing entry.
    */
-  canResolve(kind: string, name: string, tier: 'ro' | 'rw'): Promise<boolean>
+  canResolve(kind: string, name: string, tier: 'ro' | 'rw'): Promise<{ ok: boolean, error?: string }>
   /**
    * Resolve one profile by kind and name. Throws on unknown kind, unknown
    * name, or invalid entry. When a broker is registered it is consulted on
@@ -355,20 +362,32 @@ export function apply(ctx: Context, config: Config): void {
       return dispose
     },
 
-    async canResolve(kind: string, profileName: string, tier: 'ro' | 'rw'): Promise<boolean> {
+    async canResolve(kind: string, profileName: string, tier: 'ro' | 'rw'): Promise<{ ok: boolean, error?: string }> {
       const provider = providers.get(kind)
-      if (!provider) return false
+      if (!provider) return { ok: false }
       const file = tier === 'rw' ? rwFile : roFile
+      // Load + locate the entry in its own try/catch: a missing or unparseable
+      // file is a structural "not resolvable" with no validation reason — the
+      // admin does not need a zod message to fix a file that isn't there.
+      let raw: unknown
       try {
-        const raw = (await loadRegistry(file))?.[kind]?.[profileName]
-        if (raw === undefined) return false
-        // Run the same buildProfile validation resolve would run — a precheck
-        // shallower than the real issuance approves grants that cannot be
-        // fulfilled. The profile itself is discarded: existence, not fields.
-        buildProfile(provider, kind, profileName, raw, file)
-        return true
+        const registry = await loadRegistry(file)
+        if (registry === null) return { ok: false }
+        raw = registry[kind]?.[profileName]
       } catch {
-        return false
+        return { ok: false }
+      }
+      if (raw === undefined) return { ok: false }
+      // Run the same buildProfile validation resolve would run — a precheck
+      // shallower than the real issuance approves grants that cannot be
+      // fulfilled. The profile itself is discarded: existence, not fields.
+      // A validation failure surfaces the reason (zod issue paths + messages,
+      // never raw field values) so the admin UI can show it.
+      try {
+        buildProfile(provider, kind, profileName, raw, file)
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, error: String((err as Error | null)?.message ?? err) }
       }
     },
 

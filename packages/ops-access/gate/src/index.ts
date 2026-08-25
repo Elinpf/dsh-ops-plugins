@@ -348,10 +348,10 @@ export function apply(ctx: Context, config: Config): void {
       if (!opsAccess) {
         return { ok: false, message: 'ops-access service unavailable — is the ops-access plugin mounted in this preset?' }
       }
-      if (!(await opsAccess.canResolve(kind, profileName, 'ro'))) {
+      if (!(await opsAccess.canResolve(kind, profileName, 'ro')).ok) {
         return { ok: false, message: `no resolvable profile "${kind}/${profileName}" in the access registry (unknown kind, unknown name, or invalid entry). Run list_access to see available profiles. Approval was not requested.` }
       }
-      if (!config.approvalRequiredKinds.includes(kind) && !(await opsAccess.canResolve(kind, profileName, 'rw'))) {
+      if (!config.approvalRequiredKinds.includes(kind) && !(await opsAccess.canResolve(kind, profileName, 'rw')).ok) {
         return { ok: false, message: `${kind}/${profileName} has no usable rw tier registered (missing or invalid entry in the rw registry), so a grant could not be fulfilled. Ask the operator to fix the rw credential first. Approval was not requested.` }
       }
 

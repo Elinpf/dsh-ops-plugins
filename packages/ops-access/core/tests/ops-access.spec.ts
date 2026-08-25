@@ -510,35 +510,38 @@ describe('broker + rw registry', () => {
 // ── canResolve ───────────────────────────────────────────────────────────────
 
 describe('canResolve', () => {
-  it('checks the chosen tier: existence AND provider-schema validity, returning only a boolean', async () => {
+  it('checks the chosen tier: existence AND provider-schema validity, returning { ok, error? }', async () => {
     const { handle, write, writeRw } = setup()
     handle.register(testProvider)
     write(RO_REGISTRY)
     writeRw(RW_REGISTRY)
-    expect(await handle.canResolve('test', 'alpha', 'ro')).toBe(true)
-    expect(await handle.canResolve('test', 'alpha', 'rw')).toBe(true)
-    expect(await handle.canResolve('test', 'ghost', 'ro')).toBe(false)
-    expect(await handle.canResolve('ghost', 'alpha', 'ro')).toBe(false) // unknown kind
+    expect(await handle.canResolve('test', 'alpha', 'ro')).toEqual({ ok: true })
+    expect(await handle.canResolve('test', 'alpha', 'rw')).toEqual({ ok: true })
+    expect(await handle.canResolve('test', 'ghost', 'ro')).toEqual({ ok: false })
+    expect(await handle.canResolve('ghost', 'alpha', 'ro')).toEqual({ ok: false }) // unknown kind
   })
 
   it('a schema-invalid entry is NOT resolvable — the precheck is as deep as real issuance', async () => {
     const { handle, writeRw } = setup()
     handle.register(testProvider)
     writeRw('test:\n  alpha:\n    endpoint: 5\n')
-    expect(await handle.canResolve('test', 'alpha', 'rw')).toBe(false)
+    const result = await handle.canResolve('test', 'alpha', 'rw')
+    expect(result).toEqual({ ok: false, error: expect.any(String) })
+    // The error surfaces the failing field, never raw field values.
+    expect(result.error).toMatch(/endpoint/)
   })
 
   it('a missing registry file means nothing resolves from that tier', async () => {
     const { handle } = setup()
     handle.register(testProvider)
-    expect(await handle.canResolve('test', 'alpha', 'rw')).toBe(false)
+    expect(await handle.canResolve('test', 'alpha', 'rw')).toEqual({ ok: false })
   })
 
   it('an unparseable registry file means nothing resolves from that tier (no throw)', async () => {
     const { handle, writeRw } = setup()
     handle.register(testProvider)
     writeRw('test: [unclosed')
-    expect(await handle.canResolve('test', 'alpha', 'rw')).toBe(false)
+    expect(await handle.canResolve('test', 'alpha', 'rw')).toEqual({ ok: false })
   })
 
   it('never consults the broker — it is a metadata query, not issuance', async () => {
@@ -547,7 +550,7 @@ describe('canResolve', () => {
     writeRw(RW_REGISTRY)
     let consulted = 0
     handle.registerBroker(() => { consulted++; return 'rw' })
-    expect(await handle.canResolve('test', 'alpha', 'rw')).toBe(true)
+    expect(await handle.canResolve('test', 'alpha', 'rw')).toEqual({ ok: true })
     expect(consulted).toBe(0)
   })
 })
