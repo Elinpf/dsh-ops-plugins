@@ -281,6 +281,20 @@ describe('mention injection', () => {
     expect(decision.messages[1].content[0].text).toContain('- test/ghost — (not found')
   })
 
+  it('mention rendering never consults the broker — metadata display needs no grant', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    h.write(VALID_REGISTRY)
+    // A deny-everything broker (the gate's posture for approval-required
+    // kinds): envelope rendering must still work, and the broker must not run.
+    let consulted = 0
+    h.handle.registerBroker(() => { consulted++; return { deny: 'nope' } })
+    const mention = formatAccessMention({ kind: 'test', name: 'alpha' })
+    const decision: any = await drivePreStep(h, [textMessage(`看 ${mention}`)])
+    expect(decision.messages[1].content[0].text).toContain('- test/alpha [staging] — alpha 环境')
+    expect(consulted).toBe(0)
+  })
+
   it('deduplicates repeated mentions of the same profile', async () => {
     const h = setup()
     h.handle.register(testProvider)
@@ -360,16 +374,24 @@ describe('broker + rw registry', () => {
     expect(profile.fields.endpoint).toBe('https://ro-alpha.internal')
   })
 
-  it('broker is not consulted when agent is missing — falls back to ro (fail-closed)', async () => {
+  it('broker is consulted even without an agent — the no-agent ruling belongs to the broker', async () => {
     const { handle, write, writeRw } = setup()
     handle.register(testProvider)
     write(RO_REGISTRY)
     writeRw(RW_REGISTRY)
-    // A broker that would escalate anything it sees — but it must never be
-    // called without an agent.
-    handle.registerBroker(() => 'rw')
-    const profile = await handle.resolve('test', 'alpha')
-    expect(profile.fields.endpoint).toBe('https://ro-alpha.internal')
+    const seen: unknown[] = []
+    handle.registerBroker((_kind, _name, agent) => { seen.push(agent); return 'rw' })
+    const profile = await handle.resolve('test', 'alpha') // no agent supplied
+    expect(seen).toEqual([undefined])
+    expect(profile.fields.endpoint).toBe('https://rw-alpha.internal')
+  })
+
+  it("a broker's deny on a no-agent call throws — core never silently falls back to ro", async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    handle.registerBroker((_kind, _name, agent) => agent ? 'ro' : { deny: 'no session, no credential' })
+    await expect(handle.resolve('test', 'alpha')).rejects.toThrow('ops-access: access denied for test/alpha: no session, no credential')
   })
 
   it('broker receives kind, name, and the agent', async () => {
@@ -485,20 +507,48 @@ describe('broker + rw registry', () => {
   })
 })
 
-// ── hasRwEntry ───────────────────────────────────────────────────────────────
+// ── canResolve ───────────────────────────────────────────────────────────────
 
-describe('hasRwEntry', () => {
-  it('reports existence in the rw registry only, without touching fields', async () => {
-    const { handle, writeRw } = setup()
+describe('canResolve', () => {
+  it('checks the chosen tier: existence AND provider-schema validity, returning only a boolean', async () => {
+    const { handle, write, writeRw } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
     writeRw(RW_REGISTRY)
-    expect(await handle.hasRwEntry('test', 'alpha')).toBe(true)
-    expect(await handle.hasRwEntry('test', 'ghost')).toBe(false)
-    expect(await handle.hasRwEntry('ghost', 'alpha')).toBe(false)
+    expect(await handle.canResolve('test', 'alpha', 'ro')).toBe(true)
+    expect(await handle.canResolve('test', 'alpha', 'rw')).toBe(true)
+    expect(await handle.canResolve('test', 'ghost', 'ro')).toBe(false)
+    expect(await handle.canResolve('ghost', 'alpha', 'ro')).toBe(false) // unknown kind
   })
 
-  it('a missing rw file means no rw entries', async () => {
+  it('a schema-invalid entry is NOT resolvable — the precheck is as deep as real issuance', async () => {
+    const { handle, writeRw } = setup()
+    handle.register(testProvider)
+    writeRw('test:\n  alpha:\n    endpoint: 5\n')
+    expect(await handle.canResolve('test', 'alpha', 'rw')).toBe(false)
+  })
+
+  it('a missing registry file means nothing resolves from that tier', async () => {
     const { handle } = setup()
-    expect(await handle.hasRwEntry('test', 'alpha')).toBe(false)
+    handle.register(testProvider)
+    expect(await handle.canResolve('test', 'alpha', 'rw')).toBe(false)
+  })
+
+  it('an unparseable registry file means nothing resolves from that tier (no throw)', async () => {
+    const { handle, writeRw } = setup()
+    handle.register(testProvider)
+    writeRw('test: [unclosed')
+    expect(await handle.canResolve('test', 'alpha', 'rw')).toBe(false)
+  })
+
+  it('never consults the broker — it is a metadata query, not issuance', async () => {
+    const { handle, writeRw } = setup()
+    handle.register(testProvider)
+    writeRw(RW_REGISTRY)
+    let consulted = 0
+    handle.registerBroker(() => { consulted++; return 'rw' })
+    expect(await handle.canResolve('test', 'alpha', 'rw')).toBe(true)
+    expect(consulted).toBe(0)
   })
 })
 

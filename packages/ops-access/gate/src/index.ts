@@ -6,16 +6,19 @@
  * the ops-access seam via {@link registerAccessBroker}; that broker answers
  * `'rw'` when the calling session holds an unexpired grant for the profile,
  * `'ro'` otherwise, and `{ deny }` for approval-required kinds (ssh) without
- * a grant. Core then serves the profile from the matching registry file
- * (ro → access.yaml, rw → access-rw.yaml). The gate never sees credential
- * fields — kind, profile name, and session id are its whole world.
+ * a grant. Calls without an agent (system-internal) are ruled here too:
+ * tiered kinds fail closed to ro, approval-required kinds deny outright. Core
+ * then serves the profile from the matching registry file (ro → access.yaml,
+ * rw → access-rw.yaml). The gate never sees credential fields — kind, profile
+ * name, and session id are its whole world.
  *
  * Grants are created explicitly: the model calls the `request_access` tool
  * with a profile and a reason, the gate asks the human through dsh's native
  * approval channel (`ctx.approval`), and only an `'allowed-once'` outcome
  * writes the grant. Grants carry a TTL — expiry is the only reliable
  * fallback boundary (a web session has no dependable end event). Every
- * grant, expiry, revoke, and elevated issue lands in a JSONL audit file.
+ * grant, expiry, revoke, elevated issue, and ledger reset (boot / HMR
+ * reload) lands in a JSONL audit file.
  *
  * @module @deepseek-ai/dsh-ops-access-gate
  */
@@ -124,10 +127,11 @@ interface ApprovalChannel {
 // ── Audit log ────────────────────────────────────────────────────────────────
 
 interface AuditEvent {
-  event: 'grant' | 'expire' | 'revoke' | 'rw-issue' | 'gated-issue'
-  session: string
-  kind: string
-  name: string
+  event: 'grant' | 'expire' | 'revoke' | 'rw-issue' | 'gated-issue' | 'ledger-reset'
+  /** Absent on ledger-reset, which is process-scoped, not session-scoped. */
+  session?: string
+  kind?: string
+  name?: string
   reason?: string
   approvedBy?: string
   expiresAt?: number
@@ -233,11 +237,24 @@ export function apply(ctx: Context, config: Config): void {
   const gate = makeGate(ledger, audit, () => Date.now())
   ctx.provide('opsAccessGate', gate)
 
-  // The broker is a pure decision function. Core only calls it when a broker
-  // is registered AND an agent was supplied — so `agent` is always present
-  // here; the agent-missing (fail-closed → ro) case is handled by core before
-  // this function is ever reached.
+  // apply runs on boot and on every HMR reload — both start a fresh, empty
+  // ledger. Record the reset so an auditor can tell "grants were cleared" from
+  // "nothing was ever granted".
+  audit({ event: 'ledger-reset' })
+
+  // The broker is a pure decision function consulted on EVERY resolve once
+  // registered — including calls without an agent. The no-agent ruling is
+  // policy and lives here, not in core: tiered kinds fail closed to ro (rw is
+  // never issued without a session to key the grant on); approval-required
+  // kinds deny outright — their credential is effectively rw (there is no
+  // read-only shell), so an untracked caller must not get it at all.
   const broker: AccessBroker = (kind, profileName, agent) => {
+    if (!agent) {
+      if (config.approvalRequiredKinds.includes(kind)) {
+        return { deny: `${kind} requires an approved grant, and grants need a session — internal calls without one cannot use it. Call it from a session and request timed access via the ${REQUEST_ACCESS} tool` }
+      }
+      return 'ro'
+    }
     const authorized = gate.isAuthorized(agent.id, kind, profileName)
     // Approval-required kinds (ssh): the credential lives in the ro registry —
     // the grant is a timed pass to use it at all.
@@ -319,25 +336,23 @@ export function apply(ctx: Context, config: Config): void {
         return { ok: false, message: 'request requires a non-empty reason — it is shown to the human approver' }
       }
 
-      // Existence check through the ro path: resolve WITHOUT an agent, so the
-      // broker is never consulted and the answer is the plain registry.
+      // Deliverability checks BEFORE bothering the human. Both go through
+      // canResolve — an explicit metadata query that validates like resolve
+      // but never consults the broker and never returns fields.
+      // 1. The profile itself must resolve from the ro registry.
+      // 2. For tiered kinds a grant is only fulfillable when the rw registry
+      //    actually carries a valid entry. (Approval-required kinds like ssh
+      //    are exempt — their credential lives in the ro registry; the grant
+      //    is the pass.)
       const opsAccess = ctx.get('opsAccess')
       if (!opsAccess) {
         return { ok: false, message: 'ops-access service unavailable — is the ops-access plugin mounted in this preset?' }
       }
-      try {
-        await opsAccess.resolve(kind, profileName)
-      } catch (err) {
-        // resolve's message already lists the available profiles — verbatim.
-        return { ok: false, message: String((err as Error | null)?.message || err) }
+      if (!(await opsAccess.canResolve(kind, profileName, 'ro'))) {
+        return { ok: false, message: `no resolvable profile "${kind}/${profileName}" in the access registry (unknown kind, unknown name, or invalid entry). Run list_access to see available profiles. Approval was not requested.` }
       }
-
-      // Deliverability check BEFORE bothering the human: for tiered kinds a
-      // grant is only fulfillable when the rw registry actually carries this
-      // profile. (Approval-required kinds like ssh are exempt — their
-      // credential lives in the ro registry; the grant is the pass.)
-      if (!config.approvalRequiredKinds.includes(kind) && !(await opsAccess.hasRwEntry(kind, profileName))) {
-        return { ok: false, message: `${kind}/${profileName} has no rw tier registered (no entry in the rw registry), so a grant could not be fulfilled. Ask the operator to add the rw credential first. Approval was not requested.` }
+      if (!config.approvalRequiredKinds.includes(kind) && !(await opsAccess.canResolve(kind, profileName, 'rw'))) {
+        return { ok: false, message: `${kind}/${profileName} has no usable rw tier registered (missing or invalid entry in the rw registry), so a grant could not be fulfilled. Ask the operator to fix the rw credential first. Approval was not requested.` }
       }
 
       const requested = typeof args.ttlMinutes === 'number' ? args.ttlMinutes : config.defaultTtlMinutes

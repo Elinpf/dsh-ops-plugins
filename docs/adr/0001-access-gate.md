@@ -62,3 +62,10 @@ Linux 无真只读 shell（能登录就能写 /tmp、跑程序），两档是伪
 - 一期实现范围：core 管双文件 + broker 挂点；门包含按 agent 分键的账本、`request_access` 工具（原生审批通道）、纯决策 broker、审计日志。provider 层零改动，工具层仅工厂一处（透传 `exec.agent`）。
 - 架构上为二期留的口：provider 缝后不泄露凭证来源；"批准人"字段预留。
 - 已知接受的风险：agent 被强注入后可用 ro 做信息探测、可诱导人批准（审批说明由 agent 自述）。威胁模型 A 下接受。
+
+## 实现期修正（2026-08-25 架构走查后落地，不推翻以上决策）
+
+- **无 agent 的裁决权上收给 broker**：初实现是 core 短路（无 agent 不咨询 broker 直接发 ro）——这让 ssh 的 deny 对无 agent 调用不可达，且 core 替门做了政策决定。改为 broker 签名收 `agent | undefined`、core 注册了 broker 就每次必咨询；门的裁决：两档 kind 回落 ro，approvalRequiredKinds 拒绝（ssh 凭证本质是 rw，无会话可键权就不发）。决策 5 的 fail-closed 语义因此完整。
+- **可交付性预检与代发同深**：core 的 `canResolve(kind, name, tier)`（存在 + provider schema 校验，不返回 fields、不咨询 broker）替换了只看 key 存在的 `hasRwEntry`——条目存在但非法时，审批前就打回，不再批准后炸。
+- **账本重置可审计**：apply（启动与 HMR 重载）落一行 `ledger-reset` 审计。HMR 清空与重启清空同语义，此前未声明。
+- **@ 档案引用走元数据路径**：mention 渲染改用 `list()` 而非 `resolve()`——渲染信封不需要授权，否则 ssh 档案被 @ 时会因无授权误报"未找到"。

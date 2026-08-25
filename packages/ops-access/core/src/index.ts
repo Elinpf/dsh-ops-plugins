@@ -118,11 +118,13 @@ export type AccessBrokerDecision = 'ro' | 'rw' | { deny: string }
 
 /**
  * The pure decision function a gate registers. Receives only kind, profile
- * name, and the caller agent — never credential fields. Called by resolve
- * only when a broker is registered AND an agent context was supplied; absent
- * either, resolve behaves exactly as it does without a gate (ro).
+ * name, and the caller agent — never credential fields. Once a broker is
+ * registered, resolve consults it on EVERY call; `agent` is `undefined` for
+ * system-internal calls, and the no-agent ruling belongs to the broker (core
+ * does not answer policy on its behalf). Without a registered broker, resolve
+ * is unchanged from the broker-less behavior (ro).
  */
-export type AccessBroker = (kind: string, name: string, agent: AccessAgent) => AccessBrokerDecision
+export type AccessBroker = (kind: string, name: string, agent: AccessAgent | undefined) => AccessBrokerDecision
 
 /** The ops access handle exposed via ctx.get('opsAccess'). */
 export interface OpsAccess {
@@ -135,16 +137,19 @@ export interface OpsAccess {
    */
   registerBroker(broker: AccessBroker): () => void
   /**
-   * Whether the rw registry has an entry for this profile — existence only,
-   * never fields. The gate uses it to reject requests for profiles that have
-   * no rw tier BEFORE bothering the human approver.
+   * Whether resolving this profile from the given tier would succeed right
+   * now: the entry exists AND passes the provider schema. Never returns
+   * fields, never consults the broker — the gate uses it to reject
+   * undeliverable requests BEFORE bothering the human approver.
    */
-  hasRwEntry(kind: string, name: string): Promise<boolean>
+  canResolve(kind: string, name: string, tier: 'ro' | 'rw'): Promise<boolean>
   /**
    * Resolve one profile by kind and name. Throws on unknown kind, unknown
-   * name, or invalid entry. When a broker is registered and `agent` is
-   * supplied, the broker decides whether the rw profile is served; otherwise
-   * the ro profile (from `registryFile`) is served, byte-for-byte as before.
+   * name, or invalid entry. When a broker is registered it is consulted on
+   * every call — including calls without an `agent` (the broker owns the
+   * no-agent ruling) — and decides whether the rw profile is served. Without
+   * a broker the ro profile (from `registryFile`) is served, byte-for-byte
+   * as before.
    */
   resolve(kind: string, name: string, agent?: AccessAgent): Promise<AccessProfile>
   /** List all profiles across all registered kinds. Sections without a registered provider are skipped. */
@@ -279,25 +284,31 @@ function buildProfile(provider: AccessProvider, kind: string, profileName: strin
  * fields (paths, connection params) never cross into model context, keeping
  * the structural secrecy discipline. Unknown profiles degrade to a note, not
  * an error: a stale mention must not block the step.
+ *
+ * Reads through `list()`, not `resolve()`: mention rendering is metadata
+ * display, not credential issuance — it must never consult the broker, or an
+ * approval-required profile (ssh) would render as "not found" simply because
+ * the session holds no grant.
  */
 async function renderAccessReferences(
   handle: OpsAccess,
   references: readonly ParsedAccessReference[],
 ): Promise<string> {
+  const profiles = await handle.list().catch(() => [] as AccessProfile[])
   const seen = new Set<string>()
   const lines: string[] = []
   for (const ref of references) {
     const key = `${ref.kind}/${ref.name}`
     if (seen.has(key)) continue
     seen.add(key)
-    try {
-      const profile = await handle.resolve(ref.kind, ref.name)
-      const env = profile.environment ? ` [${profile.environment}]` : ''
-      const desc = profile.description ? ` — ${profile.description}` : ''
-      lines.push(`- ${key}${env}${desc}`)
-    } catch {
+    const profile = profiles.find((p) => p.kind === ref.kind && p.name === ref.name)
+    if (!profile) {
       lines.push(`- ${key} — (not found in the access registry; run list_access to see available profiles)`)
+      continue
     }
+    const env = profile.environment ? ` [${profile.environment}]` : ''
+    const desc = profile.description ? ` — ${profile.description}` : ''
+    lines.push(`- ${key}${env}${desc}`)
   }
   return `<referenced-access>\nThe user explicitly referenced these access profiles (use them with the matching tools):\n${lines.join('\n')}\n</referenced-access>`
 }
@@ -344,9 +355,21 @@ export function apply(ctx: Context, config: Config): void {
       return dispose
     },
 
-    async hasRwEntry(kind: string, profileName: string): Promise<boolean> {
-      const registry = await loadRegistry(rwFile)
-      return registry?.[kind]?.[profileName] !== undefined
+    async canResolve(kind: string, profileName: string, tier: 'ro' | 'rw'): Promise<boolean> {
+      const provider = providers.get(kind)
+      if (!provider) return false
+      const file = tier === 'rw' ? rwFile : roFile
+      try {
+        const raw = (await loadRegistry(file))?.[kind]?.[profileName]
+        if (raw === undefined) return false
+        // Run the same buildProfile validation resolve would run — a precheck
+        // shallower than the real issuance approves grants that cannot be
+        // fulfilled. The profile itself is discarded: existence, not fields.
+        buildProfile(provider, kind, profileName, raw, file)
+        return true
+      } catch {
+        return false
+      }
     },
 
     async resolve(kind: string, profileName: string, agent?: AccessAgent): Promise<AccessProfile> {
@@ -355,12 +378,12 @@ export function apply(ctx: Context, config: Config): void {
         const registered = [...providers.keys()].sort()
         throw new Error(`ops-access: unknown kind "${kind}" (no provider registered; registered kinds: ${registered.join(', ') || '(none)'})`)
       }
-      // The broker is consulted only when one is registered AND an agent
-      // context was supplied. No broker, or no agent (a system-internal call)
-      // → ro, byte-for-byte the pre-gate behavior. This is the fail-closed
-      // guarantee: rw is never issued without an agent to key the grant on.
+      // Once a broker is registered it is consulted on EVERY resolve —
+      // including calls without an agent. The no-agent ruling (fail closed to
+      // ro, or deny outright) is policy, and policy lives in the broker, not
+      // here. Without a broker, rw is never issued at all.
       let tier: 'ro' | 'rw' = 'ro'
-      if (broker && agent) {
+      if (broker) {
         const decision = broker(kind, profileName, agent)
         if (typeof decision === 'object') {
           throw new Error(`ops-access: access denied for ${kind}/${profileName}: ${decision.deny}`)

@@ -106,10 +106,19 @@ describe('fail-closed', () => {
     writeRo(RO_REGISTRY)
     writeRw(RW_REGISTRY)
     // A grant exists, but without an agent there is no session to key it on —
-    // rw must never be issued. This is the system-internal-call case.
+    // rw must never be issued. The ruling comes from the broker (core consults
+    // it with agent undefined), not from core short-circuiting.
     gate.authorize(futureGrant(SESSION_A.id, 'test', 'prod'))
     const profile = await opsAccess.resolve('test', 'prod')
     expect(profile.fields.endpoint).toBe('https://ro-prod.internal')
+  })
+
+  it('missing agent → approval-required kinds (ssh) deny outright — their credential is effectively rw', async () => {
+    const { opsAccess, writeRo } = setup()
+    writeRo(RO_REGISTRY + SSH_REGISTRY)
+    const err = await opsAccess.resolve('ssh', 'box').catch((e) => e)
+    expect(err.message).toContain('access denied for ssh/box')
+    expect(err.message).toContain('request_access')
   })
 
   it('the grant contract carries no credential fields', () => {
@@ -217,12 +226,13 @@ describe('request_access', () => {
     expect(h.approvalRequests).toHaveLength(0)
   })
 
-  it('unknown profile → resolve error verbatim, approval never consulted', async () => {
+  it('unknown profile → refused BEFORE the human is asked, pointing at list_access', async () => {
     const h = setup({ approvalOutcome: 'allowed-once' })
     h.writeRo(RO_REGISTRY)
     const result = await h.callRequestAccess({ action: 'request', profile: 'test/ghost', reason: 'x' }, { agent: SESSION_A })
     expect(result.ok).toBe(false)
-    expect(result.message).toContain('no profile "ghost"')
+    expect(result.message).toContain('test/ghost')
+    expect(result.message).toContain('list_access')
     expect(h.approvalRequests).toHaveLength(0)
   })
 
@@ -260,9 +270,24 @@ describe('request_access', () => {
       { agent: SESSION_A },
     )
     expect(result.ok).toBe(false)
-    expect(result.message).toContain('no rw tier registered')
+    expect(result.message).toContain('no usable rw tier registered')
     expect(h.approvalRequests).toHaveLength(0)
     expect(h.gate.isAuthorized('sess-a', 'test', 'prod')).toBe(false)
+  })
+
+  it('rw entry that exists but fails schema validation is refused BEFORE the human is asked', async () => {
+    const h = setup({ approvalOutcome: 'allowed-once' })
+    h.writeRo(RO_REGISTRY)
+    // Entry exists but endpoint is the wrong type — a grant for it would
+    // approve and then blow up at resolve time. The precheck must catch it.
+    h.writeRw('test:\n  prod:\n    endpoint: 5\n')
+    const result = await h.callRequestAccess(
+      { action: 'request', profile: 'test/prod', reason: 'restart the broken pod' },
+      { agent: SESSION_A },
+    )
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('no usable rw tier registered')
+    expect(h.approvalRequests).toHaveLength(0)
   })
 
   it('approval-required kinds (ssh) are exempt from the rw-tier check — their credential lives in the ro registry', async () => {
@@ -359,6 +384,13 @@ describe('approval-required kinds', () => {
 // ── Audit log ────────────────────────────────────────────────────────────────
 
 describe('audit log', () => {
+  it('apply writes a ledger-reset line — boot and HMR reload both start an empty ledger', () => {
+    const h = setup()
+    const lines = h.readAudit().filter((l) => l.event === 'ledger-reset')
+    expect(lines).toHaveLength(1)
+    expect(typeof lines[0].ts).toBe('string')
+  })
+
   it('every rw issue is audited', async () => {
     const h = setup()
     h.writeRo(RO_REGISTRY)
@@ -375,6 +407,22 @@ describe('audit log', () => {
     const h = setup()
     h.writeRo(RO_REGISTRY)
     await h.opsAccess.resolve('test', 'prod', SESSION_A)
-    expect(h.readAudit()).toHaveLength(0)
+    // ledger-reset (from apply) is the only line; the ro resolve added nothing.
+    expect(h.readAudit().filter((l) => l.event !== 'ledger-reset')).toHaveLength(0)
+  })
+})
+
+// ── Deferred mounting (cordis inject semantics) ─────────────────────────────
+
+describe('deferred mounting', () => {
+  it('gate-first mounting still lands the broker in core', async () => {
+    const h = setup({ gateFirst: true })
+    h.writeRo(RO_REGISTRY)
+    h.writeRw(RW_REGISTRY)
+    // If registerAccessBroker's deferred inject never fired, this resolve would
+    // serve ro despite the grant — the broker would silently not exist.
+    h.gate.authorize(futureGrant('sess-a', 'test', 'prod'))
+    expect((await h.opsAccess.resolve('test', 'prod', SESSION_A)).fields.endpoint).toBe('https://rw-prod.internal')
+    expect(h.tools.map((t) => t.name)).toContain('request_access')
   })
 })

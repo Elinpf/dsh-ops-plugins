@@ -8,8 +8,9 @@
  *
  * The broker is wired through core's real deferred registration: the gate's
  * apply calls registerAccessBroker → ctx.inject(['opsAccess'], cb), and this
- * harness's inject hands cb the live opsAccess handle so the broker lands in
- * core for real.
+ * harness's inject mirrors cordis's deferred semantics — an inject whose deps
+ * are not yet provided pends and fires on provide, so mounting the gate before
+ * core (opts.gateFirst) still lands the broker.
  */
 
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
@@ -59,6 +60,8 @@ export interface SetupOptions {
   config?: Partial<Config>
   /** Outcome the mock approval channel settles on; omit for "no channel". */
   approvalOutcome?: 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
+  /** Mount the gate BEFORE core — exercises the deferred-inject mounting path. */
+  gateFirst?: boolean
 }
 
 export function setup(opts: SetupOptions = {}) {
@@ -80,26 +83,41 @@ export function setup(opts: SetupOptions = {}) {
           return opts.approvalOutcome
         },
       }
-  const wctx = {
+  // Deferred inject, mirroring cordis: an inject whose deps are not yet
+  // provided pends and fires when they are. This is what makes gate-first
+  // mounting work — the broker registration waits for core to provide
+  // opsAccess instead of silently never happening.
+  const services = new Map<string, any>()
+  const pending: Array<{ deps: string[], cb: (c: any) => void }> = []
+  const webServer = { register: (route: any) => { routes.push(route); return () => {} } }
+  services.set('webServer', webServer)
+  const injectionCtx = () => ({
+    opsAccess: services.get('opsAccess'),
+    webServer,
     effect: (fn: () => () => void) => { fn() },
-    webServer: { register: (route: any) => { routes.push(route); return () => {} } },
+  })
+  const flush = () => {
+    for (let i = pending.length - 1; i >= 0; i--) {
+      if (pending[i].deps.every((d) => services.has(d))) {
+        const { cb } = pending.splice(i, 1)[0]
+        cb(injectionCtx())
+      }
+    }
   }
   const ctx: any = {
     provide: (key: string, value: any) => {
+      services.set(key, value)
       if (key === 'opsAccess') opsAccess = value
       if (key === 'opsAccessGate') opsAccessGate = value
+      flush()
     },
     on: (event: string, listener: (...args: any[]) => unknown, options?: unknown) => {
       listeners.push({ event, listener, options })
       return () => {}
     },
     inject: (deps: string[], cb: (c: any) => void) => {
-      if (deps.includes('webServer')) cb(wctx)
-      // The gate's registerAccessBroker defers onto opsAccess; hand it the
-      // live handle so the broker really registers into core.
-      if (deps.includes('opsAccess') && opsAccess) {
-        cb({ opsAccess, effect: (fn: () => () => void) => { fn() } })
-      }
+      if (deps.every((d) => services.has(d))) cb(injectionCtx())
+      else pending.push({ deps, cb })
     },
     get: (key: string) => {
       if (key === 'opsAccess') return opsAccess
@@ -109,14 +127,21 @@ export function setup(opts: SetupOptions = {}) {
     effect: (fn: () => () => void) => { fn() },
     tools: { register: (tool: any) => { tools.push(tool); return () => {} } },
   }
-  coreApply(ctx, { registryFile: roFile, rwRegistryFile: rwFile })
-  gateApply(ctx, {
+  const mountGate = () => gateApply(ctx, {
     approvalRequiredKinds: ['ssh'],
     defaultTtlMinutes: 30,
     maxTtlMinutes: 480,
     auditFile,
     ...opts.config,
   })
+  const mountCore = () => coreApply(ctx, { registryFile: roFile, rwRegistryFile: rwFile })
+  if (opts.gateFirst) {
+    mountGate()
+    mountCore()
+  } else {
+    mountCore()
+    mountGate()
+  }
   opsAccess!.register(testProvider)
   opsAccess!.register(sshProvider)
 

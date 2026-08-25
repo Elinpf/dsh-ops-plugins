@@ -75,8 +75,8 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 - **凭证代发 (credential brokering)** — 门不改基础设施权限，只决定某 session 的工具调用拿到 ro 还是 rw 凭证
 - **两档账号 (ro/rw)** — 每环境静态预置只读/可写两套账号；ro 凭证进 `access.yaml` 默认可用，rw 凭证存独立文件（默认 `~/.dsh-ops/access-rw.yaml`，同格式、同现读现校验纪律），两个文件都归 core 管。门注册的 broker 是**纯决策函数**（`(kind, name, agent) => 'ro' | 'rw' | 拒绝`），不碰凭证内容。ssh 不分档，每次使用需授权
 - **授权 (grant)** — `{ session, profile, tier, 到期时间, 批准人, 理由 }`。agent 调 `request_access` 显式申请，人一次性批准；TTL 到期自动回落，可手动撤销，重启即清空
-- **授权账本 (grant ledger)** — 进程内授权表，按 `exec.agent.id`（= session id）分键；`exec.agent` 缺失时 fail-closed
-- **审计日志** — 授权（批准/到期/撤销）与 rw 代发逐条落 JSONL 文件（默认 `~/.dsh-ops/audit.log`），不进 session 事件流
+- **授权账本 (grant ledger)** — 进程内授权表，按 `exec.agent.id`（= session id）分键；`exec.agent` 缺失时由 broker 裁决：两档 kind 回落 ro，ssh 类直接拒绝（ssh 凭证本质是 rw——没有真只读 shell——无会话可键权就不发）。apply（启动与 HMR 重载）即清空账本
+- **审计日志** — 授权（批准/到期/撤销）、rw 代发、账本重置（`ledger-reset`，启动与 HMR 各落一行）逐条落 JSONL 文件（默认 `~/.dsh-ops/audit.log`），不进 session 事件流
 
 ## 调查树 (Investigation Tree)
 
