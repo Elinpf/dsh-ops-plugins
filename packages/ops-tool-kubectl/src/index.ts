@@ -7,9 +7,11 @@
  *   injecting the profile's --kubeconfig path. All shared machinery (result
  *   shape, output schema, render, execute template) lives in
  *   @deepseek-ai/dsh-ops-shell-tool.
- * - `list_access` — groups `ctx.opsAccess.list()` by kind. Envelope fields
- *   only (kind/name/description/environment); profile `fields` (paths,
- *   connection params) never appear in this tool's output.
+ * - `list_access` — groups `ctx.opsAccess.listAll()` by kind. Envelope fields
+ *   plus per-tier readiness only (kind/name/displayName/description/environment,
+ *   ro/rw flags); profile `fields` (paths, connection params) never appear in
+ *   this tool's output. listAll (not list) so rw-only entries — awaiting ro
+ *   derivation — are visible to the agent.
  *
  * @module @deepseek-ai/dsh-ops-kubectl
  */
@@ -18,7 +20,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { registerProfiledShellTool } from '@deepseek-ai/dsh-ops-shell-tool'
-import type { AccessProfile, OpsAccess } from '@deepseek-ai/dsh-ops-access'
+import type { AdminEntry, OpsAccess } from '@deepseek-ai/dsh-ops-access'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -32,11 +34,16 @@ export const Config = z.object({})
 
 // ── list_access types ────────────────────────────────────────────────────────
 
-/** One list_access entry: envelope fields only, never `fields`. */
+/** One list_access entry: envelope fields + tier readiness, never `fields`. */
 interface ListedProfile {
   name: string
+  displayName?: string
   description?: string
   environment?: string
+  /** Whether the ro tier resolves (the agent's default working level). */
+  ro: boolean
+  /** Whether the rw tier resolves (grant-gated; source for ro derivation). */
+  rw: boolean
 }
 
 interface ListAccessResult {
@@ -46,11 +53,12 @@ interface ListAccessResult {
   help?: string
 }
 
-/** Strip a profile down to its envelope fields — `fields` never crosses into tool output. */
-function toListedProfile(p: AccessProfile): ListedProfile {
-  const listed: ListedProfile = { name: p.name }
-  if (p.description !== undefined) listed.description = p.description
-  if (p.environment !== undefined) listed.environment = p.environment
+/** Strip an admin entry down to envelope + tier readiness — `fields` never crosses into tool output. */
+function toListedProfile(e: AdminEntry): ListedProfile {
+  const listed: ListedProfile = { name: e.name, ro: e.tiers.ro.ok, rw: e.tiers.rw.ok }
+  if (e.envelope.name !== undefined) listed.displayName = e.envelope.name
+  if (e.envelope.description !== undefined) listed.description = e.envelope.description
+  if (e.envelope.environment !== undefined) listed.environment = e.envelope.environment
   return listed
 }
 
@@ -99,8 +107,11 @@ export function apply(ctx: Context, _config: Record<string, never>): void {
                     additionalProperties: false,
                     properties: {
                       name: { type: 'string', required: true },
+                      displayName: { type: 'string' },
                       description: { type: 'string' },
                       environment: { type: 'string' },
+                      ro: { type: 'boolean', required: true },
+                      rw: { type: 'boolean', required: true },
                     },
                   },
                 },
@@ -120,9 +131,13 @@ export function apply(ctx: Context, _config: Record<string, never>): void {
         for (const group of value.groups) {
           lines.push(`${group.kind} (${group.profiles.length}):`)
           for (const p of group.profiles) {
+            const dn = p.displayName ? ` (${p.displayName})` : ''
             const env = p.environment ? ` [${p.environment}]` : ''
             const desc = p.description ? ` — ${p.description}` : ''
-            lines.push(`- ${p.name}${env}${desc}`)
+            const tier = !p.ro
+              ? (p.rw ? ' [rw only — derive the ro tier via register_access]' : ' [no usable tier]')
+              : ''
+            lines.push(`- ${p.name}${dn}${env}${desc}${tier}`)
           }
         }
         return [{ type: 'text' as const, text: `Registered access profiles (${value.total}):\n${lines.join('\n')}` }]
@@ -138,17 +153,17 @@ export function apply(ctx: Context, _config: Record<string, never>): void {
       if (args.help) {
         return { groups: [], total: 0, help: opsAccess.help() }
       }
-      const profiles = await opsAccess.list()
+      const entries = await opsAccess.listAll()
       const byKind = new Map<string, ListedProfile[]>()
-      for (const p of profiles) {
-        let bucket = byKind.get(p.kind)
-        if (!bucket) byKind.set(p.kind, bucket = [])
-        bucket.push(toListedProfile(p))
+      for (const e of entries) {
+        let bucket = byKind.get(e.kind)
+        if (!bucket) byKind.set(e.kind, bucket = [])
+        bucket.push(toListedProfile(e))
       }
       const groups = [...byKind.entries()]
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([kind, kindProfiles]) => ({ kind, profiles: kindProfiles }))
-      return { groups, total: profiles.length }
+      return { groups, total: entries.length }
     },
   })))
 }

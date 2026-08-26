@@ -13,7 +13,7 @@ export const DEFAULT_PROFILE: AccessProfile = {
   name: 'prod',
   description: '生产 Ceph 集群',
   environment: 'prod',
-  fields: { confPath: '/etc/ceph/prod.conf', keyringPath: '/etc/ceph/prod.keyring' },
+  fields: { conf: '/etc/ceph/prod.conf', keyring: '/etc/ceph/prod.keyring' },
 }
 
 export interface ShellRunOutcome {

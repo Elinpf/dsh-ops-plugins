@@ -13,7 +13,7 @@ export const DEFAULT_PROFILE: AccessProfile = {
   name: 'node-1',
   description: '生产节点 1',
   environment: 'prod',
-  fields: { host: '10.0.0.11', user: 'ops', keyPath: '/home/test/.ssh/id_ed25519', port: 2222 },
+  fields: { host: '10.0.0.11', user: 'ops', key: '/home/test/.ssh/id_ed25519', port: 2222 },
 }
 
 export interface ShellRunOutcome {

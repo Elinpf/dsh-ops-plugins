@@ -1,9 +1,10 @@
 /**
  * Ops access provider for SSH.
  *
- * Validates `ssh` registry entries (`{ host, user, keyPath?, port? }`) and
- * expands `~` in the key path. Registers into the ops-access capability seam
- * (ctx.opsAccess).
+ * Validates `ssh` registry entries (`{ host, user, key?, port? }`). When the
+ * admin UI receives private-key CONTENT (instead of a path), core writes it
+ * to a managed file under ~/.dsh-ops/credentials/ and stores the path in the
+ * registry. The provider expands ~ in the path for ssh -i.
  *
  * @module @deepseek-ai/dsh-ops-access-ssh
  */
@@ -28,18 +29,20 @@ export const Config = z.object({})
 export const entrySchema = zod.object({
   host: zod.string(),
   user: zod.string(),
-  keyPath: zod.string().optional(),
+  key: zod.string().optional(),
   port: zod.number().optional(),
 })
 
 export const provider: AccessProvider = {
   kind: 'ssh',
   schema: entrySchema,
-  fieldsDoc: 'host: hostname or IP; user: login user; keyPath: optional private-key path (~ is expanded); port: optional, default 22',
+  fieldsDoc: 'host: hostname or IP; user: login user; key: optional private-key content; port: optional, default 22',
+  fileFields: ['key'],
+  derivationDoc: 'ssh has no read-only shell — the credential lives in the ro tier and every use is grant-gated; to provision a dedicated key during an approved session: generate a fresh keypair (ssh-keygen -t ed25519), append the public key to the target user\'s authorized_keys, then register the private key via register_access',
   process(entry) {
-    const { host, user, keyPath, port } = entry as zod.infer<typeof entrySchema>
+    const { host, user, key, port } = entry as zod.infer<typeof entrySchema>
     const fields: Record<string, unknown> = { host, user }
-    if (keyPath !== undefined) fields.keyPath = expandHome(keyPath)
+    if (key !== undefined) fields.key = expandHome(key)
     if (port !== undefined) fields.port = port
     return fields
   },

@@ -1,7 +1,7 @@
 /**
  * Test harness for ops-access-gate: mounts core (the real file-reading resolve)
  * AND the gate (the ledger + broker + request_access tool) against one mock
- * context, with real tmp ro/rw registry files and a real tmp audit log. Specs
+ * context, with a real tmp registry file and a real tmp audit log. Specs
  * drive resolve through ctx.opsAccess, drive the tool through the captured
  * registration, and inject approvals through the mock approval channel — the
  * externally observable seam.
@@ -22,38 +22,34 @@ import type { AccessProvider, OpsAccess } from '@deepseek-ai/dsh-ops-access'
 import { apply as gateApply } from '../src/index.ts'
 import type { Config, OpsAccessGate } from '../src/index.ts'
 
-/** A provider whose processed field betrays which file a profile came from. */
+/** A provider whose processed field betrays which tier a profile came from. */
 export const testProvider: AccessProvider = {
   kind: 'test',
   schema: zod.object({ endpoint: zod.string() }),
 }
 
-/** An approval-required kind (mirrors ssh's posture: credential in the ro file). */
+/** An approval-required kind (mirrors ssh's posture: credential in the ro tier). */
 export const sshProvider: AccessProvider = {
   kind: 'ssh',
   schema: zod.object({ host: zod.string() }),
 }
 
-export const RO_REGISTRY = `\
+export const REGISTRY = `\
 version: 1
 test:
   prod:
-    endpoint: https://ro-prod.internal
     environment: prod
-`
-
-export const RW_REGISTRY = `\
-version: 1
-test:
-  prod:
-    endpoint: https://rw-prod.internal
-    environment: prod
+    ro:
+      endpoint: https://ro-prod.internal
+    rw:
+      endpoint: https://rw-prod.internal
 `
 
 export const SSH_REGISTRY = `\
 ssh:
   box:
-    host: 10.0.0.1
+    ro:
+      host: 10.0.0.1
 `
 
 export interface SetupOptions {
@@ -66,8 +62,7 @@ export interface SetupOptions {
 
 export function setup(opts: SetupOptions = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ops-access-gate-'))
-  const roFile = join(dir, 'access.yaml')
-  const rwFile = join(dir, 'access-rw.yaml')
+  const registryFile = join(dir, 'access.yaml')
   const auditFile = join(dir, 'audit.log')
   let opsAccess: OpsAccess | undefined
   let opsAccessGate: OpsAccessGate | undefined
@@ -134,7 +129,7 @@ export function setup(opts: SetupOptions = {}) {
     auditFile,
     ...opts.config,
   })
-  const mountCore = () => coreApply(ctx, { registryFile: roFile, rwRegistryFile: rwFile })
+  const mountCore = () => coreApply(ctx, { registryFile, credentialsDir: join(dir, 'credentials') })
   if (opts.gateFirst) {
     mountGate()
     mountCore()
@@ -161,11 +156,9 @@ export function setup(opts: SetupOptions = {}) {
     approvalRequests,
     callRequestAccess,
     dir,
-    roFile,
-    rwFile,
+    registryFile,
     auditFile,
-    writeRo: (text: string) => writeFileSync(roFile, text),
-    writeRw: (text: string) => writeFileSync(rwFile, text),
+    writeRegistry: (text: string) => writeFileSync(registryFile, text),
     readAudit: (): Array<Record<string, unknown>> => {
       let text: string
       try {

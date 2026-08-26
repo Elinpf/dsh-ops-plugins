@@ -40,7 +40,7 @@ describe('ceph', () => {
     const h = setup({
       resolveImpl: async () => ({
         kind: 'ceph', name: 'rook-test',
-        fields: { confPath: '/etc/ceph/rook.conf', keyringPath: '/etc/ceph/rook.keyring', name: 'client.dsh-test' },
+        fields: { conf: '/etc/ceph/rook.conf', keyring: '/etc/ceph/rook.keyring', name: 'client.dsh-test' },
       }),
     })
     const { value } = await h.runCeph({ cluster: 'rook-test', command: 'fsid' })

@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest'
 import * as plugin from '../src/index.ts'
-import { setup, RO_REGISTRY, RW_REGISTRY, SSH_REGISTRY } from './harness.ts'
+import { setup, REGISTRY, SSH_REGISTRY } from './harness.ts'
 
 const SESSION_A = { id: 'sess-a' }
 const SESSION_B = { id: 'sess-b' }
@@ -33,27 +33,27 @@ describe('export shape', () => {
 // ── Brokering: ro vs rw ──────────────────────────────────────────────────────
 
 describe('brokering', () => {
-  it('no grant → ro fields served from the ro registry', async () => {
-    const { opsAccess, writeRo, writeRw } = setup()
-    writeRo(RO_REGISTRY)
-    writeRw(RW_REGISTRY)
+  it('no grant → ro fields served from the ro tier', async () => {
+    const { opsAccess, writeRegistry } = setup()
+    writeRegistry(REGISTRY)
     const profile = await opsAccess.resolve('test', 'prod', SESSION_A)
     expect(profile.fields.endpoint).toBe('https://ro-prod.internal')
   })
 
-  it('grant for the session → rw fields served from the rw registry', async () => {
-    const { opsAccess, gate, writeRo, writeRw } = setup()
-    writeRo(RO_REGISTRY)
-    writeRw(RW_REGISTRY)
+  it('grant for the session → rw fields served from the rw tier', async () => {
+    const { opsAccess, gate, writeRegistry } = setup()
+    writeRegistry(REGISTRY)
     gate.authorize(futureGrant(SESSION_A.id, 'test', 'prod'))
     const profile = await opsAccess.resolve('test', 'prod', SESSION_A)
     expect(profile.fields.endpoint).toBe('https://rw-prod.internal')
   })
 
   it('grant for a different profile does not elevate the requested one', async () => {
-    const { opsAccess, gate, writeRo, writeRw } = setup()
-    writeRo(RO_REGISTRY + '  staging:\n    endpoint: https://ro-staging.internal\n')
-    writeRw(RW_REGISTRY + '  staging:\n    endpoint: https://rw-staging.internal\n')
+    const { opsAccess, gate, writeRegistry } = setup()
+    writeRegistry(REGISTRY
+      + '  staging:\n'
+      + '    ro:\n      endpoint: https://ro-staging.internal\n'
+      + '    rw:\n      endpoint: https://rw-staging.internal\n')
     gate.authorize(futureGrant(SESSION_A.id, 'test', 'staging'))
     // prod has no grant → ro; staging has a grant → rw.
     expect((await opsAccess.resolve('test', 'prod', SESSION_A)).fields.endpoint).toBe('https://ro-prod.internal')
@@ -61,8 +61,8 @@ describe('brokering', () => {
   })
 
   it('grant for a different kind does not elevate', async () => {
-    const { opsAccess, gate, writeRo } = setup()
-    writeRo(RO_REGISTRY)
+    const { opsAccess, gate, writeRegistry } = setup()
+    writeRegistry(REGISTRY)
     gate.authorize(futureGrant(SESSION_A.id, 'other', 'prod'))
     expect((await opsAccess.resolve('test', 'prod', SESSION_A)).fields.endpoint).toBe('https://ro-prod.internal')
   })
@@ -72,9 +72,8 @@ describe('brokering', () => {
 
 describe('session isolation', () => {
   it('a grant for session A is invisible to session B', async () => {
-    const { opsAccess, gate, writeRo, writeRw } = setup()
-    writeRo(RO_REGISTRY)
-    writeRw(RW_REGISTRY)
+    const { opsAccess, gate, writeRegistry } = setup()
+    writeRegistry(REGISTRY)
     gate.authorize(futureGrant(SESSION_A.id, 'test', 'prod'))
     expect((await opsAccess.resolve('test', 'prod', SESSION_A)).fields.endpoint).toBe('https://rw-prod.internal')
     expect((await opsAccess.resolve('test', 'prod', SESSION_B)).fields.endpoint).toBe('https://ro-prod.internal')
@@ -102,9 +101,8 @@ describe('session isolation', () => {
 
 describe('fail-closed', () => {
   it('missing agent → ro, even when a grant exists for some session', async () => {
-    const { opsAccess, gate, writeRo, writeRw } = setup()
-    writeRo(RO_REGISTRY)
-    writeRw(RW_REGISTRY)
+    const { opsAccess, gate, writeRegistry } = setup()
+    writeRegistry(REGISTRY)
     // A grant exists, but without an agent there is no session to key it on —
     // rw must never be issued. The ruling comes from the broker (core consults
     // it with agent undefined), not from core short-circuiting.
@@ -114,8 +112,8 @@ describe('fail-closed', () => {
   })
 
   it('missing agent → approval-required kinds (ssh) deny outright — their credential is effectively rw', async () => {
-    const { opsAccess, writeRo } = setup()
-    writeRo(RO_REGISTRY + SSH_REGISTRY)
+    const { opsAccess, writeRegistry } = setup()
+    writeRegistry(REGISTRY + SSH_REGISTRY)
     const err = await opsAccess.resolve('ssh', 'box').catch((e) => e)
     expect(err.message).toContain('access denied for ssh/box')
     expect(err.message).toContain('request_access')
@@ -129,24 +127,25 @@ describe('fail-closed', () => {
   })
 })
 
-// ── rw file errors do not leak secrets ───────────────────────────────────────
+// ── rw tier errors do not leak secrets ───────────────────────────────────────
 
-describe('rw file errors', () => {
-  it('rw file missing on an authorized resolve errors with the rw file path', async () => {
-    const { opsAccess, gate, writeRo, rwFile } = setup()
-    writeRo(RO_REGISTRY)
-    // rw file deliberately absent
+describe('rw tier errors', () => {
+  it('an authorized resolve with no rw tier errors rather than silently serving ro', async () => {
+    const { opsAccess, gate, writeRegistry } = setup()
+    // test/prod has an ro tier but NO rw tier — a grant was approved that
+    // cannot be fulfilled. Resolve must error, not silently degrade to ro.
+    writeRegistry('version: 1\ntest:\n  prod:\n    environment: prod\n    ro:\n      endpoint: https://ro-prod.internal\n')
     gate.authorize(futureGrant(SESSION_A.id, 'test', 'prod'))
-    await expect(opsAccess.resolve('test', 'prod', SESSION_A)).rejects.toThrow(`registry file not found: ${rwFile}`)
+    await expect(opsAccess.resolve('test', 'prod', SESSION_A)).rejects.toThrow(/no rw tier/)
   })
 
-  it('rw entry missing errors without leaking the rw field value', async () => {
-    const { opsAccess, gate, writeRo, writeRw, rwFile } = setup()
-    writeRo(RO_REGISTRY)
-    writeRw('test:\n  other:\n    endpoint: https://secret-rw-value.internal\n')
+  it('the no-rw-tier error does not leak a secret rw value from another profile', async () => {
+    const { opsAccess, gate, writeRegistry } = setup()
+    // test/prod has an ro tier only; test/other carries a secret rw value.
+    writeRegistry('version: 1\ntest:\n  prod:\n    environment: prod\n    ro:\n      endpoint: https://ro-prod.internal\n  other:\n    rw:\n      endpoint: https://secret-rw-value.internal\n')
     gate.authorize(futureGrant(SESSION_A.id, 'test', 'prod'))
     const err = await opsAccess.resolve('test', 'prod', SESSION_A).catch((e) => e)
-    expect(err.message).toContain(rwFile)
+    expect(err.message).toContain('no rw tier')
     expect(err.message).not.toContain('secret-rw-value')
   })
 })
@@ -161,8 +160,7 @@ describe('request_access', () => {
 
   it('approved request → grant written, resolve serves rw, grant audited', async () => {
     const h = setup({ approvalOutcome: 'allowed-once' })
-    h.writeRo(RO_REGISTRY)
-    h.writeRw(RW_REGISTRY)
+    h.writeRegistry(REGISTRY)
     const result = await h.callRequestAccess(
       { action: 'request', profile: 'test/prod', reason: 'restart the broken pod', ttlMinutes: 45 },
       { agent: SESSION_A, callId: 'call-1' },
@@ -186,8 +184,7 @@ describe('request_access', () => {
 
   it('rejected request → no grant, resolve stays ro', async () => {
     const h = setup({ approvalOutcome: 'rejected' })
-    h.writeRo(RO_REGISTRY)
-    h.writeRw(RW_REGISTRY)
+    h.writeRegistry(REGISTRY)
     const result = await h.callRequestAccess(
       { action: 'request', profile: 'test/prod', reason: 'restart the broken pod' },
       { agent: SESSION_A },
@@ -200,8 +197,7 @@ describe('request_access', () => {
 
   it('no approval channel → clear error, no grant', async () => {
     const h = setup()
-    h.writeRo(RO_REGISTRY)
-    h.writeRw(RW_REGISTRY)
+    h.writeRegistry(REGISTRY)
     const result = await h.callRequestAccess(
       { action: 'request', profile: 'test/prod', reason: 'restart the broken pod' },
       { agent: SESSION_A },
@@ -228,7 +224,7 @@ describe('request_access', () => {
 
   it('unknown profile → refused BEFORE the human is asked, pointing at list_access', async () => {
     const h = setup({ approvalOutcome: 'allowed-once' })
-    h.writeRo(RO_REGISTRY)
+    h.writeRegistry(REGISTRY)
     const result = await h.callRequestAccess({ action: 'request', profile: 'test/ghost', reason: 'x' }, { agent: SESSION_A })
     expect(result.ok).toBe(false)
     expect(result.message).toContain('test/ghost')
@@ -245,8 +241,7 @@ describe('request_access', () => {
 
   it('ttl is clamped to the configured maximum', async () => {
     const h = setup({ approvalOutcome: 'allowed-once', config: { maxTtlMinutes: 60 } })
-    h.writeRo(RO_REGISTRY)
-    h.writeRw(RW_REGISTRY)
+    h.writeRegistry(REGISTRY)
     const before = Date.now()
     const result = await h.callRequestAccess(
       { action: 'request', profile: 'test/prod', reason: 'long maintenance', ttlMinutes: 99999 },
@@ -262,9 +257,8 @@ describe('request_access', () => {
 
   it('profile without an rw tier is refused BEFORE the human is asked (no undeliverable grants)', async () => {
     const h = setup({ approvalOutcome: 'allowed-once' })
-    h.writeRo(RO_REGISTRY)
-    // rw registry deliberately lacks test/prod — the grant could never be fulfilled.
-    h.writeRw('test:\n  other:\n    endpoint: https://rw-other.internal\n')
+    // test/prod has an ro tier but no rw tier — the grant could never be fulfilled.
+    h.writeRegistry('version: 1\ntest:\n  prod:\n    environment: prod\n    ro:\n      endpoint: https://ro-prod.internal\n  other:\n    rw:\n      endpoint: https://rw-other.internal\n')
     const result = await h.callRequestAccess(
       { action: 'request', profile: 'test/prod', reason: 'restart the broken pod' },
       { agent: SESSION_A },
@@ -277,10 +271,9 @@ describe('request_access', () => {
 
   it('rw entry that exists but fails schema validation is refused BEFORE the human is asked', async () => {
     const h = setup({ approvalOutcome: 'allowed-once' })
-    h.writeRo(RO_REGISTRY)
-    // Entry exists but endpoint is the wrong type — a grant for it would
+    // The rw tier exists but endpoint is the wrong type — a grant for it would
     // approve and then blow up at resolve time. The precheck must catch it.
-    h.writeRw('test:\n  prod:\n    endpoint: 5\n')
+    h.writeRegistry('version: 1\ntest:\n  prod:\n    environment: prod\n    ro:\n      endpoint: https://ro-prod.internal\n    rw:\n      endpoint: 5\n')
     const result = await h.callRequestAccess(
       { action: 'request', profile: 'test/prod', reason: 'restart the broken pod' },
       { agent: SESSION_A },
@@ -290,9 +283,23 @@ describe('request_access', () => {
     expect(h.approvalRequests).toHaveLength(0)
   })
 
-  it('approval-required kinds (ssh) are exempt from the rw-tier check — their credential lives in the ro registry', async () => {
+  it('rw-only profile (ro not yet registered) IS requestable — the derivation bootstrap', async () => {
     const h = setup({ approvalOutcome: 'allowed-once' })
-    h.writeRo(RO_REGISTRY + SSH_REGISTRY)
+    // test/prod has ONLY an rw tier: the operator registered rw and the agent
+    // is about to derive+register ro. Refusing the grant would deadlock that.
+    h.writeRegistry('version: 1\ntest:\n  prod:\n    environment: prod\n    rw:\n      endpoint: https://rw-prod.internal\n')
+    const result = await h.callRequestAccess(
+      { action: 'request', profile: 'test/prod', reason: 'derive a read-only credential and register the ro tier' },
+      { agent: SESSION_A },
+    )
+    expect(result.ok).toBe(true)
+    expect(h.approvalRequests).toHaveLength(1)
+    expect(h.gate.isAuthorized('sess-a', 'test', 'prod')).toBe(true)
+  })
+
+  it('approval-required kinds (ssh) are exempt from the rw-tier check — their credential lives in the ro tier', async () => {
+    const h = setup({ approvalOutcome: 'allowed-once' })
+    h.writeRegistry(REGISTRY + SSH_REGISTRY)
     const result = await h.callRequestAccess(
       { action: 'request', profile: 'ssh/box', reason: 'check disk' },
       { agent: SESSION_A },
@@ -325,8 +332,7 @@ describe('list and revoke', () => {
 
   it('revoke drops the grant immediately and audits it', async () => {
     const h = setup()
-    h.writeRo(RO_REGISTRY)
-    h.writeRw(RW_REGISTRY)
+    h.writeRegistry(REGISTRY)
     h.gate.authorize(futureGrant('sess-a', 'test', 'prod'))
     const result = await h.callRequestAccess({ action: 'revoke', profile: 'test/prod' }, { agent: SESSION_A })
     expect(result.ok).toBe(true)
@@ -348,8 +354,7 @@ describe('list and revoke', () => {
 describe('ttl expiry', () => {
   it('an expired grant lapses to ro and is audited exactly once', async () => {
     const h = setup()
-    h.writeRo(RO_REGISTRY)
-    h.writeRw(RW_REGISTRY)
+    h.writeRegistry(REGISTRY)
     h.gate.authorize({ session: 'sess-a', kind: 'test', name: 'prod', expiresAt: Date.now() - 1000, reason: 'old', approvedBy: 'user' })
     expect((await h.opsAccess.resolve('test', 'prod', SESSION_A)).fields.endpoint).toBe('https://ro-prod.internal')
     expect(h.readAudit().filter((l) => l.event === 'expire')).toHaveLength(1)
@@ -364,14 +369,14 @@ describe('ttl expiry', () => {
 describe('approval-required kinds', () => {
   it('ssh without a grant → deny pointing at request_access', async () => {
     const h = setup()
-    h.writeRo(RO_REGISTRY + SSH_REGISTRY)
+    h.writeRegistry(REGISTRY + SSH_REGISTRY)
     const err = await h.opsAccess.resolve('ssh', 'box', SESSION_A).catch((e) => e)
     expect(err.message).toContain('request_access')
   })
 
-  it('ssh with a grant → served from the ro registry, gated-issue audited', async () => {
+  it('ssh with a grant → served from the ro tier, gated-issue audited', async () => {
     const h = setup()
-    h.writeRo(RO_REGISTRY + SSH_REGISTRY)
+    h.writeRegistry(REGISTRY + SSH_REGISTRY)
     h.gate.authorize(futureGrant('sess-a', 'ssh', 'box'))
     const profile = await h.opsAccess.resolve('ssh', 'box', SESSION_A)
     expect(profile.fields.host).toBe('10.0.0.1')
@@ -393,8 +398,7 @@ describe('audit log', () => {
 
   it('every rw issue is audited', async () => {
     const h = setup()
-    h.writeRo(RO_REGISTRY)
-    h.writeRw(RW_REGISTRY)
+    h.writeRegistry(REGISTRY)
     h.gate.authorize(futureGrant('sess-a', 'test', 'prod'))
     await h.opsAccess.resolve('test', 'prod', SESSION_A)
     await h.opsAccess.resolve('test', 'prod', SESSION_A)
@@ -405,7 +409,7 @@ describe('audit log', () => {
 
   it('ro resolves are not audited', async () => {
     const h = setup()
-    h.writeRo(RO_REGISTRY)
+    h.writeRegistry(REGISTRY)
     await h.opsAccess.resolve('test', 'prod', SESSION_A)
     // ledger-reset (from apply) is the only line; the ro resolve added nothing.
     expect(h.readAudit().filter((l) => l.event !== 'ledger-reset')).toHaveLength(0)
@@ -417,8 +421,7 @@ describe('audit log', () => {
 describe('deferred mounting', () => {
   it('gate-first mounting still lands the broker in core', async () => {
     const h = setup({ gateFirst: true })
-    h.writeRo(RO_REGISTRY)
-    h.writeRw(RW_REGISTRY)
+    h.writeRegistry(REGISTRY)
     // If registerAccessBroker's deferred inject never fired, this resolve would
     // serve ro despite the grant — the broker would silently not exist.
     h.gate.authorize(futureGrant('sess-a', 'test', 'prod'))

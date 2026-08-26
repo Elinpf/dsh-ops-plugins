@@ -3,9 +3,14 @@
  * covering register/dispose, resolve/list against a real tmp registry file,
  * error discipline (unknown kind/name, YAML and schema failures), the
  * no-caching guarantee, and `~` expansion of registryFile.
+ *
+ * The registry is a SINGLE file; each entry carries envelope fields
+ * (description/environment) at entry level and provider fields under `ro:` and
+ * `rw:` tier sub-objects. `write()` writes a raw doc to the file; `writeRw()`
+ * merges an rw overlay into the same file.
  */
 
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -23,15 +28,16 @@ const testProvider: AccessProvider = {
   process: (entry, name) => ({ ...(entry as Record<string, unknown>), processedName: name }),
 }
 
-const VALID_REGISTRY = `\
-version: 1
+const VALID_REGISTRY = `version: 1
 test:
   alpha:
-    endpoint: https://alpha.internal
     description: alpha 环境
     environment: staging
+    ro:
+      endpoint: https://alpha.internal
   beta:
-    endpoint: https://beta.internal
+    ro:
+      endpoint: https://beta.internal
 `
 
 // ── Export shape ─────────────────────────────────────────────────────────────
@@ -40,7 +46,7 @@ describe('export shape', () => {
   it('is a function plugin: named exports, no default', () => {
     expect('default' in plugin).toBe(false)
     expect(plugin.name).toBe('ops-access')
-    expect(plugin.inject).toEqual([])
+    expect(plugin.inject).toEqual(['tools'])
     expect(typeof plugin.apply).toBe('function')
     expect(plugin.Config).toBeDefined()
   })
@@ -136,7 +142,7 @@ describe('resolve', () => {
   it('throws with file path, entry location, and issue summary on schema validation failure', async () => {
     const { handle, write, registryFile } = setup()
     handle.register(testProvider)
-    write('test:\n  alpha:\n    wrong: 1\n')
+    write('test:\n  alpha:\n    ro:\n      wrong: 1\n')
     await expect(handle.resolve('test', 'alpha')).rejects.toThrow(
       new RegExp(`invalid entry test\\.alpha in registry file ${registryFile.replace(/[/.]/g, '\\$&')}.*endpoint`),
     )
@@ -145,11 +151,11 @@ describe('resolve', () => {
   it('re-reads the file on every call — edits take effect immediately', async () => {
     const { handle, write } = setup()
     handle.register(testProvider)
-    write('test:\n  alpha:\n    endpoint: https://v1.internal\n')
+    write('test:\n  alpha:\n    ro:\n      endpoint: https://v1.internal\n')
     const first = await handle.resolve('test', 'alpha')
     expect(first.fields.endpoint).toBe('https://v1.internal')
 
-    write('test:\n  alpha:\n    endpoint: https://v2.internal\n')
+    write('test:\n  alpha:\n    ro:\n      endpoint: https://v2.internal\n')
     const second = await handle.resolve('test', 'alpha')
     expect(second.fields.endpoint).toBe('https://v2.internal')
   })
@@ -272,6 +278,27 @@ describe('mention injection', () => {
     expect(injected).not.toContain('https://alpha.internal')
   })
 
+  it('rw-only entries render with a derivation note instead of not-found', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    h.write(`version: 1
+test:
+  rwonly:
+    environment: prod
+    rw:
+      endpoint: https://rw-only.internal
+`)
+
+    const mention = formatAccessMention({ kind: 'test', name: 'rwonly' })
+    const decision: any = await drivePreStep(h, [textMessage(`看 ${mention}`)])
+    const injected = decision.messages[1].content[0].text
+    expect(injected).toContain('- test/rwonly [prod] (no ro tier registered yet')
+    expect(injected).toContain('register_access')
+    expect(injected).not.toContain('not found')
+    // fields never cross
+    expect(injected).not.toContain('rw-only.internal')
+  })
+
   it('unknown profile degrades to a note, not an error', async () => {
     const h = setup()
     h.handle.register(testProvider)
@@ -325,26 +352,27 @@ describe('mention injection', () => {
 
 // ── broker + rw registry ─────────────────────────────────────────────────────
 
-// Two registries with distinct field values so the source file is observable
-// in the resolved profile. ro lives in access.yaml, rw in access-rw.yaml.
-const RO_REGISTRY = `\
-version: 1
+// Two tier values with distinct endpoints so the resolved tier is observable
+// in the resolved profile. ro and rw live as sub-objects of one entry in the
+// single registry file.
+const RO_REGISTRY = `version: 1
 test:
   alpha:
-    endpoint: https://ro-alpha.internal
+    ro:
+      endpoint: https://ro-alpha.internal
 `
-const RW_REGISTRY = `\
-version: 1
+const RW_REGISTRY = `version: 1
 test:
   alpha:
-    endpoint: https://rw-alpha.internal
+    rw:
+      endpoint: https://rw-alpha.internal
 `
 
 const SESSION_A = { id: 'sess-a' }
 const SESSION_B = { id: 'sess-b' }
 
 describe('broker + rw registry', () => {
-  it('with no broker registered, resolve is unchanged — fields come from the ro file', async () => {
+  it('with no broker registered, resolve is unchanged — fields come from the ro tier', async () => {
     const { handle, write, writeRw } = setup()
     handle.register(testProvider)
     write(RO_REGISTRY)
@@ -354,7 +382,7 @@ describe('broker + rw registry', () => {
     expect(profile.fields.endpoint).toBe('https://ro-alpha.internal')
   })
 
-  it("broker 'rw' decision serves fields from the rw file, not the ro file", async () => {
+  it("broker 'rw' decision serves fields from the rw tier, not the ro tier", async () => {
     const { handle, write, writeRw } = setup()
     handle.register(testProvider)
     write(RO_REGISTRY)
@@ -364,7 +392,7 @@ describe('broker + rw registry', () => {
     expect(profile.fields.endpoint).toBe('https://rw-alpha.internal')
   })
 
-  it("broker 'ro' decision serves fields from the ro file", async () => {
+  it("broker 'ro' decision serves fields from the ro tier", async () => {
     const { handle, write, writeRw } = setup()
     handle.register(testProvider)
     write(RO_REGISTRY)
@@ -413,13 +441,14 @@ describe('broker + rw registry', () => {
   })
 
   it('rw-tier miss says the grant was approved but no rw credential is registered', async () => {
-    const { handle, write, writeRw, rwRegistryFile } = setup()
+    const { handle, write, writeRw } = setup()
     handle.register(testProvider)
     write(RO_REGISTRY)
+    // alpha has ro but no rw tier (the rw overlay lands on a different name).
     writeRw(RW_REGISTRY.replace('alpha', 'other'))
     handle.registerBroker(() => 'rw')
     const err = await handle.resolve('test', 'alpha', SESSION_A).catch((e) => e)
-    expect(err.message).toContain(rwRegistryFile)
+    expect(err.message).toMatch(/no rw tier for profile "alpha"/)
     expect(err.message).toContain('no rw credential is registered')
   })
 
@@ -450,57 +479,53 @@ describe('broker + rw registry', () => {
     expect((await handle.resolve('test', 'alpha', SESSION_A)).fields.endpoint).toBe('https://ro-alpha.internal')
   })
 
-  it('rw file missing on an rw decision errors with the rw file path, no secret leak', async () => {
-    const { handle, write, rwRegistryFile } = setup()
+  it('registry file missing on an rw decision errors with the registry file path, no secret leak', async () => {
+    const { handle, registryFile } = setup()
     handle.register(testProvider)
-    write(RO_REGISTRY)
-    // rw file deliberately not written
+    // registry file deliberately not written
     handle.registerBroker(() => 'rw')
-    await expect(handle.resolve('test', 'alpha', SESSION_A)).rejects.toThrow(`registry file not found: ${rwRegistryFile}`)
+    await expect(handle.resolve('test', 'alpha', SESSION_A)).rejects.toThrow(`registry file not found: ${registryFile}`)
   })
 
-  it('rw entry missing errors listing available names, without leaking field values', async () => {
-    const { handle, write, writeRw, rwRegistryFile } = setup()
+  it('rw tier missing errors with the no-rw-tier message, without leaking field values', async () => {
+    const { handle, write, writeRw } = setup()
     handle.register(testProvider)
     write(RO_REGISTRY)
-    // rw file has the kind but not the profile
-    writeRw('test:\n  beta:\n    endpoint: https://rw-beta.internal\n')
+    // alpha has ro; the rw overlay lands on beta only — alpha's rw tier is absent.
+    writeRw('test:\n  beta:\n    rw:\n      endpoint: https://rw-beta.internal\n')
     handle.registerBroker(() => 'rw')
-    await expect(handle.resolve('test', 'alpha', SESSION_A)).rejects.toThrow(
-      new RegExp(`no profile "alpha" for kind "test" in registry file ${rwRegistryFile.replace(/[/.]/g, '\\$&')}.*available: beta`),
-    )
+    await expect(handle.resolve('test', 'alpha', SESSION_A)).rejects.toThrow(/no rw tier for profile "alpha"/)
   })
 
   it('rw schema validation failure errors with location + issue, no field value leaked', async () => {
-    const { handle, write, writeRw, rwRegistryFile } = setup()
+    const { handle, write, writeRw, registryFile } = setup()
     handle.register(testProvider)
     write(RO_REGISTRY)
     // `endpoint` is the wrong type (fails validation); `note` carries a
     // secret value that the provider schema strips — it must never appear in
     // the thrown error.
-    writeRw('test:\n  alpha:\n    endpoint: 5\n    note: secret-value\n')
+    writeRw('test:\n  alpha:\n    rw:\n      endpoint: 5\n      note: secret-value\n')
     handle.registerBroker(() => 'rw')
     const err = await handle.resolve('test', 'alpha', SESSION_A).catch((e) => e)
-    expect(err.message).toMatch(new RegExp(`invalid entry test\\.alpha in registry file ${rwRegistryFile.replace(/[/.]/g, '\\$&')}`))
+    expect(err.message).toMatch(new RegExp(`invalid entry test\\.alpha in registry file ${registryFile.replace(/[/.]/g, '\\$&')}`))
     expect(err.message).toMatch(/endpoint/)
     // The stripped field value must not leak into the error.
     expect(err.message).not.toContain('secret-value')
   })
 
-  it('rw YAML syntax error errors with the rw file path, no file text leaked', async () => {
-    const { handle, write, writeRw, rwRegistryFile } = setup()
+  it('YAML syntax error errors with the registry file path, no file text leaked', async () => {
+    const { handle, write, registryFile } = setup()
     handle.register(testProvider)
-    write(RO_REGISTRY)
-    writeRw('test: [unclosed')
+    write('test: [unclosed')
     handle.registerBroker(() => 'rw')
-    await expect(handle.resolve('test', 'alpha', SESSION_A)).rejects.toThrow(`failed to parse registry file ${rwRegistryFile}`)
+    await expect(handle.resolve('test', 'alpha', SESSION_A)).rejects.toThrow(`failed to parse registry file ${registryFile}`)
   })
 
-  it('list only surfaces the ro registry — rw profiles never appear', async () => {
+  it('list only surfaces the ro tier — rw-only profiles never appear', async () => {
     const { handle, write, writeRw } = setup()
     handle.register(testProvider)
     write(RO_REGISTRY)
-    writeRw('test:\n  beta:\n    endpoint: https://rw-beta.internal\n')
+    writeRw('test:\n  beta:\n    rw:\n      endpoint: https://rw-beta.internal\n')
     const profiles = await handle.list()
     expect(profiles.map((p) => p.name)).toEqual(['alpha'])
     expect(JSON.stringify(profiles)).not.toContain('rw-beta')
@@ -524,7 +549,7 @@ describe('canResolve', () => {
   it('a schema-invalid entry is NOT resolvable — the precheck is as deep as real issuance', async () => {
     const { handle, writeRw } = setup()
     handle.register(testProvider)
-    writeRw('test:\n  alpha:\n    endpoint: 5\n')
+    writeRw('test:\n  alpha:\n    rw:\n      endpoint: 5\n')
     const result = await handle.canResolve('test', 'alpha', 'rw')
     expect(result).toEqual({ ok: false, error: expect.any(String) })
     // The error surfaces the failing field, never raw field values.
@@ -538,9 +563,9 @@ describe('canResolve', () => {
   })
 
   it('an unparseable registry file means nothing resolves from that tier (no throw)', async () => {
-    const { handle, writeRw } = setup()
+    const { handle, write } = setup()
     handle.register(testProvider)
-    writeRw('test: [unclosed')
+    write('test: [unclosed')
     expect(await handle.canResolve('test', 'alpha', 'rw')).toEqual({ ok: false })
   })
 
@@ -628,6 +653,58 @@ describe('mention candidate route', () => {
 // ── writeEntry ───────────────────────────────────────────────────────────────
 
 describe('writeEntry', () => {
+  it('rejects profile names that are unsafe as ids (paths, mention syntax)', async () => {
+    const { handle, write, registryFile } = setup()
+    handle.register(testProvider)
+    write(VALID_REGISTRY)
+    const original = readFileSync(registryFile, 'utf8')
+    for (const bad of ['../escape', 'a/b', 'has space', '.hidden', '-leading', '']) {
+      await expect(handle.writeEntry('test', bad, 'ro', { endpoint: 'https://x.internal' }))
+        .rejects.toThrow(/invalid profile name/)
+    }
+    // Nothing was written.
+    expect(readFileSync(registryFile, 'utf8')).toBe(original)
+  })
+
+  it('accepts ids with the allowed punctuation (@ . _ -)', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(VALID_REGISTRY)
+    await handle.writeEntry('test', 'kubernetes-admin@kubernetes', 'ro', { endpoint: 'https://x.internal' })
+    const profile = await handle.resolve('test', 'kubernetes-admin@kubernetes')
+    expect(profile.fields.endpoint).toBe('https://x.internal')
+  })
+
+  it('empty-string envelope fields clear the existing value (omitted preserves)', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(VALID_REGISTRY)
+    // Set a display name + description first.
+    await handle.writeEntry('test', 'alpha', 'ro', { endpoint: 'https://alpha.internal' }, { name: '旧名称', description: '旧描述' })
+    let profile = await handle.resolve('test', 'alpha')
+    expect(profile.displayName).toBe('旧名称')
+    expect(profile.description).toBe('旧描述')
+    // Clear the display name with an empty string; omit description (preserved).
+    await handle.writeEntry('test', 'alpha', 'ro', { endpoint: 'https://alpha.internal' }, { name: '' })
+    profile = await handle.resolve('test', 'alpha')
+    expect(profile.displayName).toBeUndefined()
+    expect(profile.description).toBe('旧描述')
+    expect(profile.environment).toBe('staging')
+  })
+
+  it('stores the envelope display name and surfaces it as displayName', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(VALID_REGISTRY)
+    await handle.writeEntry('test', 'gamma', 'ro', { endpoint: 'https://gamma.internal' }, { name: '生产集群 γ' })
+    const profile = await handle.resolve('test', 'gamma')
+    expect(profile.name).toBe('gamma')
+    expect(profile.displayName).toBe('生产集群 γ')
+    // And it reads back through getEntry.
+    const entry = await handle.getEntry('test', 'gamma', 'ro')
+    expect(entry?.displayName).toBe('生产集群 γ')
+  })
+
   it('upserts a new entry → resolve can get it', async () => {
     const { handle, write } = setup()
     handle.register(testProvider)
@@ -638,15 +715,17 @@ describe('writeEntry', () => {
     expect(profile.description).toBe('gamma env')
   })
 
-  it('overwrites an existing entry → old value is replaced', async () => {
+  it('overwrites an existing tier → old tier value is replaced, envelope preserved', async () => {
     const { handle, write } = setup()
     handle.register(testProvider)
     write(VALID_REGISTRY)
     await handle.writeEntry('test', 'alpha', 'ro', { endpoint: 'https://new-alpha.internal' })
     const profile = await handle.resolve('test', 'alpha')
     expect(profile.fields.endpoint).toBe('https://new-alpha.internal')
-    // The old description is gone — upsert replaces the whole entry.
-    expect(profile.description).toBeUndefined()
+    // writeEntry replaces only the tier sub-object; envelope fields on the
+    // parent entry are left untouched when no envelope is passed.
+    expect(profile.description).toBe('alpha 环境')
+    expect(profile.environment).toBe('staging')
   })
 
   it('schema failure → does not write the file and throws', async () => {
@@ -659,16 +738,15 @@ describe('writeEntry', () => {
     expect(readFileSync(registryFile, 'utf8')).toBe(original)
   })
 
-  it('rw file does not exist → creates the file', async () => {
-    const { handle, write, rwRegistryFile } = setup()
+  it('creates the registry file when it does not exist', async () => {
+    const { handle, registryFile } = setup()
     handle.register(testProvider)
-    write(VALID_REGISTRY)
-    // rw file deliberately not written
+    // registry file deliberately not written
     await handle.writeEntry('test', 'alpha', 'rw', { endpoint: 'https://rw-alpha.internal' })
     const profile = await handle.canResolve('test', 'alpha', 'rw')
     expect(profile).toEqual({ ok: true })
     // File now exists and was written.
-    const text = readFileSync(rwRegistryFile, 'utf8')
+    const text = readFileSync(registryFile, 'utf8')
     expect(text).toContain('version: 1')
     expect(text).toContain('https://rw-alpha.internal')
   })
@@ -751,6 +829,15 @@ describe('deleteEntry', () => {
 // ── listAll ──────────────────────────────────────────────────────────────────
 
 describe('listAll', () => {
+  it('envelope carries the display name through to the admin view', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write('test:\n  alpha:\n    name: 生产集群\n    ro:\n      endpoint: https://alpha.internal\n')
+    const entries = await handle.listAll()
+    const alpha = entries.find((e) => e.kind === 'test' && e.name === 'alpha')!
+    expect(alpha.envelope.name).toBe('生产集群')
+  })
+
   it('ro has rw does not → ro.ok=true rw.ok=false', async () => {
     const { handle, write } = setup()
     handle.register(testProvider)
@@ -764,7 +851,7 @@ describe('listAll', () => {
   it('schema failure → ok=false with error carrying the reason', async () => {
     const { handle, write } = setup()
     handle.register(testProvider)
-    write('test:\n  alpha:\n    endpoint: 5\n')
+    write('test:\n  alpha:\n    ro:\n      endpoint: 5\n')
     const entries = await handle.listAll()
     const alpha = entries.find((e) => e.kind === 'test' && e.name === 'alpha')!
     expect(alpha.tiers.ro.ok).toBe(false)
@@ -797,11 +884,11 @@ describe('listAll', () => {
     expect(json).not.toContain('fields')
   })
 
-  it('envelope comes from ro when present, falls back to rw', async () => {
+  it('envelope is built from entry-level description/environment', async () => {
     const { handle, write, writeRw } = setup()
     handle.register(testProvider)
     write(VALID_REGISTRY) // alpha has description "alpha 环境", environment "staging"
-    writeRw('test:\n  beta:\n    endpoint: https://rw-beta.internal\n    description: rw-beta\n')
+    writeRw('test:\n  beta:\n    rw:\n      endpoint: https://rw-beta.internal\n    description: rw-beta\n')
     const entries = await handle.listAll()
     const alpha = entries.find((e) => e.name === 'alpha')!
     expect(alpha.envelope).toEqual({ description: 'alpha 环境', environment: 'staging' })
@@ -809,7 +896,7 @@ describe('listAll', () => {
     expect(beta.envelope).toEqual({ description: 'rw-beta' })
   })
 
-  it('returns empty when neither file exists', async () => {
+  it('returns empty when the registry file does not exist', async () => {
     const { handle } = setup()
     handle.register(testProvider)
     const entries = await handle.listAll()
@@ -827,7 +914,7 @@ describe('listAll', () => {
   it('entries are sorted by kind then name', async () => {
     const { handle, write } = setup()
     handle.register(testProvider)
-    write('test:\n  zeta:\n    endpoint: https://z\n  alpha:\n    endpoint: https://a\n')
+    write('test:\n  zeta:\n    ro:\n      endpoint: https://z\n  alpha:\n    ro:\n      endpoint: https://a\n')
     const entries = await handle.listAll()
     expect(entries.map((e) => e.name)).toEqual(['alpha', 'zeta'])
   })
@@ -1037,7 +1124,7 @@ describe('admin routes', () => {
     const route = h.routes.find((r) => r.path === '/ops-access/admin/entry')
     let status = 0
     let body: any = null
-    await route.handler({ method: 'GET', url: '/ops-access/admin/entry' },
+    await route.handler({ method: 'PUT', url: '/ops-access/admin/entry' },
       { writeHead: (s: number) => { status = s }, end: (text: string) => { body = JSON.parse(text) } })
     expect(status).toBe(405)
     expect(body.ok).toBe(false)
@@ -1058,3 +1145,188 @@ describe('existing routes unchanged', () => {
     expect(json).not.toContain('endpoint')
   })
 })
+
+// ── register_access tool ─────────────────────────────────────────────────────
+
+/** Fixture provider with a file field and a derivation recipe. */
+const fileProvider: AccessProvider = {
+  kind: 'files',
+  schema: zod.object({ kubeconfig: zod.string(), note: zod.string().optional() }),
+  fieldsDoc: 'kubeconfig: path to the kubeconfig file; note: optional inline value',
+  fileFields: ['kubeconfig'],
+  derivationDoc: 'create account <id>-ro, then register_access',
+}
+
+describe('register_access tool', () => {
+  it('registers the tool under the expected name', () => {
+    const { tools } = setup()
+    expect(tools.map((t) => t.name)).toContain('register_access')
+  })
+
+  it('writes file-field content to a managed 0600 file and registers the ro tier', async () => {
+    const { handle, callRegisterAccess, credentialsDir } = setup()
+    handle.register(fileProvider)
+    const res = await callRegisterAccess({
+      profile: 'files/prod',
+      fields: { kubeconfig: 'apiVersion: v1', note: 'inline' },
+      description: 'derived ro',
+      environment: 'prod',
+    })
+    expect(res.ok).toBe(true)
+    const file = join(credentialsDir, 'files', 'prod', 'ro', 'kubeconfig')
+    expect(readFileSync(file, 'utf8')).toBe('apiVersion: v1')
+    expect(statSync(file).mode & 0o777).toBe(0o600)
+    const profile = await handle.resolve('files', 'prod')
+    expect(profile.fields).toEqual({ kubeconfig: file, note: 'inline' })
+    expect(profile.description).toBe('derived ro')
+    expect(profile.environment).toBe('prod')
+  })
+
+  it('creates the entry when missing, preserves rw tier and envelope when present', async () => {
+    const { handle, callRegisterAccess } = setup()
+    handle.register(fileProvider)
+    await handle.writeEntry('files', 'prod', 'rw', { kubeconfig: '/rw/path' }, { description: 'keep me' })
+    const res = await callRegisterAccess({ profile: 'files/prod', fields: { kubeconfig: 'ro content' } })
+    expect(res.ok).toBe(true)
+    const rw = await handle.getEntry('files', 'prod', 'rw')
+    expect(rw?.description).toBe('keep me')
+    // /rw/path is not a managed file — getEntry cannot read it back, so the
+    // raw path value is left in place.
+    expect(rw?.fields.kubeconfig).toBe('/rw/path')
+    const ro = await handle.getEntry('files', 'prod', 'ro')
+    expect(ro?.fields.kubeconfig).toBe('ro content')
+  })
+
+  it('clears envelope fields with empty strings', async () => {
+    const { handle, callRegisterAccess } = setup()
+    handle.register(fileProvider)
+    await callRegisterAccess({ profile: 'files/prod', fields: { kubeconfig: 'c' }, description: 'd', environment: 'e' })
+    const res = await callRegisterAccess({ profile: 'files/prod', fields: { kubeconfig: 'c' }, description: '', environment: '' })
+    expect(res.ok).toBe(true)
+    const entry = await handle.getEntry('files', 'prod', 'ro')
+    expect(entry?.description).toBeUndefined()
+    expect(entry?.environment).toBeUndefined()
+  })
+
+  it('rejects a malformed profile string', async () => {
+    const { callRegisterAccess } = setup()
+    const res = await callRegisterAccess({ profile: 'nokind', fields: {} })
+    expect(res.ok).toBe(false)
+    expect(res.message).toMatch(/kind\/id/)
+  })
+
+  it('rejects an unknown kind', async () => {
+    const { callRegisterAccess } = setup()
+    const res = await callRegisterAccess({ profile: 'nope/prod', fields: {} })
+    expect(res.ok).toBe(false)
+    expect(res.message).toMatch(/unknown kind "nope"/)
+  })
+
+  it('fails schema validation without writing the registry', async () => {
+    const { handle, callRegisterAccess, registryFile } = setup()
+    handle.register(fileProvider)
+    // kubeconfig is required by the schema — omitting it fails validation.
+    const res = await callRegisterAccess({ profile: 'files/prod', fields: { note: 'x' } })
+    expect(res.ok).toBe(false)
+    expect(res.message).toMatch(/registration failed/)
+    expect(existsSync(registryFile)).toBe(false)
+  })
+
+  it('help() surfaces derivation recipes and the register_access pointer', () => {
+    const { handle } = setup()
+    handle.register(fileProvider)
+    const text = handle.help()
+    expect(text).toContain('derive ro: create account <id>-ro, then register_access')
+    expect(text).toContain('register_access tool')
+  })
+})
+
+// ── admin content-file discipline ────────────────────────────────────────────
+
+describe('admin content files', () => {
+  it('POST writes contentFiles to managed 0600 files and getEntry reads content back', async () => {
+    const h = setup()
+    h.handle.register(fileProvider)
+    const { status } = await h.adminEntryRoute({
+      method: 'POST',
+      body: JSON.stringify({ kind: 'files', name: 'prod', tier: 'ro', fields: { note: 'n' }, contentFiles: { kubeconfig: 'yaml content' } }),
+    })
+    expect(status).toBe(200)
+    const file = join(h.credentialsDir, 'files', 'prod', 'ro', 'kubeconfig')
+    expect(readFileSync(file, 'utf8')).toBe('yaml content')
+    expect(statSync(file).mode & 0o777).toBe(0o600)
+    const entry = await h.handle.getEntry('files', 'prod', 'ro')
+    expect(entry?.fields.kubeconfig).toBe('yaml content')
+    expect(entry?.fields.note).toBe('n')
+  })
+
+  it('POST rejects contentFiles for undeclared fields', async () => {
+    const h = setup()
+    h.handle.register(fileProvider)
+    const { status, body } = await h.adminEntryRoute({
+      method: 'POST',
+      body: JSON.stringify({ kind: 'files', name: 'prod', tier: 'ro', fields: { kubeconfig: '/p' }, contentFiles: { note: 'x' } }),
+    })
+    expect(status).toBe(400)
+    expect(body.error).toMatch(/not a declared file field/)
+  })
+
+  it('POST rejects path-escaping file field names', async () => {
+    const h = setup()
+    h.handle.register(fileProvider)
+    const { status, body } = await h.adminEntryRoute({
+      method: 'POST',
+      body: JSON.stringify({ kind: 'files', name: 'prod', tier: 'ro', fields: {}, contentFiles: { '../escape': 'x' } }),
+    })
+    expect(status).toBe(400)
+    expect(body.error).toMatch(/invalid file field name/)
+  })
+})
+
+// ── rw-only visibility (the derivation bootstrap) ────────────────────────────
+
+describe('rw-only visibility', () => {
+  const RW_ONLY_REGISTRY = `version: 1
+test:
+  alpha:
+    description: alpha 环境
+    ro:
+      endpoint: https://alpha.internal
+  rwonly:
+    environment: prod
+    rw:
+      endpoint: https://rw-only.internal
+`
+
+  it('GET /ops-access/list includes rw-only entries with tier readiness flags', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    h.write(RW_ONLY_REGISTRY)
+    const { status, body } = await h.listRoute()
+    expect(status).toBe(200)
+    expect(body).toHaveLength(2)
+    const rwOnly = body.find((c: any) => c.name === 'rwonly')
+    expect(rwOnly).toBeDefined()
+    expect(rwOnly.ro).toBe(false)
+    expect(rwOnly.rw).toBe(true)
+    expect(rwOnly.environment).toBe('prod')
+    expect(rwOnly.mention).toBe(formatAccessMention({ kind: 'test', name: 'rwonly' }))
+    const alpha = body.find((c: any) => c.name === 'alpha')
+    expect(alpha.ro).toBe(true)
+    // fields never cross
+    expect(JSON.stringify(body)).not.toContain('endpoint')
+    expect(JSON.stringify(body)).not.toContain('rw-only.internal')
+  })
+
+  it('resolve on an rw-only entry points at the register_access derivation path', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(RW_ONLY_REGISTRY)
+    await expect(handle.resolve('test', 'rwonly')).rejects.toThrow(/register_access/)
+    // An entry with neither tier keeps the plain error.
+    write('version: 1\ntest:\n  bare:\n    description: no tiers\n')
+    await expect(handle.resolve('test', 'bare')).rejects.toThrow(/no ro tier for profile "bare"/)
+    await expect(handle.resolve('test', 'bare')).rejects.not.toThrow(/register_access/)
+  })
+})
+

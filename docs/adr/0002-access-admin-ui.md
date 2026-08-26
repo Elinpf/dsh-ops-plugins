@@ -1,6 +1,6 @@
 # ADR-0002: core 从只读变读写 —— 凭证管理 UI 的写入能力
 
-core（ops-access/core）拥有两个凭证文件（access.yaml + access-rw.yaml），此前只读：现读现校验、不缓存。凭证管理 UI 需要浏览器侧录入/删除条目，写入必须有一个后端。决策：写入归 core——core 是两个文件的唯一管理者（ADR-0001 决策 6），写入复用现有 loadRegistry/buildProfile 的 parse + validate 机器，不手写第二份 YAML 逻辑。写入路由在 preset 平面注册（和现有 GET /ops-access/list 同位置），避免跨 plane 访问带状态服务的双模块实例问题。
+core（ops-access/core）拥有凭证注册表（当时为 access.yaml + access-rw.yaml 双文件；ADR-0003 已合并为单文件、ro/rw 为条目内 tier 子字段），此前只读：现读现校验、不缓存。凭证管理 UI 需要浏览器侧录入/删除条目，写入必须有一个后端。决策：写入归 core——core 是两个文件的唯一管理者（ADR-0001 决策 6），写入复用现有 loadRegistry/buildProfile 的 parse + validate 机器，不手写第二份 YAML 逻辑。写入路由在 preset 平面注册（和现有 GET /ops-access/list 同位置），避免跨 plane 访问带状态服务的双模块实例问题。
 
 被否决的替代：UI 包自己 fs 读写文件——违反"双文件归 core"的纪律，且 UI 包是 host 平面薄壳（apply 为空），让它碰凭证文件是职责越界。门来管写入——违反"门只做决策、不碰凭证"（ADR-0001 决策 6 的核心）。
 

@@ -6,7 +6,7 @@
  */
 
 import { apply } from '../src/index.ts'
-import type { AccessProfile } from '@deepseek-ai/dsh-ops-access'
+import type { AccessProfile, AdminEntry } from '@deepseek-ai/dsh-ops-access'
 
 export const DEFAULT_KUBECONFIG = '/home/test/.kube/prod.yaml'
 
@@ -26,7 +26,7 @@ export interface ShellRunOutcome {
 
 export function setup(opts: {
   resolveImpl?: (kind: string, name: string) => Promise<AccessProfile>
-  listImpl?: () => Promise<AccessProfile[]>
+  listAllImpl?: () => Promise<AdminEntry[]>
   runImpl?: (spec: any) => Promise<ShellRunOutcome>
 } = {}) {
   const tools: any[] = []
@@ -36,7 +36,7 @@ export function setup(opts: {
   /** Every spec handed to shell.run, in order. */
   const shellRuns: any[] = []
 
-  const calls = { resolve: 0, list: 0, shellResolve: 0, shellRun: 0 }
+  const calls = { resolve: 0, listAll: 0, shellResolve: 0, shellRun: 0 }
 
   const opsAccess = {
     register: () => () => {},
@@ -44,9 +44,9 @@ export function setup(opts: {
       calls.resolve++
       return (opts.resolveImpl ?? (async () => DEFAULT_PROFILE))(kind, name)
     },
-    list: () => {
-      calls.list++
-      return (opts.listImpl ?? (async () => []))()
+    listAll: () => {
+      calls.listAll++
+      return (opts.listAllImpl ?? (async () => []))()
     },
     help: () => 'REGISTRY HELP DOC',
   }

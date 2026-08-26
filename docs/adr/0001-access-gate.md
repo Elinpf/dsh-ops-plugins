@@ -32,7 +32,7 @@ dsh 源码验证（tag dsh-v0.1.0-rc.8）：`tools/pre-execute` payload 的 `exe
 
 申请入口采用**显式 `request_access` 工具**（agent 陈述方案、人一次批准、入账），代发点在 resolve（按 agent 上下文换发 rw）。初稿曾设想"pre-execute 逐调用 ask"——那本质仍是逐命令打断，与决策 4 的变更单模式相悖，spec 定稿时修正。
 
-### 6. rw 凭证不进 access.yaml；双文件归 core，门只做决策
+### 6. rw 凭证不进 access.yaml；双文件归 core，门只做决策（已由 ADR-0003 取代为单文件 tier 子字段）
 
 `access.yaml` 对 agent 明文可见（`list_access help` 甚至教它编辑此文件），rw 必须另存。但 rw 文件的读取/校验**不由门管**——core 增加 `rwRegistryFile` 配置，用同一套机器管两个文件；门注册的 broker 是纯决策函数 `(kind, name, agent) => 'ro' | 'rw' | 拒绝`，从头到尾看不见凭证字段。策略与秘密材料彻底分离，延续"秘密不过服务的手"。被否决的替代：门自管 rw 文件（策略层碰凭证、读取纪律复刻一份）；加密 sqlite + 临时文件——加密防磁盘不防 agent（密码在进程内），临时文件反而制造守株待兔原语（盯临时目录等 rw 出现）且崩溃残留。
 

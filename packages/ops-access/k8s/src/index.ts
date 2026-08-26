@@ -33,6 +33,8 @@ export const provider: AccessProvider = {
   kind: 'k8s',
   schema: entrySchema,
   fieldsDoc: 'kubeconfig: path to the kubeconfig file (~ is expanded)',
+  fileFields: ['kubeconfig'],
+  derivationDoc: "from the rw kubeconfig: create a ServiceAccount named <id>-ro (naming convention), bind it to the built-in view ClusterRole (read-most, no Secret contents), mint a token — for a long-lived credential create a Secret of type kubernetes.io/service-account-token for the SA, since kubectl create token output expires — then build a kubeconfig reusing the rw file's cluster server and CA with the new token, register it via register_access, and verify with kubectl get pods",
   process(entry) {
     const { kubeconfig } = entry as zod.infer<typeof entrySchema>
     return { kubeconfigPath: expandHome(kubeconfig) }

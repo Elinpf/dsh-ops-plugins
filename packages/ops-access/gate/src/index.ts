@@ -336,23 +336,30 @@ export function apply(ctx: Context, config: Config): void {
         return { ok: false, message: 'request requires a non-empty reason — it is shown to the human approver' }
       }
 
-      // Deliverability checks BEFORE bothering the human. Both go through
+      // Deliverability checks BEFORE bothering the human. All go through
       // canResolve — an explicit metadata query that validates like resolve
-      // but never consults the broker and never returns fields.
-      // 1. The profile itself must resolve from the ro registry.
-      // 2. For tiered kinds a grant is only fulfillable when the rw registry
-      //    actually carries a valid entry. (Approval-required kinds like ssh
-      //    are exempt — their credential lives in the ro registry; the grant
-      //    is the pass.)
+      // but never consults the broker and never returns fields. The tier that
+      // must resolve is the tier the grant would ISSUE:
+      // - Approval-required kinds (ssh): the credential lives in the ro tier.
+      // - Tiered kinds: the grant issues rw, so only rw must resolve. ro is
+      //   deliberately NOT required — an rw-only profile is exactly the
+      //   bootstrap case where the agent derives and registers ro itself
+      //   (register_access), and refusing the grant would deadlock that flow.
       const opsAccess = ctx.get('opsAccess')
       if (!opsAccess) {
         return { ok: false, message: 'ops-access service unavailable — is the ops-access plugin mounted in this preset?' }
       }
-      if (!(await opsAccess.canResolve(kind, profileName, 'ro')).ok) {
+      if (config.approvalRequiredKinds.includes(kind)) {
+        if (!(await opsAccess.canResolve(kind, profileName, 'ro')).ok) {
+          return { ok: false, message: `no resolvable profile "${kind}/${profileName}" in the access registry (unknown kind, unknown name, or invalid entry). Run list_access to see available profiles. Approval was not requested.` }
+        }
+      } else if (!(await opsAccess.canResolve(kind, profileName, 'rw')).ok) {
+        // Distinguish "entry exists but its rw tier is missing/broken" from
+        // "no such entry at all" — the guidance differs.
+        if ((await opsAccess.canResolve(kind, profileName, 'ro')).ok) {
+          return { ok: false, message: `${kind}/${profileName} has no usable rw tier registered (missing or invalid entry in the rw registry), so a grant could not be fulfilled. Ask the operator to fix the rw credential first. Approval was not requested.` }
+        }
         return { ok: false, message: `no resolvable profile "${kind}/${profileName}" in the access registry (unknown kind, unknown name, or invalid entry). Run list_access to see available profiles. Approval was not requested.` }
-      }
-      if (!config.approvalRequiredKinds.includes(kind) && !(await opsAccess.canResolve(kind, profileName, 'rw')).ok) {
-        return { ok: false, message: `${kind}/${profileName} has no usable rw tier registered (missing or invalid entry in the rw registry), so a grant could not be fulfilled. Ask the operator to fix the rw credential first. Approval was not requested.` }
       }
 
       const requested = typeof args.ttlMinutes === 'number' ? args.ttlMinutes : config.defaultTtlMinutes

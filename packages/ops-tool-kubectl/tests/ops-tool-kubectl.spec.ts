@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest'
 import * as plugin from '../src/index.ts'
-import type { AccessProfile } from '@deepseek-ai/dsh-ops-access'
+import type { AdminEntry } from '@deepseek-ai/dsh-ops-access'
 import { setup, DEFAULT_KUBECONFIG, DEFAULT_PROFILE } from './harness.ts'
 
 // ── Export shape ─────────────────────────────────────────────────────────────
@@ -107,22 +107,26 @@ describe('kubectl', () => {
 // ── list_access ──────────────────────────────────────────────────────────────
 
 describe('list_access', () => {
-  const profiles: AccessProfile[] = [
-    DEFAULT_PROFILE,
-    { kind: 'k8s', name: 'staging', environment: 'staging', fields: { kubeconfigPath: '/home/test/.kube/staging.yaml' } },
-    { kind: 'ceph', name: 'ceph-main', description: 'ceph 集群', fields: { keyringPath: '/etc/ceph/ceph.client.admin.keyring', monHost: '10.0.0.1' } },
+  const entries: AdminEntry[] = [
+    { kind: 'k8s', name: 'prod', envelope: { description: '生产集群', environment: 'prod' }, tiers: { ro: { ok: true }, rw: { ok: false } } },
+    { kind: 'k8s', name: 'staging', envelope: { environment: 'staging' }, tiers: { ro: { ok: true }, rw: { ok: false } } },
+    { kind: 'ceph', name: 'ceph-main', envelope: { description: 'ceph 集群' }, tiers: { ro: { ok: true }, rw: { ok: true } } },
+    // rw-only entry: registered by the operator, ro not yet derived. It must
+    // be VISIBLE so the agent can discover the derivation bootstrap case.
+    { kind: 'k8s', name: 'pf-test', envelope: { name: '个人测试集群', environment: 'test' }, tiers: { ro: { ok: false }, rw: { ok: true } } },
   ]
 
-  it('groups profiles by kind and never leaks fields', async () => {
-    const h = setup({ listImpl: async () => profiles })
+  it('groups entries by kind and never leaks fields', async () => {
+    const h = setup({ listAllImpl: async () => entries })
     const value = await h.runListAccess()
 
-    expect(value.total).toBe(3)
+    expect(value.total).toBe(4)
     expect(value.groups.map((g: any) => g.kind)).toEqual(['ceph', 'k8s'])
     const k8s = value.groups.find((g: any) => g.kind === 'k8s')
     expect(k8s.profiles).toEqual([
-      { name: 'prod', description: '生产集群', environment: 'prod' },
-      { name: 'staging', environment: 'staging' },
+      { name: 'prod', description: '生产集群', environment: 'prod', ro: true, rw: false },
+      { name: 'staging', environment: 'staging', ro: true, rw: false },
+      { name: 'pf-test', displayName: '个人测试集群', environment: 'test', ro: false, rw: true },
     ])
 
     // No fields key or value anywhere in the structured output.
@@ -136,8 +140,10 @@ describe('list_access', () => {
     // Render is grouped, human-readable, and equally clean.
     const text = h.renderListAccess(value)
     expect(text).toContain('ceph (1):')
-    expect(text).toContain('k8s (2):')
+    expect(text).toContain('k8s (3):')
     expect(text).toContain('- prod [prod] — 生产集群')
+    // rw-only entry: visible, displayName shown, derivation hint appended.
+    expect(text).toContain('- pf-test (个人测试集群) [test] [rw only — derive the ro tier via register_access]')
     expect(text).not.toContain('kubeconfig')
     expect(text).not.toContain('/home/test')
     expect(text).not.toContain('10.0.0.1')
@@ -146,20 +152,20 @@ describe('list_access', () => {
   })
 
   it('empty registry: explicit empty/missing-file message', async () => {
-    const h = setup({ listImpl: async () => [] })
+    const h = setup({ listAllImpl: async () => [] })
     const value = await h.runListAccess()
     expect(value).toEqual({ groups: [], total: 0 })
     expect(h.renderListAccess(value)).toContain('empty or does not exist')
   })
 
   it('help: true returns the registry management doc from opsAccess.help()', async () => {
-    const h = setup({ listImpl: async () => profiles })
+    const h = setup({ listAllImpl: async () => entries })
     const value = await h.runListAccess({ help: true })
     expect(value.help).toBe('REGISTRY HELP DOC')
     expect(value.groups).toEqual([])
     expect(value.total).toBe(0)
-    // help short-circuits the listing — list() is never called.
-    expect(h.calls.list).toBe(0)
+    // help short-circuits the listing — listAll() is never called.
+    expect(h.calls.listAll).toBe(0)
     expect(h.renderListAccess(value)).toBe('REGISTRY HELP DOC')
   })
 })

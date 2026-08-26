@@ -89,3 +89,9 @@ it('carries fieldsDoc for help()', () => {
   expect(typeof plugin.provider.fieldsDoc).toBe('string')
   expect(plugin.provider.fieldsDoc!.length).toBeGreaterThan(0)
 })
+
+// derivationDoc feeds help() — the ro self-registration recipe.
+it('carries a derivationDoc naming convention for help()', () => {
+  expect(plugin.provider.derivationDoc).toContain('<id>-ro')
+  expect(plugin.provider.derivationDoc).toContain('register_access')
+})

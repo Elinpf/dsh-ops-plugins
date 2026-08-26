@@ -39,7 +39,7 @@ describe('ssh', () => {
     expect(seen).toEqual([['ssh', 'node-9']])
   })
 
-  it('optional fields: no keyPath / no port omits -i and -p', async () => {
+  it('optional fields: no key / no port omits -i and -p', async () => {
     const minimal: AccessProfile = {
       kind: 'ssh', name: 'jump', fields: { host: '192.168.1.2', user: 'root' },
     }

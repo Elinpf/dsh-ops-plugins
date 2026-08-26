@@ -50,15 +50,15 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 
 ### 访问档案 (AccessProfile)
 
-`resolve(kind, name)` 的返回：`{ kind, name, description?, environment?, fields }`。`description`/`environment` 是所有类型通用的 envelope 字段；`fields` 是提供方 schema 校验+加工后的类型特有字段（k8s 是 `kubeconfigPath`，ceph 是 `confPath`/`keyringPath`/`name?`，ssh 是 `host`/`user`/`keyPath?`/`port?`）。
+`resolve(kind, name)` 的返回：`{ kind, name, description?, environment?, fields }`。`description`/`environment` 是所有类型通用的 envelope 字段；`fields` 是提供方 schema 校验+加工后的类型特有字段（k8s 是 `kubeconfigPath`，ceph 是 `conf`/`keyring`/`name?`，ssh 是 `host`/`user`/`key?`/`port?`）。
 
-**安全纪律是结构性的**：fields 里只有路径和连接参数，密钥内容永不过服务的手，因此日志、错误信息、模型上下文里天然不会出现秘密。`list_access` 工具的输出连 fields 都不带——只有名字和描述。
+**安全纪律是结构性的**：fields 里只有路径和连接参数，密钥内容永不过服务的手，因此日志、错误信息、模型上下文里天然不会出现秘密。`list_access` 工具的输出连 fields 都不带——只有 envelope 和 ro/rw 就绪标记（基于 `listAll`，rw-only 条目也可见并标注派生提示）。
 
 ### @ 档案引用 (dsh-access mention)
 
 在 web 输入框用 `@` 选中一个档案，落进消息的是结构化 mention `@[kind/name](dsh-access:<base64url>)`（仿官方 `dsh-session:` 模式，编解码在 `ops-access/core/src/mention.ts`）。链路分三段，各在一层：
 
-- **候选路由**：`GET /ops-access/list`（core 包在 preset 平面注册进 host webServer）——envelope-only + 现成 mention
+- **候选路由**：`GET /ops-access/list`（core 包在 preset 平面注册进 host webServer）——基于 `listAll`，envelope-only + 现成 mention + ro/rw 就绪标记；rw-only 条目（ro 未派生）也出现在候选里，选择器标注「ro 未注册（可由 rw 派生）」
 - **@ 菜单来源**：`ops-access-ui` 包的 client 半注册 `@` 的 `access` 来源，fetch 这个路由；它的 host 行只为 client bundle 发现而存在（apply 为空）
 - **结构化注入**：core 包的 `agent/pre-step` 监听器把 mention 改写成可读的 `@kind/name`，并紧跟注入一条 `<referenced-access>` 消息（envelope-only，找不到的档案降级为提示）
 
@@ -73,7 +73,7 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 按会话代发凭证的授权层。**决策与理由见 `docs/adr/0001-access-gate.md`，构建内容见 `docs/specs/0001-access-gate.md`**——这里只定义词汇：
 
 - **凭证代发 (credential brokering)** — 门不改基础设施权限，只决定某 session 的工具调用拿到 ro 还是 rw 凭证
-- **两档账号 (ro/rw)** — 每环境静态预置只读/可写两套账号；ro 凭证进 `access.yaml` 默认可用，rw 凭证存独立文件（默认 `~/.dsh-ops/access-rw.yaml`，同格式、同现读现校验纪律），两个文件都归 core 管。门注册的 broker 是**纯决策函数**（`(kind, name, agent) => 'ro' | 'rw' | 拒绝`），不碰凭证内容。ssh 不分档，每次使用需授权
+- **两档账号 (ro/rw)** — 每环境静态预置只读/可写两套账号；ro/rw 是注册表条目内的 tier 子字段（单一注册表文件，默认 `~/.dsh-ops/access.yaml`，同现读现校验纪律；ADR-0003 由双文件合并而来），ro 档默认可用、rw 档需授权。门注册的 broker 是**纯决策函数**（`(kind, name, agent) => 'ro' | 'rw' | 拒绝`），不碰凭证内容。ssh 不分档，每次使用需授权
 - **授权 (grant)** — `{ session, profile, tier, 到期时间, 批准人, 理由 }`。agent 调 `request_access` 显式申请，人一次性批准；TTL 到期自动回落，可手动撤销，重启即清空
 - **授权账本 (grant ledger)** — 进程内授权表，按 `exec.agent.id`（= session id）分键；`exec.agent` 缺失时由 broker 裁决：两档 kind 回落 ro，ssh 类直接拒绝（ssh 凭证本质是 rw——没有真只读 shell——无会话可键权就不发）。apply（启动与 HMR 重载）即清空账本
 - **审计日志** — 授权（批准/到期/撤销）、rw 代发、账本重置（`ledger-reset`，启动与 HMR 各落一行）逐条落 JSONL 文件（默认 `~/.dsh-ops/audit.log`），不进 session 事件流
@@ -82,11 +82,13 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 
 浏览器侧录入、删除、验证 ro/rw 凭证条目的设置页（`settings.section` 插槽）。**决策见 `docs/adr/0002-access-admin-ui.md`，构建内容见 `docs/specs/0002-access-admin-ui.md`**——这里只定义词汇：
 
-- **只写不回读 (write-only)** — 表单永远是空表单，填完提交覆盖写（upsert），不回填旧 fields 值。保存后回列表视图，fields（路径、连接参数）从屏幕消失。rw 的 fields 永远不流向浏览器——写入是浏览器→文件单向，校验走 `canResolve`（不返回 fields）
-- **envelope-only 列表** — 列表 API 只返回 kind/name/description/environment + 验证状态，不含 fields。和 `list_access` 工具的纪律一致
+- **id 与名称 (id vs display name)** — 条目的注册表键是 **id**：可读但稳定，进文件路径（`credentials/<kind>/<id>/<tier>/<field>`）、@-mention、工具参数、授权账本、关联引用，创建后不可改。`name`（envelope 字段）是**显示名**，只用于 UI 和 list_access 展示，随时可改、不触发任何文件移动。id 格式受限：字母/数字开头，可含 `. _ - @`（writeEntry 入口校验，防路径逃逸与 mention 语法破坏）
+- **凭证内容粘贴 (content paste)** — 文件类字段（provider 声明的 `fileFields`）在 UI 里直接粘贴凭证内容（kubeconfig、ceph.conf、keyring、私钥），core 落盘到 credentials 目录、注册表只存路径；编辑时读回内容而非路径。用户从不接触宿主机路径
+- **envelope-only 列表** — 列表 API 只返回 kind/name/description/environment + 验证状态，不含 fields。和 `list_access` 工具的纪律一致；编辑回读（getEntry）是给人类操作员的显式例外
 - **凭证条目验证 (entry validation)** — 用现有 `canResolve` 机器（存在性 + provider schema 校验），返回 `{ ok: boolean, error?: string }`。**不做**真实权限探针（k8s `auth can-i` 等）——ro/rw 分档只是存放位置，无机制核验凭证的真实权限（ADR-0001 决策 2）
-- **core 读写 (core read-write)** — core 从只读变读写，`OpsAccess` 接口增加 `writeEntry`/`deleteEntry`。core 本来就是两个凭证文件的唯一管理者，写入复用现有 `loadRegistry`/`buildProfile` 的 parse + validate 机器。写入路由在 preset 平面注册（和 `GET /ops-access/list` 同位置）
-- **kind 描述符 (KindDescriptor)** — `{ kind, jsonSchema, fieldsDoc? }`，通过 zod v4 的 `z.toJSONSchema()` 序列化 provider 的 zod schema 为标准 JSON Schema，前端据此动态渲染表单字段
+- **core 读写 (core read-write)** — core 从只读变读写，`OpsAccess` 接口增加 `writeEntry`/`deleteEntry`/`getEntry`/`listAll`。core 是注册表的唯一管理者，写入复用现有 `loadRegistry`/`buildProfile` 的 parse + validate 机器。写入路由在 preset 平面注册（和 `GET /ops-access/list` 同位置）
+- **kind 描述符 (KindDescriptor)** — `{ kind, jsonSchema, fieldsDoc?, fileFields? }`，通过 zod v4 的 `z.toJSONSchema()` 序列化 provider 的 zod schema 为标准 JSON Schema，前端据此动态渲染表单字段；fileFields 字段渲染为内容粘贴文本框
+- **派生注册 (derived registration)** — agent 持 rw 凭证在基础设施上自助创建只读账号（命名约定：k8s ServiceAccount `<id>-ro`、ceph `client.<id>-ro`），再调 **`register_access`** 工具把派生凭证写入 ro 档。不设授权门槛：ro 档是 agent 默认工作面，人可随时在管理 UI 注册/覆盖；rw 档永远只能人注册（工具只写 ro，kind/id 缺失时整条新建）。每次注册随工具调用进 session 事件流，可重建。各 kind 的派生配方是 provider 的 `derivationDoc`（prose 而非代码——命令随基础设施版本漂移，由 agent 用判断力执行），经 `list_access help: true` 按需拉取。文件类字段内容与 UI 粘贴共用同一落盘机器（`writeContentFiles`，0600，根目录可配 `credentialsDir`，默认 `~/.dsh-ops/credentials`）。配套可发现性：rw-only 条目在 @ 菜单、list_access、mention 注入三处都可见并标注「可派生」；`request_access` 对两档 kind 只要求 rw 档可解析（ro 缺失正是派生引导场景，若卡 ro 检查会死锁）；ro 缺失且 rw 存在时 resolve 的报错直接指向 register_access
 
 ## 调查树 (Investigation Tree)
 

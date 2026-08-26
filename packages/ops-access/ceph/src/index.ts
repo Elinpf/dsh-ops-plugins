@@ -1,9 +1,10 @@
 /**
  * Ops access provider for Ceph.
  *
- * Validates `ceph` registry entries (`{ confPath, keyringPath }`) and expands
- * `~` in both paths. Registers into the ops-access capability seam
- * (ctx.opsAccess).
+ * Validates `ceph` registry entries (`{ conf, keyring, name? }`). The admin
+ * UI accepts ceph.conf and keyring CONTENT; core writes it to managed files
+ * under ~/.dsh-ops/credentials/ and stores the path in the registry. The
+ * provider expands ~ in the path for the tool's --conf/--keyring flags.
  *
  * @module @deepseek-ai/dsh-ops-access-ceph
  */
@@ -26,18 +27,20 @@ export const Config = z.object({})
 
 /** Zod schema for one ceph registry entry (excluding name and envelope fields). */
 export const entrySchema = zod.object({
-  confPath: zod.string(),
-  keyringPath: zod.string(),
+  conf: zod.string(),
+  keyring: zod.string(),
   name: zod.string().optional(),
 })
 
 export const provider: AccessProvider = {
   kind: 'ceph',
   schema: entrySchema,
-  fieldsDoc: 'confPath: path to ceph.conf; keyringPath: path to the keyring file (~ is expanded in both); name: optional cephx user (e.g. client.dsh-test) — defaults to client.admin when omitted',
+  fieldsDoc: 'conf: ceph.conf content; keyring: keyring content; name: optional cephx user (e.g. client.dsh-test) — defaults to client.admin when omitted',
+  fileFields: ['conf', 'keyring'],
+  derivationDoc: "from the rw keyring: ceph auth add client.<id>-ro mon 'allow r' osd 'allow r' mds 'allow r' mgr 'allow r' (naming convention: client.<id>-ro), export it with ceph auth get client.<id>-ro, then register via register_access with the keyring content, a copy of conf, and name set to client.<id>-ro — verify with ceph status",
   process(entry) {
-    const { confPath, keyringPath, name } = entry as zod.infer<typeof entrySchema>
-    const fields: Record<string, unknown> = { confPath: expandHome(confPath), keyringPath: expandHome(keyringPath) }
+    const { conf, keyring, name } = entry as zod.infer<typeof entrySchema>
+    const fields: Record<string, unknown> = { conf: expandHome(conf), keyring: expandHome(keyring) }
     if (name !== undefined) fields.name = name
     return fields
   },

@@ -26,8 +26,8 @@ describe('entry schema', () => {
     expect(plugin.entrySchema.safeParse({ host: '10.0.0.11', user: 'ops' }).success).toBe(true)
   })
 
-  it('accepts a full entry with keyPath and port', () => {
-    expect(plugin.entrySchema.safeParse({ host: '10.0.0.11', user: 'ops', keyPath: '~/.ssh/id_ed25519', port: 22 }).success).toBe(true)
+  it('accepts a full entry with key and port', () => {
+    expect(plugin.entrySchema.safeParse({ host: '10.0.0.11', user: 'ops', key: '~/.ssh/id_ed25519', port: 22 }).success).toBe(true)
   })
 
   it('rejects a missing host or user', () => {
@@ -47,10 +47,10 @@ describe('process', () => {
     else process.env.HOME = originalHome
   })
 
-  it('expands ~ in keyPath and passes host/user/port through', () => {
+  it('expands ~ in key and passes host/user/port through', () => {
     process.env.HOME = '/home/tester'
-    const fields = plugin.provider.process!({ host: '10.0.0.11', user: 'ops', keyPath: '~/.ssh/id_ed25519', port: 22 }, 'node-1')
-    expect(fields).toEqual({ host: '10.0.0.11', user: 'ops', keyPath: '/home/tester/.ssh/id_ed25519', port: 22 })
+    const fields = plugin.provider.process!({ host: '10.0.0.11', user: 'ops', key: '~/.ssh/id_ed25519', port: 22 }, 'node-1')
+    expect(fields).toEqual({ host: '10.0.0.11', user: 'ops', key: '/home/tester/.ssh/id_ed25519', port: 22 })
   })
 
   it('omits optional fields when absent', () => {
@@ -93,4 +93,9 @@ describe('apply', () => {
 it('carries fieldsDoc for help()', () => {
   expect(typeof plugin.provider.fieldsDoc).toBe('string')
   expect(plugin.provider.fieldsDoc!.length).toBeGreaterThan(0)
+})
+
+// derivationDoc feeds help() — the ro self-registration recipe.
+it('carries a derivationDoc for help()', () => {
+  expect(plugin.provider.derivationDoc).toContain('register_access')
 })

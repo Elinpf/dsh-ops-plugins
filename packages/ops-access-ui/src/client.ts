@@ -47,6 +47,9 @@ interface AccessMentionCandidate {
   name: string
   description?: string
   environment?: string
+  /** Tier readiness — entries with only an rw tier still appear (ro derivable). */
+  ro: boolean
+  rw: boolean
   mention: string
 }
 
@@ -55,8 +58,10 @@ interface AccessMentionCandidate {
 /** One entry in the merged admin view: envelope + per-tier validation, never fields. */
 interface AdminEntry {
   kind: string
+  /** Stable id (registry key). */
   name: string
-  envelope: { description?: string, environment?: string }
+  /** envelope.name is the editable display label. */
+  envelope: { name?: string, description?: string, environment?: string }
   tiers: { ro: AdminTierStatus, rw: AdminTierStatus }
 }
 
@@ -71,14 +76,19 @@ interface KindDescriptor {
   kind: string
   jsonSchema: Record<string, unknown>
   fieldsDoc?: string
+  fileFields?: string[]
 }
 
 /** Body for POST /ops-access/admin/entry. */
 interface SubmitEntryBody {
   kind: string
+  /** The entry's stable id (registry key, paths, mentions). */
   name: string
   tier: 'ro' | 'rw'
   fields: Record<string, unknown>
+  contentFiles?: Record<string, string>
+  /** Display label (editable, not an identity). */
+  displayName?: string
   description?: string
   environment?: string
 }
@@ -158,6 +168,19 @@ function deleteEntry(kind: string, name: string, tier: 'ro' | 'rw'): Promise<Api
     method: 'DELETE',
   }, 'deleteEntry')
 }
+/** Read back one entry's fields for editing. Returns null if not found. */
+// Result: { fields, displayName?, description?, environment? }
+async function fetchEntry(kind, name, tier) {
+  const params = new URLSearchParams({ kind, name, tier })
+  try {
+    const res = await fetch('/ops-access/admin/entry?' + params)
+    if (!res.ok) return null
+    return await res.json()
+  } catch {
+    return null
+  }
+}
+
 
 // ── CSS (theme variables, same discipline as trace dock) ────────────────────
 
@@ -234,23 +257,91 @@ const CSS = `
   cursor: not-allowed;
 }
 
-.ops-access-admin-table {
-  width: 100%;
-  border-collapse: collapse;
+.ops-access-admin-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.ops-access-admin-th,
-.ops-access-admin-td {
-  text-align: left;
-  padding: 6px 10px;
+.ops-access-admin-card {
+  border: 1px solid var(--dsw-alias-border-l1, #d0d7de);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.ops-access-admin-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: var(--dsw-alias-bg-secondary, #f6f8fa);
   border-bottom: 1px solid var(--dsw-alias-border-l1, #e5e7eb);
-  vertical-align: middle;
 }
 
-.ops-access-admin-th {
+.ops-access-admin-card-title {
+  font-size: 14px;
   font-weight: 600;
-  color: var(--dsw-alias-label-secondary, #656d76);
+  color: var(--dsw-alias-label-primary, #1f2328);
+}
+
+.ops-access-admin-card-count {
   font-size: 12px;
+  color: var(--dsw-alias-label-tertiary, #848d97);
+}
+
+.ops-access-admin-card-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1, #f0f0f0);
+}
+
+.ops-access-admin-card-row:last-child {
+  border-bottom: none;
+}
+
+.ops-access-admin-card-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.ops-access-admin-card-row-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary, #1f2328);
+  word-break: break-all;
+}
+
+.ops-access-admin-card-row-id {
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 400;
+  font-family: var(--dsw-alias-font-mono, ui-monospace, monospace);
+  color: var(--dsw-alias-label-tertiary, #848d97);
+}
+
+.ops-access-admin-card-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ops-access-admin-card-env {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary, #848d97);
+}
+
+.ops-access-admin-card-row-desc {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary, #656d76);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ops-access-admin-tier-cell {
@@ -269,6 +360,11 @@ const CSS = `
 
 .ops-access-admin-tier-na {
   color: var(--dsw-alias-label-tertiary, #848d97);
+}
+
+.ops-access-admin-row-actions {
+  display: flex;
+  gap: 4px;
 }
 
 .ops-access-admin-empty {
@@ -329,6 +425,12 @@ const CSS = `
   border-color: var(--dsw-alias-state-business-primary, #0969da);
 }
 
+.ops-access-admin-textarea {
+  font-family: var(--dsw-alias-font-mono, ui-monospace, monospace);
+  resize: vertical;
+  min-height: 120px;
+}
+
 .ops-access-admin-radio-group {
   display: flex;
   align-items: center;
@@ -350,6 +452,23 @@ const CSS = `
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.ops-access-admin-tier-section {
+  border: 1px solid var(--dsw-alias-border-l1, #e5e7eb);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ops-access-admin-tier-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--dsw-alias-border-l1, #e5e7eb);
 }
 `.trim()
 
@@ -410,6 +529,15 @@ function TrashIcon(): any {
   }))
 }
 
+function EditIcon(): any {
+  return h('svg', {
+    width: 14, height: 14, viewBox: '0 0 14 14', fill: 'none', 'aria-hidden': 'true',
+  }, h('path', {
+    d: 'M9.5 2.5L11.5 4.5L5 11H3V9L9.5 2.5Z',
+    stroke: 'currentColor', strokeWidth: 1.2, strokeLinecap: 'round', strokeLinejoin: 'round',
+  }))
+}
+
 // ── JSON Schema field extraction ─────────────────────────────────────────────
 
 interface SchemaField {
@@ -438,17 +566,17 @@ function extractSchemaFields(jsonSchema: Record<string, unknown>): SchemaField[]
 
 // ── Tier status badge ────────────────────────────────────────────────────────
 
-function TierBadge({ status, label }: { status: AdminTierStatus, label: string }): any {
+function TierBadge({ status }: { status: AdminTierStatus }): any {
   if (status.ok) {
     return h('span', { className: 'ops-access-admin-tier-cell ops-access-admin-tier-ok' },
-      h(CheckIcon), label,
+      h(CheckIcon),
     )
   }
   const title = status.error ?? 'not registered'
   return h('span', {
     className: 'ops-access-admin-tier-cell ops-access-admin-tier-err',
     title,
-  }, h(CrossIcon), label)
+  }, h(CrossIcon))
 }
 
 // ── List view ───────────────────────────────────────────────────────────────
@@ -458,9 +586,17 @@ function AdminListView(props: {
   loading: boolean,
   onRefresh: () => void,
   onAdd: () => void,
+  onEdit: (entry: AdminEntry) => void,
   onDelete: (entry: AdminEntry) => void,
 }): any {
-  const { entries, loading, onRefresh, onAdd, onDelete } = props
+  const { entries, loading, onRefresh, onAdd, onEdit, onDelete } = props
+  // Group entries by kind, preserving the order kinds first appear
+  const kindOrder: string[] = []
+  const byKind: Record<string, AdminEntry[]> = {}
+  for (const e of entries) {
+    if (!(e.kind in byKind)) { kindOrder.push(e.kind); byKind[e.kind] = [] }
+    byKind[e.kind].push(e)
+  }
   return h('div', { className: 'ops-access-admin-root' },
     h('div', { className: 'ops-access-admin-header' },
       h('span', { className: 'ops-access-admin-title' }, '凭证管理'),
@@ -482,37 +618,48 @@ function AdminListView(props: {
       ? h('div', { className: 'ops-access-admin-empty' },
           loading ? '加载中…' : '暂无凭证条目',
         )
-      : h('table', { className: 'ops-access-admin-table' },
-          h('thead', null, h('tr', null,
-            h('th', { className: 'ops-access-admin-th' }, 'Kind'),
-            h('th', { className: 'ops-access-admin-th' }, 'Name'),
-            h('th', { className: 'ops-access-admin-th' }, 'Description'),
-            h('th', { className: 'ops-access-admin-th' }, 'Environment'),
-            h('th', { className: 'ops-access-admin-th' }, 'RO'),
-            h('th', { className: 'ops-access-admin-th' }, 'RW'),
-            h('th', { className: 'ops-access-admin-th' }, ''),
-          )),
-          h('tbody', null, entries.map((entry) =>
-            h('tr', { key: `${entry.kind}/${entry.name}` },
-              h('td', { className: 'ops-access-admin-td' }, entry.kind),
-              h('td', { className: 'ops-access-admin-td' }, entry.name),
-              h('td', { className: 'ops-access-admin-td' },
-                entry.envelope.description ?? '—'),
-              h('td', { className: 'ops-access-admin-td' },
-                entry.envelope.environment ?? '—'),
-              h('td', { className: 'ops-access-admin-td' },
-                h(TierBadge, { status: entry.tiers.ro, label: 'ro' })),
-              h('td', { className: 'ops-access-admin-td' },
-                h(TierBadge, { status: entry.tiers.rw, label: 'rw' })),
-              h('td', { className: 'ops-access-admin-td' },
-                h('button', {
-                  type: 'button',
-                  className: 'ops-access-admin-btn ops-access-admin-btn-danger',
-                  onClick: () => onDelete(entry),
-                }, h(TrashIcon)),
+      : h('div', { className: 'ops-access-admin-cards' },
+          ...kindOrder.map((kind) =>
+            h('div', { key: kind, className: 'ops-access-admin-card' },
+              h('div', { className: 'ops-access-admin-card-header' },
+                h('span', { className: 'ops-access-admin-card-title' }, kind),
+                h('span', { className: 'ops-access-admin-card-count' },
+                  String(byKind[kind].length) + ' 条'),
+              ),
+              ...byKind[kind].map((entry) =>
+                h('div', { key: entry.name, className: 'ops-access-admin-card-row' },
+                  h('div', { className: 'ops-access-admin-card-row-main' },
+                    h('div', { className: 'ops-access-admin-card-row-name' },
+                      entry.envelope.name ?? entry.name,
+                      entry.envelope.name &&
+                        h('span', { className: 'ops-access-admin-card-row-id' }, entry.name)),
+                    h('div', { className: 'ops-access-admin-card-row-meta' },
+                      entry.environment && h('span', { className: 'ops-access-admin-card-env' }, entry.environment),
+                      h(TierBadge, { status: entry.tiers.ro }),
+                      h(TierBadge, { status: entry.tiers.rw }),
+                    ),
+                    entry.envelope.description &&
+                      h('div', { className: 'ops-access-admin-card-row-desc' },
+                        entry.envelope.description),
+                  ),
+                  h('div', { className: 'ops-access-admin-row-actions' },
+                    h('button', {
+                      type: 'button',
+                      className: 'ops-access-admin-btn',
+                      title: '编辑',
+                      onClick: () => onEdit(entry),
+                    }, h(EditIcon)),
+                    h('button', {
+                      type: 'button',
+                      className: 'ops-access-admin-btn ops-access-admin-btn-danger',
+                      title: '删除',
+                      onClick: () => onDelete(entry),
+                    }, h(TrashIcon)),
+                  ),
+                ),
               ),
             ),
-          )),
+          ),
         ),
   )
 }
@@ -521,76 +668,128 @@ function AdminListView(props: {
 
 function AdminFormView(props: {
   error: string | null,
+  editEntry?: { kind: string, name: string },
   onSubmit: (body: SubmitEntryBody) => Promise<ApiResult> | void,
+  onSubmitDone: () => void,
   onCancel: () => void,
 }): any {
-  const { error, onSubmit, onCancel } = props
+  const { error, editEntry, onSubmit, onSubmitDone, onCancel } = props
+  const isEditing = !!editEntry
   const [kinds, setKinds] = useState<KindDescriptor[]>([])
   const [loading, setLoading] = useState(true)
-  const [selectedKind, setSelectedKind] = useState('')
-  const [profileName, setProfileName] = useState('')
-  const [tier, setTier] = useState<'ro' | 'rw'>('ro')
+  const [selectedKind, setSelectedKind] = useState(editEntry?.kind ?? '')
+  const [profileName, setProfileName] = useState(editEntry?.name ?? '')
+  const [displayName, setDisplayName] = useState('')
   const [description, setDescription] = useState('')
   const [environment, setEnvironment] = useState('')
-  const [fields, setFields] = useState<Record<string, string>>({})
+  // Per-tier field values and enable flags. A tier with any filled field is
+  // written on submit; both tiers can be created/edited in one pass.
+  const [roFields, setRoFields] = useState<Record<string, string>>({})
+  const [rwFields, setRwFields] = useState<Record<string, string>>({})
+  const [roEnabled, setRoEnabled] = useState(!isEditing)
+  const [rwEnabled, setRwEnabled] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
   const kindDescriptor = kinds.find((k) => k.kind === selectedKind)
   const schemaFields = kindDescriptor ? extractSchemaFields(kindDescriptor.jsonSchema) : []
 
-  // Fetch kinds on mount — the form view owns its data lifecycle, so a
-  // stale-kinds edge (providers changing while the form is open) is avoided.
+  // Fetch kinds on mount, and in edit mode also fetch the entry from both tiers.
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    fetchKinds().then((result) => {
-      if (!cancelled) {
-        setKinds(result)
-        setLoading(false)
+    fetchKinds().then(async (result) => {
+      if (cancelled) return
+      setKinds(result)
+      if (editEntry) {
+        const [roEntry, rwEntry] = await Promise.all([
+          fetchEntry(editEntry.kind, editEntry.name, 'ro'),
+          fetchEntry(editEntry.kind, editEntry.name, 'rw'),
+        ])
+        if (cancelled) return
+        const toStrings = (src: { fields?: Record<string, unknown> } | null): Record<string, string> => {
+          const out: Record<string, string> = {}
+          if (src?.fields && typeof src.fields === 'object') {
+            for (const [k, v] of Object.entries(src.fields)) out[k] = v == null ? '' : String(v)
+          }
+          return out
+        }
+        if (roEntry) { setRoFields(toStrings(roEntry)); setRoEnabled(true) }
+        if (rwEntry) { setRwFields(toStrings(rwEntry)); setRwEnabled(true) }
+        const env = roEntry ?? rwEntry
+        if (env?.displayName) setDisplayName(env.displayName)
+        if (env?.description) setDescription(env.description)
+        if (env?.environment) setEnvironment(env.environment)
       }
+      setLoading(false)
     })
     return () => { cancelled = true }
   }, [])
 
-  const handleFieldChange = useCallback((name: string, value: string) => {
-    setFields((prev) => ({ ...prev, [name]: value }))
+  const handleTierFieldChange = useCallback((tier: 'ro' | 'rw', name: string, value: string) => {
+    if (tier === 'ro') setRoFields((prev) => ({ ...prev, [name]: value }))
+    else setRwFields((prev) => ({ ...prev, [name]: value }))
   }, [])
 
   const handleSubmit = useCallback(async () => {
     setSubmitError(null)
     if (!selectedKind) { setSubmitError('请选择凭证类型'); return }
-    if (!profileName.trim()) { setSubmitError('请输入 profile 名称'); return }
+    if (!profileName.trim()) { setSubmitError('请输入 ID'); return }
+    const activeTiers = (['ro', 'rw'] as const).filter((t) => t === 'ro' ? roEnabled : rwEnabled)
+    if (activeTiers.length === 0) { setSubmitError('请至少启用一个档位 (ro / rw)'); return }
     setSubmitting(true)
-    const body: SubmitEntryBody = {
-      kind: selectedKind,
-      name: profileName.trim(),
-      tier,
-      fields: { ...fields },
+    const fileFieldSet = new Set(kindDescriptor?.fileFields ?? [])
+    // Always send all three envelope fields: the core treats an omitted
+    // field as "preserve" and an empty string as "clear", so clearing a
+    // display name or description must send the empty value explicitly.
+    const envelope: Record<string, string> = {
+      displayName: displayName.trim(),
+      description: description.trim(),
+      environment: environment.trim(),
     }
-    if (description.trim()) body.description = description.trim()
-    if (environment.trim()) body.environment = environment.trim()
-    // The parent's onSubmit does the fetch and returns to list view on
-    // success (unmounting this form). Await so we only write state on
-    // failure — on success the component unmounts and we never reach here.
     try {
-      const result = await onSubmit(body) as ApiResult | undefined
-      if (result && !result.ok) {
-        setSubmitting(false)
-        setSubmitError(result.error ?? '提交失败')
+      for (const t of activeTiers) {
+        const tierValues = t === 'ro' ? roFields : rwFields
+        // Skip a tier with no filled field at all (user enabled but left blank).
+        if (Object.values(tierValues).every((v) => !String(v ?? '').trim())) continue
+        const baseFields: Record<string, unknown> = {}
+        const contentFiles: Record<string, string> = {}
+        for (const [k, v] of Object.entries(tierValues)) {
+          if (fileFieldSet.has(k)) contentFiles[k] = String(v ?? '')
+          else baseFields[k] = v
+        }
+        // Convert number fields back to numbers
+        for (const f of schemaFields) {
+          if (f.type === 'number' && baseFields[f.name] != null && baseFields[f.name] !== '') {
+            baseFields[f.name] = Number(baseFields[f.name])
+          }
+        }
+        const result = await onSubmit({
+          kind: selectedKind,
+          name: profileName.trim(),
+          tier: t,
+          fields: baseFields,
+          ...Object.keys(contentFiles).length > 0 ? { contentFiles } : {},
+          ...envelope,
+        }) as ApiResult | undefined
+        if (result && !result.ok) {
+          setSubmitting(false)
+          setSubmitError(t + ': ' + (result.error ?? '提交失败'))
+          return
+        }
       }
-      // On success the parent switches view; this component unmounts, so
-      // we deliberately do not call setSubmitting(false) — that would be
-      // a state write on an unmounted component.
     } catch {
       setSubmitting(false)
       setSubmitError('提交失败')
+      return
     }
-  }, [selectedKind, profileName, tier, fields, description, environment, onSubmit])
+    // All submits succeeded — tell the parent to switch to list view.
+    onSubmitDone()
+  }, [selectedKind, profileName, displayName, roEnabled, rwEnabled, roFields, rwFields, description, environment, onSubmit, onSubmitDone, schemaFields, kindDescriptor])
 
   if (loading) {
     return h('div', { className: 'ops-access-admin-root' },
-      h('div', { className: 'ops-access-admin-empty' }, '加载凭证类型…'),
+      h('div', { className: 'ops-access-admin-empty' }, isEditing ? '加载凭证…' : '加载凭证类型…'),
     )
   }
 
@@ -608,9 +807,34 @@ function AdminFormView(props: {
 
   const displayError = submitError ?? error
 
+  // Render one tier's field set (shared shape for ro and rw sections).
+  const renderTierFields = (tier: 'ro' | 'rw', values: Record<string, string>) =>
+    schemaFields.map((f) => {
+      const isContent = kindDescriptor?.fileFields?.includes(f.name)
+      return h('div', { key: tier + ':' + f.name, className: 'ops-access-admin-field' },
+        h('label', { className: 'ops-access-admin-label' }, f.name,
+          f.required && h('span', { className: 'ops-access-admin-required' }, '*'),
+          h('span', { className: 'ops-access-admin-type-hint' },
+            isContent ? '内容' : f.type)),
+        isContent
+          ? h('textarea', {
+              className: 'ops-access-admin-input ops-access-admin-textarea',
+              rows: 8,
+              value: values[f.name] ?? '',
+              onChange: (e: any) => handleTierFieldChange(tier, f.name, e.target.value),
+            })
+          : h('input', {
+              className: 'ops-access-admin-input',
+              type: f.type === 'number' ? 'number' : 'text',
+              value: values[f.name] ?? '',
+              onChange: (e: any) => handleTierFieldChange(tier, f.name, e.target.value),
+            }),
+      )
+    })
+
   return h('div', { className: 'ops-access-admin-root' },
     h('div', { className: 'ops-access-admin-header' },
-      h('span', { className: 'ops-access-admin-title' }, '新增凭证'),
+      h('span', { className: 'ops-access-admin-title' }, isEditing ? '编辑凭证' : '新增凭证'),
       h('button', {
         type: 'button',
         className: 'ops-access-admin-btn',
@@ -619,16 +843,18 @@ function AdminFormView(props: {
     ),
     displayError && h('div', { className: 'ops-access-admin-error' }, displayError),
     h('div', { className: 'ops-access-admin-form' },
-      // Kind selector
+      // ── Common info (shared by both tiers) ──
       h('div', { className: 'ops-access-admin-field' },
         h('label', { className: 'ops-access-admin-label' }, '凭证类型',
           h('span', { className: 'ops-access-admin-required' }, '*')),
         h('select', {
           className: 'ops-access-admin-input',
           value: selectedKind,
+          disabled: isEditing,
           onChange: (e: any) => {
             setSelectedKind(e.target.value)
-            setFields({})
+            setRoFields({})
+            setRwFields({})
           },
         },
           h('option', { value: '' }, '— 选择 —'),
@@ -637,57 +863,28 @@ function AdminFormView(props: {
           ),
         ),
       ),
-      // Dynamic fields from JSON Schema
-      schemaFields.length > 0 && h('div', { className: 'ops-access-admin-field' },
-        h('label', { className: 'ops-access-admin-label' }, '字段'),
-        h('div', null, ...schemaFields.map((f) =>
-          h('div', { key: f.name, className: 'ops-access-admin-field' },
-            h('label', { className: 'ops-access-admin-label' }, f.name,
-              f.required && h('span', { className: 'ops-access-admin-required' }, '*'),
-              h('span', { className: 'ops-access-admin-type-hint' }, f.type)),
-            h('input', {
-              className: 'ops-access-admin-input',
-              type: f.type === 'number' ? 'number' : 'text',
-              value: fields[f.name] ?? '',
-              onChange: (e: any) => handleFieldChange(f.name, e.target.value),
-            }),
-          ),
-        )),
-      ),
-      // Profile name
       h('div', { className: 'ops-access-admin-field' },
-        h('label', { className: 'ops-access-admin-label' }, 'Profile 名称',
-          h('span', { className: 'ops-access-admin-required' }, '*')),
+        h('label', { className: 'ops-access-admin-label' }, 'ID',
+          h('span', { className: 'ops-access-admin-required' }, '*'),
+          h('span', { className: 'ops-access-admin-type-hint' }, '字母/数字开头，可含 . _ - @；创建后不可改')),
         h('input', {
           className: 'ops-access-admin-input',
           type: 'text',
           value: profileName,
+          disabled: isEditing,
           onChange: (e: any) => setProfileName(e.target.value),
         }),
       ),
-      // Tier radio
       h('div', { className: 'ops-access-admin-field' },
-        h('label', { className: 'ops-access-admin-label' }, '权限级别'),
-        h('div', { className: 'ops-access-admin-radio-group' },
-          h('label', { className: 'ops-access-admin-radio-label' },
-            h('input', {
-              type: 'radio',
-              name: 'tier',
-              value: 'ro',
-              checked: tier === 'ro',
-              onChange: () => setTier('ro'),
-            }), 'ro (只读)'),
-          h('label', { className: 'ops-access-admin-radio-label' },
-            h('input', {
-              type: 'radio',
-              name: 'tier',
-              value: 'rw',
-              checked: tier === 'rw',
-              onChange: () => setTier('rw'),
-            }), 'rw (读写)'),
-        ),
+        h('label', { className: 'ops-access-admin-label' }, '名称 (可选)',
+          h('span', { className: 'ops-access-admin-type-hint' }, '显示用，随时可改')),
+        h('input', {
+          className: 'ops-access-admin-input',
+          type: 'text',
+          value: displayName,
+          onChange: (e: any) => setDisplayName(e.target.value),
+        }),
       ),
-      // Description (optional)
       h('div', { className: 'ops-access-admin-field' },
         h('label', { className: 'ops-access-admin-label' }, '描述 (可选)'),
         h('input', {
@@ -697,7 +894,6 @@ function AdminFormView(props: {
           onChange: (e: any) => setDescription(e.target.value),
         }),
       ),
-      // Environment (optional)
       h('div', { className: 'ops-access-admin-field' },
         h('label', { className: 'ops-access-admin-label' }, '环境 (可选)'),
         h('input', {
@@ -706,6 +902,28 @@ function AdminFormView(props: {
           value: environment,
           onChange: (e: any) => setEnvironment(e.target.value),
         }),
+      ),
+      // ── ro tier ──
+      schemaFields.length > 0 && h('div', { className: 'ops-access-admin-tier-section' },
+        h('label', { className: 'ops-access-admin-radio-label' },
+          h('input', {
+            type: 'checkbox',
+            checked: roEnabled,
+            onChange: (e: any) => setRoEnabled(e.target.checked),
+          }), 'ro (只读)'),
+        roEnabled && h('div', { className: 'ops-access-admin-tier-fields' },
+          ...renderTierFields('ro', roFields)),
+      ),
+      // ── rw tier ──
+      schemaFields.length > 0 && h('div', { className: 'ops-access-admin-tier-section' },
+        h('label', { className: 'ops-access-admin-radio-label' },
+          h('input', {
+            type: 'checkbox',
+            checked: rwEnabled,
+            onChange: (e: any) => setRwEnabled(e.target.checked),
+          }), 'rw (读写)'),
+        rwEnabled && h('div', { className: 'ops-access-admin-tier-fields' },
+          ...renderTierFields('rw', rwFields)),
       ),
       // Submit
       h('div', { className: 'ops-access-admin-actions' },
@@ -732,6 +950,7 @@ function AdminSection(_props: { close?: () => void }): any {
   const [entries, setEntries] = useState<AdminEntry[]>([])
   const [listLoading, setListLoading] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+  const [editEntry, setEditEntry] = useState<{ kind: string, name: string } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<AdminEntry | null>(null)
   const [deleting, setDeleting] = useState(false)
 
@@ -747,19 +966,24 @@ function AdminSection(_props: { close?: () => void }): any {
   }, [refreshList])
 
   const handleAdd = useCallback(() => {
+    setEditEntry(null)
+    setView('form')
+    setFormError(null)
+  }, [])
+
+  const handleEdit = useCallback((entry: AdminEntry) => {
+    setEditEntry({ kind: entry.kind, name: entry.name })
     setView('form')
     setFormError(null)
   }, [])
 
   const handleSubmit = useCallback(async (body: SubmitEntryBody): Promise<ApiResult> => {
-    const result = await submitEntry(body)
-    if (result.ok) {
-      // Success: clear form state implicitly (component unmounts on view
-      // switch), return to list view and refresh.
-      setView('list')
-      refreshList()
-    }
-    return result
+    return await submitEntry(body)
+  }, [])
+
+  const handleSubmitDone = useCallback(() => {
+    setView('list')
+    refreshList()
   }, [refreshList])
 
   const handleDeleteConfirm = useCallback(async () => {
@@ -803,7 +1027,9 @@ function AdminSection(_props: { close?: () => void }): any {
   if (view === 'form') {
     return h(AdminFormView, {
       error: formError,
+      editEntry: editEntry ?? undefined,
       onSubmit: handleSubmit,
+      onSubmitDone: handleSubmitDone,
       onCancel: () => setView('list'),
     })
   }
@@ -813,6 +1039,7 @@ function AdminSection(_props: { close?: () => void }): any {
     loading: listLoading,
     onRefresh: refreshList,
     onAdd: handleAdd,
+    onEdit: handleEdit,
     onDelete: (entry: AdminEntry) => setDeleteTarget(entry),
   })
 }
@@ -840,7 +1067,9 @@ function apply(ctx: Context): void {
         }
         return list.map((c): InputTriggerCandidate => ({
           name: `${c.kind}/${c.name}`,
-          description: c.description,
+          // Badge rw-only entries: the agent cannot read them yet, but the
+          // rw→ro derivation flow starts from picking exactly these.
+          description: c.ro ? c.description : [c.description, 'ro 未注册（可由 rw 派生）'].filter(Boolean).join(' — '),
           hint: c.environment,
           value: c.mention,
         }))

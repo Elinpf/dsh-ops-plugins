@@ -23,12 +23,12 @@ describe('export shape', () => {
 
 describe('entry schema', () => {
   it('accepts a valid entry', () => {
-    expect(plugin.entrySchema.safeParse({ confPath: '/etc/ceph/ceph.conf', keyringPath: '~/.ceph/keyring' }).success).toBe(true)
+    expect(plugin.entrySchema.safeParse({ conf: '/etc/ceph/ceph.conf', keyring: '~/.ceph/keyring' }).success).toBe(true)
   })
 
   it('rejects when either required path is missing', () => {
-    expect(plugin.entrySchema.safeParse({ confPath: '/etc/ceph/ceph.conf' }).success).toBe(false)
-    expect(plugin.entrySchema.safeParse({ keyringPath: '/etc/ceph/keyring' }).success).toBe(false)
+    expect(plugin.entrySchema.safeParse({ conf: '/etc/ceph/ceph.conf' }).success).toBe(false)
+    expect(plugin.entrySchema.safeParse({ keyring: '/etc/ceph/keyring' }).success).toBe(false)
     expect(plugin.entrySchema.safeParse({}).success).toBe(false)
   })
 })
@@ -45,19 +45,19 @@ describe('process', () => {
 
   it('expands ~ in both paths', () => {
     process.env.HOME = '/home/tester'
-    const fields = plugin.provider.process!({ confPath: '~/ceph/ceph.conf', keyringPath: '~/ceph/keyring' }, 'main')
-    expect(fields).toEqual({ confPath: '/home/tester/ceph/ceph.conf', keyringPath: '/home/tester/ceph/keyring' })
+    const fields = plugin.provider.process!({ conf: '~/ceph/ceph.conf', keyring: '~/ceph/keyring' }, 'main')
+    expect(fields).toEqual({ conf: '/home/tester/ceph/ceph.conf', keyring: '/home/tester/ceph/keyring' })
   })
 
   it('leaves absolute paths untouched', () => {
-    const fields = plugin.provider.process!({ confPath: '/etc/ceph/ceph.conf', keyringPath: '/etc/ceph/keyring' }, 'main')
-    expect(fields).toEqual({ confPath: '/etc/ceph/ceph.conf', keyringPath: '/etc/ceph/keyring' })
+    const fields = plugin.provider.process!({ conf: '/etc/ceph/ceph.conf', keyring: '/etc/ceph/keyring' }, 'main')
+    expect(fields).toEqual({ conf: '/etc/ceph/ceph.conf', keyring: '/etc/ceph/keyring' })
   })
 
   it('passes name through when present, omits it when absent', () => {
-    const withName = plugin.provider.process!({ confPath: '/etc/ceph/ceph.conf', keyringPath: '/etc/ceph/keyring', name: 'client.dsh-test' }, 'main')
+    const withName = plugin.provider.process!({ conf: '/etc/ceph/ceph.conf', keyring: '/etc/ceph/keyring', name: 'client.dsh-test' }, 'main')
     expect(withName.name).toBe('client.dsh-test')
-    const without = plugin.provider.process!({ confPath: '/etc/ceph/ceph.conf', keyringPath: '/etc/ceph/keyring' }, 'main')
+    const without = plugin.provider.process!({ conf: '/etc/ceph/ceph.conf', keyring: '/etc/ceph/keyring' }, 'main')
     expect('name' in without).toBe(false)
   })
 })
@@ -96,4 +96,10 @@ describe('apply', () => {
 it('carries fieldsDoc for help()', () => {
   expect(typeof plugin.provider.fieldsDoc).toBe('string')
   expect(plugin.provider.fieldsDoc!.length).toBeGreaterThan(0)
+})
+
+// derivationDoc feeds help() — the ro self-registration recipe.
+it('carries a derivationDoc naming convention for help()', () => {
+  expect(plugin.provider.derivationDoc).toContain('client.<id>-ro')
+  expect(plugin.provider.derivationDoc).toContain('register_access')
 })

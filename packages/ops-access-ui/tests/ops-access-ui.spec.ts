@@ -25,8 +25,8 @@ describe('host half', () => {
 // ── Client half: shared setup ────────────────────────────────────────────────
 
 const WIRE = [
-  { kind: 'k8s', name: 'prod', description: '生产集群', environment: 'prod', mention: '@[k8s/prod](dsh-access:AAAA)' },
-  { kind: 'ssh', name: 'node-1', mention: '@[ssh/node-1](dsh-access:BBBB)' },
+  { kind: 'k8s', name: 'prod', description: '生产集群', environment: 'prod', ro: true, rw: true, mention: '@[k8s/prod](dsh-access:AAAA)' },
+  { kind: 'ssh', name: 'node-1', ro: true, rw: false, mention: '@[ssh/node-1](dsh-access:BBBB)' },
 ]
 
 const ADMIN_ENTRIES: AdminEntry[] = [
@@ -120,6 +120,21 @@ describe('client @ source', () => {
       name: 'k8s/prod', description: '生产集群', hint: 'prod', value: '@[k8s/prod](dsh-access:AAAA)',
     })
     expect(out[1].hint).toBeUndefined()
+  })
+
+  it('candidates: rw-only entries get an ro-missing badge in the description', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => [
+        { kind: 'k8s', name: 'pf-test', description: '个人测试集群', environment: 'test', ro: false, rw: true, mention: '@[k8s/pf-test](dsh-access:CCCC)' },
+        { kind: 'k8s', name: 'bare', ro: false, rw: true, mention: '@[k8s/bare](dsh-access:DDDD)' },
+      ],
+    })))
+    const { source } = setupClient()
+    const out = await source.candidates({ sessionId: 's1' }, { query: '', signal: undefined })
+    expect(out[0].description).toBe('个人测试集群 — ro 未注册（可由 rw 派生）')
+    expect(out[1].description).toBe('ro 未注册（可由 rw 派生）')
+    expect(out[0].hint).toBe('test')
   })
 
   it('candidates: 404 (ops preset absent) and network failure degrade to empty', async () => {
