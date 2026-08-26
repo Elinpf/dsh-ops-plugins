@@ -243,12 +243,14 @@ export interface OpsAccess {
    */
   listAll(): Promise<AdminEntry[]>
   /**
-   * Read back one entry's raw fields and envelope for editing. Returns null
-   * when the entry or file does not exist. The caller (the admin UI) is a
-   * human operator, not the agent — field values are paths and connection
-   * params, never secret material.
+   * Read back one entry's NON-file fields and envelope for editing. Returns
+   * null when the entry or file does not exist. File fields (credential
+   * content) are write-only after save: never returned, not even as paths —
+   * only their set status in `fileFields`. The caller (the admin UI) is a
+   * human operator, not the agent — non-file values are connection params,
+   * never secret material.
    */
-  getEntry(kind: string, name: string, tier: 'ro' | 'rw'): Promise<{ fields: Record<string, unknown>, displayName?: string, description?: string, environment?: string } | null>
+  getEntry(kind: string, name: string, tier: 'ro' | 'rw'): Promise<{ fields: Record<string, unknown>, fileFields: Record<string, boolean>, displayName?: string, description?: string, environment?: string } | null>
   /**
    * List all registered credential kinds with their JSON Schema (serialized
    * via `zod.toJSONSchema(provider.schema)`) and optional field docs.
@@ -440,7 +442,9 @@ function parseProfile(raw: unknown): { kind: string, profileName: string } | und
 async function writeContentFiles(credentialsDir: string, kind: string, profileName: string, tier: string, fileFields: readonly string[], contentFiles: Record<string, unknown>, entryFields: Record<string, unknown>): Promise<void> {
   const allowed = new Set(fileFields)
   for (const [fieldName, content] of Object.entries(contentFiles)) {
-    if (typeof content !== 'string') continue
+    // Empty content means "untouched" (the edit form leaves saved file
+    // fields blank) — never clobber a stored credential with it.
+    if (typeof content !== 'string' || content.trim() === '') continue
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(fieldName)) {
       throw new Error(`ops-access: invalid file field name "${fieldName}"`)
     }
@@ -775,7 +779,7 @@ export function apply(ctx: Context, config: Config): void {
         })
     },
 
-    async getEntry(kind: string, profileName: string, tier: 'ro' | 'rw'): Promise<{ fields: Record<string, unknown>, description?: string, environment?: string } | null> {
+    async getEntry(kind: string, profileName: string, tier: 'ro' | 'rw'): Promise<{ fields: Record<string, unknown>, fileFields: Record<string, boolean>, displayName?: string, description?: string, environment?: string } | null> {
       const provider = providers.get(kind)
       if (!provider) return null
       let registry: Registry | null
@@ -790,25 +794,21 @@ export function apply(ctx: Context, config: Config): void {
       const parent = entry as Record<string, unknown>
       const raw = parent[tier]
       if (!isPlainObject(raw)) return null
-      // Return the tier's fields and the parent's envelope. For fileFields the
-      // file CONTENT is read back (not the path) so the operator sees and
-      // edits what they originally pasted — the managed path is never shown.
+      // Return the tier's NON-file fields plus the parent's envelope. File
+      // fields (credential content) are write-only after save: content is
+      // never read back — not even the managed path — only the set status
+      // rides along so the UI can render "已保存，粘贴新内容以覆盖". This
+      // keeps stored credentials unreachable for anyone (or anything) that
+      // can merely reach the admin routes.
       const { name: displayName, description, environment } = parent
       const fields: Record<string, unknown> = { ...(raw as Record<string, unknown>) }
-      if (provider.fileFields) {
-        for (const ff of provider.fileFields) {
-          const path = fields[ff]
-          if (typeof path === 'string' && path.length > 0) {
-            try {
-              fields[ff] = await readFile(path, 'utf8')
-            } catch {
-              // File not readable — leave the path as-is so the operator
-              // sees something is wrong rather than an empty field.
-            }
-          }
-        }
+      const fileFields: Record<string, boolean> = {}
+      for (const ff of provider.fileFields ?? []) {
+        const stored = fields[ff]
+        fileFields[ff] = typeof stored === 'string' && stored.length > 0
+        delete fields[ff]
       }
-      const result: { fields: Record<string, unknown>, displayName?: string, description?: string, environment?: string } = { fields }
+      const result: { fields: Record<string, unknown>, fileFields: Record<string, boolean>, displayName?: string, description?: string, environment?: string } = { fields, fileFields }
       if (typeof displayName === 'string') result.displayName = displayName
       if (typeof description === 'string') result.description = description
       if (typeof environment === 'string') result.environment = environment
@@ -985,8 +985,26 @@ export function apply(ctx: Context, config: Config): void {
             // Content files: the UI sends credential file CONTENT (e.g. the full
             // kubeconfig YAML) instead of a path. Write each to a managed file
             // and store the path in entryFields.
+            const provider = providers.get(kind)
             if (isPlainObject(contentFiles)) {
-              await writeContentFiles(credentialsDir, kind, name, tier, providers.get(kind)?.fileFields ?? [], contentFiles, entryFields)
+              await writeContentFiles(credentialsDir, kind, name, tier, provider?.fileFields ?? [], contentFiles, entryFields)
+            }
+            // Write-only-after-save preserve: file fields never come back
+            // from the UI (getEntry withholds them), so an edit request
+            // cannot carry them. Carry over the stored path for any declared
+            // file field the request omits — otherwise the tier-replace
+            // write would silently drop the credential.
+            if (provider?.fileFields?.length) {
+              const existing = await loadRegistry(registryFile)
+              const existingEntry = existing?.[kind]?.[name]
+              const existingTier = isPlainObject(existingEntry) ? (existingEntry as Record<string, unknown>)[tier] : undefined
+              if (isPlainObject(existingTier)) {
+                for (const ff of provider.fileFields) {
+                  if (entryFields[ff] === undefined && typeof (existingTier as Record<string, unknown>)[ff] === 'string') {
+                    entryFields[ff] = (existingTier as Record<string, unknown>)[ff]
+                  }
+                }
+              }
             }
             const envelope = buildEnvelope([{ name: displayName, description, environment }])
             await handle.writeEntry(kind, name, tier, entryFields, Object.keys(envelope).length > 0 ? envelope : undefined)

@@ -168,8 +168,10 @@ function deleteEntry(kind: string, name: string, tier: 'ro' | 'rw'): Promise<Api
     method: 'DELETE',
   }, 'deleteEntry')
 }
-/** Read back one entry's fields for editing. Returns null if not found. */
-// Result: { fields, displayName?, description?, environment? }
+/** Read back one entry for editing. Returns null if not found. */
+// Result: { fields, fileFields, displayName?, description?, environment? }
+// `fields` holds only NON-file fields (connection params); file fields are
+// write-only after save — `fileFields` carries their set status as booleans.
 async function fetchEntry(kind, name, tier) {
   const params = new URLSearchParams({ kind, name, tier })
   try {
@@ -686,6 +688,10 @@ function AdminFormView(props: {
   // written on submit; both tiers can be created/edited in one pass.
   const [roFields, setRoFields] = useState<Record<string, string>>({})
   const [rwFields, setRwFields] = useState<Record<string, string>>({})
+  // Set status of file fields per tier (edit mode) — content never comes
+  // back from the server, so textareas stay empty and show a placeholder.
+  const [roFileSet, setRoFileSet] = useState<Record<string, boolean>>({})
+  const [rwFileSet, setRwFileSet] = useState<Record<string, boolean>>({})
   const [roEnabled, setRoEnabled] = useState(!isEditing)
   const [rwEnabled, setRwEnabled] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
@@ -714,8 +720,8 @@ function AdminFormView(props: {
           }
           return out
         }
-        if (roEntry) { setRoFields(toStrings(roEntry)); setRoEnabled(true) }
-        if (rwEntry) { setRwFields(toStrings(rwEntry)); setRwEnabled(true) }
+        if (roEntry) { setRoFields(toStrings(roEntry)); setRoFileSet(roEntry.fileFields ?? {}); setRoEnabled(true) }
+        if (rwEntry) { setRwFields(toStrings(rwEntry)); setRwFileSet(rwEntry.fileFields ?? {}); setRwEnabled(true) }
         const env = roEntry ?? rwEntry
         if (env?.displayName) setDisplayName(env.displayName)
         if (env?.description) setDescription(env.description)
@@ -750,13 +756,20 @@ function AdminFormView(props: {
     try {
       for (const t of activeTiers) {
         const tierValues = t === 'ro' ? roFields : rwFields
-        // Skip a tier with no filled field at all (user enabled but left blank).
-        if (Object.values(tierValues).every((v) => !String(v ?? '').trim())) continue
+        // Create mode: skip a tier with no filled field at all (user enabled
+        // but left blank). Edit mode always submits enabled tiers — the
+        // envelope rides along and the server carries over untouched file
+        // fields (they are write-only after save, so they cannot be resent).
+        if (!isEditing && Object.values(tierValues).every((v) => !String(v ?? '').trim())) continue
         const baseFields: Record<string, unknown> = {}
         const contentFiles: Record<string, string> = {}
         for (const [k, v] of Object.entries(tierValues)) {
-          if (fileFieldSet.has(k)) contentFiles[k] = String(v ?? '')
-          else baseFields[k] = v
+          // Empty content = untouched → omit; the server preserves the
+          // stored credential. Only non-empty content overwrites.
+          if (fileFieldSet.has(k)) {
+            const content = String(v ?? '')
+            if (content.trim() !== '') contentFiles[k] = content
+          } else baseFields[k] = v
         }
         // Convert number fields back to numbers
         for (const f of schemaFields) {
@@ -808,7 +821,7 @@ function AdminFormView(props: {
   const displayError = submitError ?? error
 
   // Render one tier's field set (shared shape for ro and rw sections).
-  const renderTierFields = (tier: 'ro' | 'rw', values: Record<string, string>) =>
+  const renderTierFields = (tier: 'ro' | 'rw', values: Record<string, string>, fileSet: Record<string, boolean>) =>
     schemaFields.map((f) => {
       const isContent = kindDescriptor?.fileFields?.includes(f.name)
       return h('div', { key: tier + ':' + f.name, className: 'ops-access-admin-field' },
@@ -820,6 +833,11 @@ function AdminFormView(props: {
           ? h('textarea', {
               className: 'ops-access-admin-input ops-access-admin-textarea',
               rows: 8,
+              // Saved credential content is never read back: the textarea
+              // stays empty and says so; pasting new content overwrites.
+              placeholder: isEditing
+                ? (fileSet[f.name] ? '已保存 · 内容不可回读 — 粘贴新内容以覆盖' : '未设置 — 粘贴内容以添加')
+                : '粘贴完整内容…',
               value: values[f.name] ?? '',
               onChange: (e: any) => handleTierFieldChange(tier, f.name, e.target.value),
             })
@@ -912,7 +930,7 @@ function AdminFormView(props: {
             onChange: (e: any) => setRoEnabled(e.target.checked),
           }), 'ro (只读)'),
         roEnabled && h('div', { className: 'ops-access-admin-tier-fields' },
-          ...renderTierFields('ro', roFields)),
+          ...renderTierFields('ro', roFields, roFileSet)),
       ),
       // ── rw tier ──
       schemaFields.length > 0 && h('div', { className: 'ops-access-admin-tier-section' },
@@ -923,7 +941,7 @@ function AdminFormView(props: {
             onChange: (e: any) => setRwEnabled(e.target.checked),
           }), 'rw (读写)'),
         rwEnabled && h('div', { className: 'ops-access-admin-tier-fields' },
-          ...renderTierFields('rw', rwFields)),
+          ...renderTierFields('rw', rwFields, rwFileSet)),
       ),
       // Submit
       h('div', { className: 'ops-access-admin-actions' },

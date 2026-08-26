@@ -83,7 +83,7 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 浏览器侧录入、删除、验证 ro/rw 凭证条目的设置页（`settings.section` 插槽）。**决策见 `docs/adr/0002-access-admin-ui.md`，构建内容见 `docs/specs/0002-access-admin-ui.md`**——这里只定义词汇：
 
 - **id 与名称 (id vs display name)** — 条目的注册表键是 **id**：可读但稳定，进文件路径（`credentials/<kind>/<id>/<tier>/<field>`）、@-mention、工具参数、授权账本、关联引用，创建后不可改。`name`（envelope 字段）是**显示名**，只用于 UI 和 list_access 展示，随时可改、不触发任何文件移动。id 格式受限：字母/数字开头，可含 `. _ - @`（writeEntry 入口校验，防路径逃逸与 mention 语法破坏）
-- **凭证内容粘贴 (content paste)** — 文件类字段（provider 声明的 `fileFields`）在 UI 里直接粘贴凭证内容（kubeconfig、ceph.conf、keyring、私钥），core 落盘到 credentials 目录、注册表只存路径；编辑时读回内容而非路径。用户从不接触宿主机路径
+- **凭证内容粘贴 (content paste)** — 文件类字段（provider 声明的 `fileFields`）在 UI 里直接粘贴凭证内容（kubeconfig、ceph.conf、keyring、私钥），core 落盘到 credentials 目录、注册表只存路径；用户从不接触宿主机路径。**只写不回读**：保存后内容永不回读——getEntry 只回非文件字段 + 文件字段的「已保存」布尔标记（连路径都不回），编辑表单该字段留空、占位提示「已保存 · 内容不可回读——粘贴新内容以覆盖」；留空提交=保留（服务端 carry-over 存回旧路径），粘贴新内容=覆盖
 - **envelope-only 列表** — 列表 API 只返回 kind/name/description/environment + 验证状态，不含 fields。和 `list_access` 工具的纪律一致；编辑回读（getEntry）是给人类操作员的显式例外
 - **凭证条目验证 (entry validation)** — 用现有 `canResolve` 机器（存在性 + provider schema 校验），返回 `{ ok: boolean, error?: string }`。**不做**真实权限探针（k8s `auth can-i` 等）——ro/rw 分档只是存放位置，无机制核验凭证的真实权限（ADR-0001 决策 2）
 - **core 读写 (core read-write)** — core 从只读变读写，`OpsAccess` 接口增加 `writeEntry`/`deleteEntry`/`getEntry`/`listAll`。core 是注册表的唯一管理者，写入复用现有 `loadRegistry`/`buildProfile` 的 parse + validate 机器。写入路由在 preset 平面注册（和 `GET /ops-access/list` 同位置）

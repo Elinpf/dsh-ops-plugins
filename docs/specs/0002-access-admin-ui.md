@@ -115,7 +115,7 @@ src/client.ts 增加 settings.section 注册：
 
 - 列表视图：按 kind 分组的卡片，每卡片内每行一个条目（name/description/environment + ro/rw 验证图标），刷新按钮，新增按钮
 - 表单视图：kind 下拉、profile name、description/environment 在上；下方按档位分 ro / rw 两个区块，每区块按 kind 的 JSON Schema 动态渲染字段，文件类字段（fileFields）渲染为多行文本框直接粘贴凭证内容；提交时对每个填了内容的档位各发一次写入
-- 凭证内容粘贴：文件类字段的值是凭证内容本身，由 core 写入 ~/.dsh-ops/credentials/<kind>/<name>/<tier>/<field> 并把路径存进注册表；编辑时读回内容而非路径，路径对用户不可见
+- 凭证内容粘贴：文件类字段的值是凭证内容本身，由 core 写入 ~/.dsh-ops/credentials/<kind>/<name>/<tier>/<field> 并把路径存进注册表，路径对用户不可见。**只写不回读**：保存后内容永不回读——getEntry 只回非文件字段 + 文件字段的「已保存」布尔标记（连路径都不回）；编辑表单该字段留空并提示「已保存 · 内容不可回读——粘贴新内容以覆盖」，留空提交=服务端 carry-over 保留旧路径，粘贴新内容=覆盖
 - 校验状态：提交后刷新列表，每条显示 ro/rw 的 ok/error
 - 删除：每行一个删除按钮，点击弹确认框；删除某档时同步清理该档的凭证内容文件
 
@@ -132,7 +132,7 @@ provider 的 zod schema 是简单的 zod.object({...})（k8s 一个字段、ceph
 
 ### 安全纪律（延续 ADR-0001）
 
-- **只写不回读**：表单永远空表单，不回填旧 fields 值。保存后回列表视图。rw fields 永远不流向浏览器。
+- **只写不回读**：表单永远空表单，不回填旧 fields 值。保存后回列表视图。rw fields 永远不流向浏览器。**文件类字段的内容任何档位都不回读**（getEntry 只回 set 标记）——admin 路由无鉴权，能摸到路由的人/脚本不能借此搬空凭证库。
 - **envelope-only 列表**：列表 API（listAll / GET /admin/list）只返回 kind/name/description/environment + 验证状态，不含 fields。和现有 GET /ops-access/list 的纪律一致。
 - **写入走 core**：core 是两个文件的唯一管理者，写入复用 loadRegistry/buildProfile 的 parse + validate 机器，不手写第二份 YAML 逻辑。
 - **路由在 preset 平面**：和现有 GET /ops-access/list 同位置，避免跨 plane 访问带状态服务的双模块实例问题。

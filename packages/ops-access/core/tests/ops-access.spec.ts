@@ -1190,11 +1190,13 @@ describe('register_access tool', () => {
     expect(res.ok).toBe(true)
     const rw = await handle.getEntry('files', 'prod', 'rw')
     expect(rw?.description).toBe('keep me')
-    // /rw/path is not a managed file — getEntry cannot read it back, so the
-    // raw path value is left in place.
-    expect(rw?.fields.kubeconfig).toBe('/rw/path')
+    // File fields are write-only after save: getEntry reports set status
+    // only — never content, not even the stored path.
+    expect(rw?.fileFields).toEqual({ kubeconfig: true })
+    expect(rw?.fields.kubeconfig).toBeUndefined()
     const ro = await handle.getEntry('files', 'prod', 'ro')
-    expect(ro?.fields.kubeconfig).toBe('ro content')
+    expect(ro?.fileFields).toEqual({ kubeconfig: true })
+    expect(ro?.fields.kubeconfig).toBeUndefined()
   })
 
   it('clears envelope fields with empty strings', async () => {
@@ -1244,7 +1246,7 @@ describe('register_access tool', () => {
 // ── admin content-file discipline ────────────────────────────────────────────
 
 describe('admin content files', () => {
-  it('POST writes contentFiles to managed 0600 files and getEntry reads content back', async () => {
+  it('POST writes contentFiles to managed 0600 files; getEntry reports set status, never content', async () => {
     const h = setup()
     h.handle.register(fileProvider)
     const { status } = await h.adminEntryRoute({
@@ -1256,8 +1258,50 @@ describe('admin content files', () => {
     expect(readFileSync(file, 'utf8')).toBe('yaml content')
     expect(statSync(file).mode & 0o777).toBe(0o600)
     const entry = await h.handle.getEntry('files', 'prod', 'ro')
-    expect(entry?.fields.kubeconfig).toBe('yaml content')
+    // Write-only after save: set status only, content nowhere in the result.
+    expect(entry?.fileFields).toEqual({ kubeconfig: true })
+    expect(entry?.fields.kubeconfig).toBeUndefined()
+    expect(JSON.stringify(entry)).not.toContain('yaml content')
     expect(entry?.fields.note).toBe('n')
+  })
+
+  it('POST edit without contentFiles carries over the stored credential (write-only preserve)', async () => {
+    const h = setup()
+    h.handle.register(fileProvider)
+    await h.adminEntryRoute({
+      method: 'POST',
+      body: JSON.stringify({ kind: 'files', name: 'prod', tier: 'ro', fields: { note: 'n' }, contentFiles: { kubeconfig: 'yaml content' } }),
+    })
+    // Edit: change note + description only, send no contentFiles — the
+    // credential file and its registry path must survive the tier-replace.
+    const { status } = await h.adminEntryRoute({
+      method: 'POST',
+      body: JSON.stringify({ kind: 'files', name: 'prod', tier: 'ro', fields: { note: 'n2' }, description: 'edited' }),
+    })
+    expect(status).toBe(200)
+    const file = join(h.credentialsDir, 'files', 'prod', 'ro', 'kubeconfig')
+    expect(readFileSync(file, 'utf8')).toBe('yaml content')
+    const profile = await h.handle.resolve('files', 'prod')
+    expect(profile.fields.kubeconfig).toBe(file)
+    expect(profile.fields.note).toBe('n2')
+    expect(profile.description).toBe('edited')
+  })
+
+  it('empty-string content means untouched — never clobbers the stored file', async () => {
+    const h = setup()
+    h.handle.register(fileProvider)
+    await h.adminEntryRoute({
+      method: 'POST',
+      body: JSON.stringify({ kind: 'files', name: 'prod', tier: 'ro', fields: {}, contentFiles: { kubeconfig: 'yaml content' } }),
+    })
+    const { status } = await h.adminEntryRoute({
+      method: 'POST',
+      body: JSON.stringify({ kind: 'files', name: 'prod', tier: 'ro', fields: {}, contentFiles: { kubeconfig: '' } }),
+    })
+    expect(status).toBe(200)
+    const file = join(h.credentialsDir, 'files', 'prod', 'ro', 'kubeconfig')
+    expect(readFileSync(file, 'utf8')).toBe('yaml content')
+    await expect(h.handle.resolve('files', 'prod')).resolves.toBeDefined()
   })
 
   it('POST rejects contentFiles for undeclared fields', async () => {
