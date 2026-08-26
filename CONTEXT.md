@@ -78,6 +78,16 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 - **授权账本 (grant ledger)** — 进程内授权表，按 `exec.agent.id`（= session id）分键；`exec.agent` 缺失时由 broker 裁决：两档 kind 回落 ro，ssh 类直接拒绝（ssh 凭证本质是 rw——没有真只读 shell——无会话可键权就不发）。apply（启动与 HMR 重载）即清空账本
 - **审计日志** — 授权（批准/到期/撤销）、rw 代发、账本重置（`ledger-reset`，启动与 HMR 各落一行）逐条落 JSONL 文件（默认 `~/.dsh-ops/audit.log`），不进 session 事件流
 
+### 凭证管理 UI (Access Admin UI)
+
+浏览器侧录入、删除、验证 ro/rw 凭证条目的设置页（`settings.section` 插槽）。**决策见 `docs/adr/0002-access-admin-ui.md`，构建内容见 `docs/specs/0002-access-admin-ui.md`**——这里只定义词汇：
+
+- **只写不回读 (write-only)** — 表单永远是空表单，填完提交覆盖写（upsert），不回填旧 fields 值。保存后回列表视图，fields（路径、连接参数）从屏幕消失。rw 的 fields 永远不流向浏览器——写入是浏览器→文件单向，校验走 `canResolve`（不返回 fields）
+- **envelope-only 列表** — 列表 API 只返回 kind/name/description/environment + 验证状态，不含 fields。和 `list_access` 工具的纪律一致
+- **凭证条目验证 (entry validation)** — 用现有 `canResolve` 机器（存在性 + provider schema 校验），返回 `{ ok: boolean, error?: string }`。**不做**真实权限探针（k8s `auth can-i` 等）——ro/rw 分档只是存放位置，无机制核验凭证的真实权限（ADR-0001 决策 2）
+- **core 读写 (core read-write)** — core 从只读变读写，`OpsAccess` 接口增加 `writeEntry`/`deleteEntry`。core 本来就是两个凭证文件的唯一管理者，写入复用现有 `loadRegistry`/`buildProfile` 的 parse + validate 机器。写入路由在 preset 平面注册（和 `GET /ops-access/list` 同位置）
+- **kind 描述符 (KindDescriptor)** — `{ kind, jsonSchema, fieldsDoc? }`，通过 zod v4 的 `z.toJSONSchema()` 序列化 provider 的 zod schema 为标准 JSON Schema，前端据此动态渲染表单字段
+
 ## 调查树 (Investigation Tree)
 
 ### 树 (Tree) 与 森林 (Forest)

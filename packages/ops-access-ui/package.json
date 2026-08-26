@@ -39,14 +39,16 @@
     "@deepseek-ai/schemastery": "^3.18.1"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1"
+    "@deepseek-ai/cordis": "^4.0.1",
+    "react": "^18.2.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
     "esbuild": "^0.24.0",
     "typescript": "^5.4.0",
     "vitest": "^4.1.11",
-    "@deepseek-ai/dsh-client-ui-input-trigger": "0.0.1-rc.3"
+    "@deepseek-ai/dsh-client-ui-input-trigger": "0.0.1-rc.3",
+    "react": "18.3.1"
   },
   "license": "MIT"
 }
