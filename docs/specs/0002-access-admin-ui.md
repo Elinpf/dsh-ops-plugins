@@ -15,7 +15,7 @@ ops-access 的凭证档案目前全靠手编 YAML 注册表（当时为 access.y
 
 在 dsh 设置页（settings.section 插槽）增加一个"凭证管理"页面，由 ops-access-ui 包的 client bundle 携带。core 包从只读变读写——OpsAccess 接口增加写入/删除/列全量/列 kind 方法，preset 平面注册对应的 HTTP 路由。验证复用现有 canResolve 机器（存在性 + provider schema 校验），返回带失败原因的验证结果。
 
-安全纪律：列表 API 只返回 envelope（kind/name/description/environment）和验证状态，不含 fields。条目的注册表键是稳定 id（进路径、mention、授权、关联引用，创建后不可改，格式受限：字母或数字开头，可含 . _ - @）；显示名是 envelope 的 name 字段，随时可改。文件类字段的值是凭证内容本身——浏览器粘贴内容，core 落盘到 credentials 目录、注册表存路径；编辑模式通过 getEntry 读回内容预填（面向人类操作员的显式例外）。kind 列表和 provider 的字段结构通过 zod v4 的 z.toJSONSchema() 序列化为标准 JSON Schema 发到前端，动态渲染表单字段。
+安全纪律：列表 API 只返回 envelope（kind/name/description/environment）和验证状态，不含 fields。条目的注册表键是稳定 id（进路径、mention、授权、关联引用，创建后不可改，格式受限：字母或数字开头，可含 . _ - @）；显示名是 envelope 的 name 字段，随时可改。文件类字段的值是凭证内容本身——浏览器粘贴内容，core 落盘到 credentials 目录、注册表存路径；**只写不回读**：getEntry 只回非文件字段 + 文件字段的「已保存」布尔标记（连路径都不回），编辑表单该字段留空=保留、粘贴新内容=覆盖。kind 列表和 provider 的字段结构通过 zod v4 的 z.toJSONSchema() 序列化为标准 JSON Schema 发到前端，动态渲染表单字段。
 
 ## User Stories
 
@@ -137,6 +137,7 @@ provider 的 zod schema 是简单的 zod.object({...})（k8s 一个字段、ceph
 - **写入走 core**：core 是两个文件的唯一管理者，写入复用 loadRegistry/buildProfile 的 parse + validate 机器，不手写第二份 YAML 逻辑。
 - **路由在 preset 平面**：和现有 GET /ops-access/list 同位置，避免跨 plane 访问带状态服务的双模块实例问题。
 - **错误信息不含秘密**：验证失败的 error 来自 zod 校验输出（字段路径 + 消息），fields 只是路径和连接参数，没有密钥内容。和现有 resolve 的错误纪律一致。
+- **路径不进模型侧**：命令工具（kubectl/ceph/ssh）展示与日志里的命令以凭证引用 token `<id@tier:field>` 标注文件类字段（如 `kubectl --kubeconfig=<pf-test-cluster@rw:kubeconfigPath>`），真实路径只存在于执行瞬时的 shell 调用里；该机制在 ops-shell-tool 工厂统一实现（含 stdout/stderr 路径擦除），消费方不各自实现。
 - **删除不查授权**：删除只管删文件条目，不跨 plane 查 preset 的活授权。授权回落交给门的 TTL（短命）。
 
 ### 删除时的授权行为

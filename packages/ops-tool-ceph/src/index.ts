@@ -30,15 +30,16 @@ export function apply(ctx: Context): void {
     name: 'ceph',
     kind: 'ceph',
     targetParam: 'cluster',
-    description: 'Execute a ceph command on a specified Ceph cluster. The plugin automatically injects the correct --conf and --keyring paths. Use list_access to see available cluster names.',
+    description: 'Execute a ceph command on a specified Ceph cluster. The plugin automatically injects the correct --conf and --keyring credentials (shown as <id@tier:field> references). Use list_access to see available cluster names.',
     targetParamDescription: 'Ceph cluster profile name. Use list_access to see options.',
     commandDescription: 'ceph subcommand WITHOUT the ceph prefix. Examples: health detail, osd tree, df',
-    buildCommand(fields, command) {
-      const { conf, keyring, name } = fields as { conf: string, keyring: string, name?: string }
+    buildCommand(fields, command, ref) {
+      const { name } = fields as { name?: string }
       // --name matters: a non-admin keyring without it still authenticates as
-      // client.admin and fails with RADOS permission denied.
+      // client.admin and fails with RADOS permission denied. The cephx entity
+      // name is not secret — it stays inline; only the file paths get tokens.
       const nameArg = name ? ` --name ${name}` : ''
-      return `ceph --conf="${conf}" --keyring="${keyring}"${nameArg} ${command}`
+      return `ceph --conf=${ref('conf')} --keyring=${ref('keyring')}${nameArg} ${command}`
     },
   })
 }

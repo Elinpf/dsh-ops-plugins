@@ -17,11 +17,11 @@ const SPEC: ProfiledShellToolSpec = {
   description: 'Run widgetctl.',
   targetParamDescription: 'Widget profile name.',
   commandDescription: 'widgetctl subcommand.',
-  buildCommand: (fields, command) => `widgetctl --sock="${fields.sockPath}" ${command}`,
+  buildCommand: (fields, command, ref) => `widgetctl --sock=${ref('sockPath')} ${command}`,
 }
 
 const PROFILE: AccessProfile = {
-  kind: 'widget', name: 'prod', fields: { sockPath: '/run/widget.sock' },
+  kind: 'widget', name: 'prod', tier: 'ro', fields: { sockPath: '/run/widget.sock' },
 }
 
 interface ShellRunOutcome {
@@ -94,9 +94,12 @@ describe('registerProfiledShellTool', () => {
     const e = h.exec()
     const value = await h.tool.execute({ target: 'prod', command: 'status --wide' }, e)
     expect(seen).toEqual([['widget', 'prod']])
-    expect(value.command).toBe('widgetctl --sock="/run/widget.sock" status --wide')
+    // The result (model-visible, logged) shows the credential token…
+    expect(value.command).toBe('widgetctl --sock=<prod@ro:sockPath> status --wide')
     expect(value.exitCode).toBe(0)
     expect(value.stdout).toBe('ok\n')
+    // …while the executed command carries the real, shell-quoted value.
+    expect(h.shellRequests[0].command).toBe("widgetctl --sock='/run/widget.sock' status --wide")
     expect(h.shellRequests[0].timeoutMs).toBe(30000)
     expect(h.shellRequests[0].signal).toBe(e.signal)
   })
@@ -157,13 +160,60 @@ describe('registerProfiledShellTool', () => {
     const a = tool_text(h.tool, value)
     const b = tool_text(h.tool, value)
     expect(a).toBe(b)
-    expect(a).toContain('$ widgetctl --sock="/run/widget.sock" status')
+    expect(a).toContain('$ widgetctl --sock=<prod@ro:sockPath> status')
     expect(a).toContain('ok')
     const err = tool_text(h.tool, { exitCode: 2, stdout: '', stderr: 'boom', command: 'widgetctl x' })
     expect(err).toContain('[stderr]')
     expect(err).toContain('[exit code: 2]')
     const failed = tool_text(h.tool, { exitCode: -1, stdout: '', stderr: 'm', command: '', error: 'm' })
     expect(failed).toContain('[error] m')
+  })
+
+})
+
+describe('credential reference tokens', () => {
+  it('display carries <id@tier:field>; the executed command carries the shell-quoted real value', async () => {
+    const h = setup({ resolveImpl: async () => ({ ...PROFILE, tier: 'rw' }) })
+    const value = await h.tool.execute({ target: 'prod', command: 'restart' }, h.exec())
+    expect(value.command).toBe('widgetctl --sock=<prod@rw:sockPath> restart')
+    expect(h.shellRequests[0].command).toBe("widgetctl --sock='/run/widget.sock' restart")
+    // No token bracket leaks into the executed command.
+    expect(h.shellRequests[0].command).not.toContain('<')
+    expect(h.shellRequests[0].command).not.toContain('>')
+  })
+
+  it('scrubs credential values out of captured stdout and stderr', async () => {
+    // CLIs echo their flag values in errors — the path must still not leak.
+    const h = setup({
+      runImpl: async () => ({
+        exitCode: 1,
+        stdoutText: 'using config /run/widget.sock\n',
+        stderrText: 'dial /run/widget.sock: connect failed\n',
+      }),
+    })
+    const value = await h.tool.execute({ target: 'prod', command: 'status' }, h.exec())
+    expect(value.stdout).toBe('using config <prod@ro:sockPath>\n')
+    expect(value.stderr).toBe('dial <prod@ro:sockPath>: connect failed\n')
+    expect(JSON.stringify(value)).not.toContain('/run/widget.sock')
+  })
+
+  it('scrubs a real path the model pasted into its own command arg', async () => {
+    const h = setup()
+    const value = await h.tool.execute({ target: 'prod', command: 'status --config=/run/widget.sock' }, h.exec())
+    // Display: the literal path becomes the token. Executed: still valid.
+    expect(value.command).toBe('widgetctl --sock=<prod@ro:sockPath> status --config=<prod@ro:sockPath>')
+    // The scrubbed token substitutes back to the quoted path, like any ref.
+    expect(h.shellRequests[0].command).toBe("widgetctl --sock='/run/widget.sock' status --config='/run/widget.sock'")
+  })
+
+  it('ref() on a missing field fails the call before any shell execution', async () => {
+    const h = setup({
+      resolveImpl: async () => ({ ...PROFILE, fields: {} }),
+    })
+    const value = await h.tool.execute({ target: 'prod', command: 'status' }, h.exec())
+    expect(value.error).toContain('field "sockPath" is not a non-empty string')
+    expect(value.exitCode).toBe(-1)
+    expect(h.calls.shellRun).toBe(0)
   })
 })
 

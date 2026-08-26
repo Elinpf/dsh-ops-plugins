@@ -37,7 +37,7 @@
  * @module @deepseek-ai/dsh-ops-access
  */
 
-import { readFile, writeFile, mkdir, rm } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, rm, rmdir } from 'node:fs/promises'
 import os from 'node:os'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
@@ -108,6 +108,12 @@ export interface AccessProfile {
   kind: string
   /** The entry's registry key — its stable id (paths, mentions, grants). */
   name: string
+  /**
+   * The tier this resolve actually served ('rw' only via a broker grant).
+   * Consumers use it to label credential references, e.g. the shell-tool
+   * factory's <id@tier:field> display tokens.
+   */
+  tier: 'ro' | 'rw'
   /** Display label from the envelope's `name` field (editable, not an identity). */
   displayName?: string
   description?: string
@@ -363,7 +369,7 @@ async function loadRegistry(file: string): Promise<Registry | null> {
  * profile. `raw` carries only the provider fields; the envelope
  * (description/environment) lives on the parent entry and is passed separately.
  */
-function buildProfile(provider: AccessProvider, kind: string, profileName: string, raw: unknown, file: string, parentEntry?: Record<string, unknown>): AccessProfile {
+function buildProfile(provider: AccessProvider, kind: string, profileName: string, tier: 'ro' | 'rw', raw: unknown, file: string, parentEntry?: Record<string, unknown>): AccessProfile {
   if (!isPlainObject(raw)) {
     throw new Error(`ops-access: entry ${kind}.${profileName} in registry file ${file} must be a mapping`)
   }
@@ -377,7 +383,7 @@ function buildProfile(provider: AccessProvider, kind: string, profileName: strin
   const fields = provider.process
     ? provider.process(result.data, profileName)
     : result.data as Record<string, unknown>
-  const profile: AccessProfile = { kind, name: profileName, fields }
+  const profile: AccessProfile = { kind, name: profileName, tier, fields }
   const env = parentEntry ?? {}
   if (typeof env.name === 'string') profile.displayName = env.name
   if (typeof env.description === 'string') profile.description = env.description
@@ -439,8 +445,21 @@ function parseProfile(raw: unknown): { kind: string, profileName: string } | und
  * charset-guarded against path escape. Files are written 0600 — they carry
  * secret material.
  */
-async function writeContentFiles(credentialsDir: string, kind: string, profileName: string, tier: string, fileFields: readonly string[], contentFiles: Record<string, unknown>, entryFields: Record<string, unknown>): Promise<void> {
+/**
+ * The profile name is the entry's stable id: it lands in credential file
+ * paths (credentials/<kind>/<name>/<tier>/<field>) and in mention syntax
+ * (@[kind/name]), so reject anything path- or syntax-hostile. Writer paths
+ * call this BEFORE any file IO — a bad name must not leave orphan files.
+ */
+function assertValidProfileName(profileName: string): void {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._@-]*$/.test(profileName)) {
+    throw new Error(`ops-access: invalid profile name "${profileName}" — must start with a letter or digit and contain only letters, digits, '.', '_', '-', '@'`)
+  }
+}
+
+async function writeContentFiles(credentialsDir: string, kind: string, profileName: string, tier: string, fileFields: readonly string[], contentFiles: Record<string, unknown>, entryFields: Record<string, unknown>): Promise<string[]> {
   const allowed = new Set(fileFields)
+  const written: string[] = []
   for (const [fieldName, content] of Object.entries(contentFiles)) {
     // Empty content means "untouched" (the edit form leaves saved file
     // fields blank) — never clobber a stored credential with it.
@@ -455,7 +474,26 @@ async function writeContentFiles(credentialsDir: string, kind: string, profileNa
     await mkdir(dir, { recursive: true })
     const filePath = dir + '/' + fieldName
     await writeFile(filePath, content, { encoding: 'utf8', mode: 0o600 })
+    written.push(filePath)
     entryFields[fieldName] = filePath
+  }
+  return written
+}
+
+/**
+ * Roll back files writeContentFiles just wrote when the accompanying
+ * writeEntry fails — a rejected registration must not leave orphan
+ * credential files on disk. Also removes the directories this write created
+ * (rmdir refuses non-empty ones, so pre-existing content is never touched).
+ */
+async function rollbackContentFiles(credentialsDir: string, kind: string, profileName: string, tier: string, written: readonly string[]): Promise<void> {
+  for (const filePath of written) await rm(filePath, { force: true })
+  for (const dir of [
+    credentialsDir + '/' + kind + '/' + profileName + '/' + tier,
+    credentialsDir + '/' + kind + '/' + profileName,
+    credentialsDir + '/' + kind,
+  ]) {
+    try { await rmdir(dir) } catch { /* non-empty or already gone — leave it */ }
   }
 }
 
@@ -567,7 +605,7 @@ export function apply(ctx: Context, config: Config): void {
       // A validation failure surfaces the reason (zod issue paths + messages,
       // never raw field values) so the admin UI can show it.
       try {
-        buildProfile(provider, kind, profileName, raw, registryFile, parentEntry)
+        buildProfile(provider, kind, profileName, tier, raw, registryFile, parentEntry)
         return { ok: true }
       } catch (err) {
         return { ok: false, error: String((err as Error | null)?.message ?? err) }
@@ -616,7 +654,7 @@ export function apply(ctx: Context, config: Config): void {
             : ''
         throw new Error(`ops-access: no ${tier} tier for profile "${profileName}" (kind "${kind}") in registry file ${registryFile}${hint}`)
       }
-      return buildProfile(provider, kind, profileName, tierData, registryFile, entry as Record<string, unknown>)
+      return buildProfile(provider, kind, profileName, tier, tierData, registryFile, entry as Record<string, unknown>)
     },
 
     async list(): Promise<AccessProfile[]> {
@@ -633,7 +671,7 @@ export function apply(ctx: Context, config: Config): void {
           if (!isPlainObject(entry)) continue
           const roData = (entry as Record<string, unknown>).ro
           if (!isPlainObject(roData)) continue
-          profiles.push(buildProfile(provider, kind, profileName, roData, registryFile, entry as Record<string, unknown>))
+          profiles.push(buildProfile(provider, kind, profileName, 'ro', roData, registryFile, entry as Record<string, unknown>))
         }
       }
       return profiles
@@ -679,12 +717,7 @@ export function apply(ctx: Context, config: Config): void {
         const registered = [...providers.keys()].sort()
         throw new Error(`ops-access: unknown kind "${kind}" (no provider registered; registered kinds: ${registered.join(', ') || '(none)'})`)
       }
-      // The profile name is the entry's stable id: it lands in credential file
-      // paths (credentials/<kind>/<name>/<tier>/<field>) and in mention syntax
-      // (@[kind/name]), so reject anything path- or syntax-hostile.
-      if (!/^[a-zA-Z0-9][a-zA-Z0-9._@-]*$/.test(profileName)) {
-        throw new Error(`ops-access: invalid profile name "${profileName}" — must start with a letter or digit and contain only letters, digits, '.', '_', '-', '@'`)
-      }
+      assertValidProfileName(profileName)
       // The tier sub-object carries only provider fields; the envelope
       // (name/description/environment) lives on the parent entry.
       const tierData: Record<string, unknown> = { ...fields }
@@ -716,7 +749,7 @@ export function apply(ctx: Context, config: Config): void {
       // touch the file. buildProfile throws with zod issue paths + messages,
       // never raw field values. (The in-memory merged entry is what we
       // validate, matching the spec's read→merge→validate→write sequence.)
-      buildProfile(provider, kind, profileName, tierData, registryFile, entry)
+      buildProfile(provider, kind, profileName, tier, tierData, registryFile, entry)
       await saveRegistry(registryFile, registry)
     },
 
@@ -874,15 +907,25 @@ export function apply(ctx: Context, config: Config): void {
       const envelope: EntryEnvelope = {}
       if (typeof args.description === 'string') envelope.description = args.description
       if (typeof args.environment === 'string') envelope.environment = args.environment
+      // Reject a bad id BEFORE any file IO, and roll back written files when
+      // writeEntry fails — a rejected registration must not leave orphan
+      // credential files on disk.
+      try {
+        assertValidProfileName(profileName)
+      } catch (err) {
+        return { ok: false, message: String((err as Error | null)?.message ?? err) }
+      }
+      let written: string[] = []
       try {
         if (Object.keys(contentFiles).length > 0) {
-          await writeContentFiles(credentialsDir, kind, profileName, 'ro', descriptor.fileFields ?? [], contentFiles, entryFields)
+          written = await writeContentFiles(credentialsDir, kind, profileName, 'ro', descriptor.fileFields ?? [], contentFiles, entryFields)
         }
         // writeEntry validates against the provider schema BEFORE touching
         // the registry; its errors carry zod issue paths + messages, never
         // raw field values.
         await handle.writeEntry(kind, profileName, 'ro', entryFields, Object.keys(envelope).length > 0 ? envelope : undefined)
       } catch (err) {
+        await rollbackContentFiles(credentialsDir, kind, profileName, 'ro', written)
         return { ok: false, message: `registration failed: ${String((err as Error | null)?.message ?? err)}` }
       }
       return { ok: true, message: `Registered the ro tier of ${kind}/${profileName}. Verify it with a read command before relying on it.` }
@@ -984,10 +1027,14 @@ export function apply(ctx: Context, config: Config): void {
             const entryFields = isPlainObject(fields) ? fields : {}
             // Content files: the UI sends credential file CONTENT (e.g. the full
             // kubeconfig YAML) instead of a path. Write each to a managed file
-            // and store the path in entryFields.
+            // and store the path in entryFields. The id is validated BEFORE any
+            // file IO, and written files are rolled back when writeEntry fails —
+            // a rejected write must not leave orphan credential files on disk.
             const provider = providers.get(kind)
+            assertValidProfileName(name)
+            let writtenFiles: string[] = []
             if (isPlainObject(contentFiles)) {
-              await writeContentFiles(credentialsDir, kind, name, tier, provider?.fileFields ?? [], contentFiles, entryFields)
+              writtenFiles = await writeContentFiles(credentialsDir, kind, name, tier, provider?.fileFields ?? [], contentFiles, entryFields)
             }
             // Write-only-after-save preserve: file fields never come back
             // from the UI (getEntry withholds them), so an edit request
@@ -1007,7 +1054,12 @@ export function apply(ctx: Context, config: Config): void {
               }
             }
             const envelope = buildEnvelope([{ name: displayName, description, environment }])
-            await handle.writeEntry(kind, name, tier, entryFields, Object.keys(envelope).length > 0 ? envelope : undefined)
+            try {
+              await handle.writeEntry(kind, name, tier, entryFields, Object.keys(envelope).length > 0 ? envelope : undefined)
+            } catch (err) {
+              await rollbackContentFiles(credentialsDir, kind, name, tier, writtenFiles)
+              throw err
+            }
             res.writeHead(200, { 'content-type': 'application/json' })
             res.end(JSON.stringify({ ok: true }))
           } else if (req.method === 'GET') {

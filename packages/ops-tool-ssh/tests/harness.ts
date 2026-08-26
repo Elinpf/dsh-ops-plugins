@@ -11,6 +11,7 @@ import type { AccessProfile } from '@deepseek-ai/dsh-ops-access'
 export const DEFAULT_PROFILE: AccessProfile = {
   kind: 'ssh',
   name: 'node-1',
+  tier: 'ro',
   description: '生产节点 1',
   environment: 'prod',
   fields: { host: '10.0.0.11', user: 'ops', key: '/home/test/.ssh/id_ed25519', port: 2222 },

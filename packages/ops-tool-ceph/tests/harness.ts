@@ -11,6 +11,7 @@ import type { AccessProfile } from '@deepseek-ai/dsh-ops-access'
 export const DEFAULT_PROFILE: AccessProfile = {
   kind: 'ceph',
   name: 'prod',
+  tier: 'ro',
   description: '生产 Ceph 集群',
   environment: 'prod',
   fields: { conf: '/etc/ceph/prod.conf', keyring: '/etc/ceph/prod.keyring' },

@@ -69,12 +69,11 @@ export function apply(ctx: Context, _config: Record<string, never>): void {
     name: 'kubectl',
     kind: 'k8s',
     targetParam: 'cluster',
-    description: 'Execute a kubectl command on a specified K8s cluster. The plugin automatically injects the correct --kubeconfig path. Use list_access to see available cluster names.',
+    description: 'Execute a kubectl command on a specified K8s cluster. The plugin automatically injects the correct --kubeconfig credential (shown as a <id@tier:field> reference). Use list_access to see available cluster names.',
     targetParamDescription: 'K8s cluster profile name. Use list_access to see options.',
     commandDescription: 'kubectl subcommand WITHOUT the kubectl prefix. Examples: get pods -n default, describe node node-1',
-    buildCommand(fields, command) {
-      const { kubeconfigPath } = fields as { kubeconfigPath: string }
-      return `kubectl --kubeconfig="${kubeconfigPath}" ${command}`
+    buildCommand(fields, command, ref) {
+      return `kubectl --kubeconfig=${ref('kubeconfigPath')} ${command}`
     },
   })
 

@@ -34,15 +34,17 @@ describe('kubectl', () => {
     expect(h.calls.shellRun).toBe(1)
 
     const request = h.shellRequests[0]
-    expect(request.command).toBe(`kubectl --kubeconfig="${DEFAULT_KUBECONFIG}" get pods -n default`)
+    // The EXECUTED command carries the real (shell-quoted) path…
+    expect(request.command).toBe(`kubectl --kubeconfig='${DEFAULT_KUBECONFIG}' get pods -n default`)
     expect(request.timeoutMs).toBe(30000)
     expect(request.signal).toBe(exec.signal)
 
+    // …while the result (model-visible, logged) shows the credential token.
     expect(value).toEqual({
       exitCode: 0,
       stdout: 'NAME\tREADY\npod-a\t1/1\n',
       stderr: '',
-      command: `kubectl --kubeconfig="${DEFAULT_KUBECONFIG}" get pods -n default`,
+      command: 'kubectl --kubeconfig=<prod@ro:kubeconfigPath> get pods -n default',
     })
   })
 
@@ -80,7 +82,7 @@ describe('kubectl', () => {
     expect(value.error).toBe('spawn kubectl ENOENT')
     expect(value.stderr).toBe('spawn kubectl ENOENT')
     expect(value.stdout).toBe('')
-    expect(value.command).toBe(`kubectl --kubeconfig="${DEFAULT_KUBECONFIG}" get pods`)
+    expect(value.command).toBe('kubectl --kubeconfig=<prod@ro:kubeconfigPath> get pods')
   })
 
   it('render is a pure function of (args, value)', async () => {
@@ -92,7 +94,7 @@ describe('kubectl', () => {
     const first = h.renderKubectl(args, value)
     const second = h.renderKubectl(args, value)
     expect(first).toBe(second)
-    expect(first).toContain(`$ kubectl --kubeconfig="${DEFAULT_KUBECONFIG}" get pods`)
+    expect(first).toContain('$ kubectl --kubeconfig=<prod@ro:kubeconfigPath> get pods')
     // Rendering touched nothing external.
     expect(h.calls).toEqual(callsBefore)
 

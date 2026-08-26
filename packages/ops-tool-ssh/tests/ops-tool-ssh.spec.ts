@@ -21,7 +21,7 @@ describe('ssh', () => {
     expect(h.calls.shellRun).toBe(1)
     expect(value.command).toBe(
       'ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new'
-      + ' -i "/home/test/.ssh/id_ed25519" -p 2222 ops@10.0.0.11 systemctl status ceph-osd@3',
+      + ' -i <node-1@ro:key> -p 2222 ops@10.0.0.11 systemctl status ceph-osd@3',
     )
     expect(value.exitCode).toBe(0)
     expect(value.stdout).toBe('active\n')
@@ -41,7 +41,7 @@ describe('ssh', () => {
 
   it('optional fields: no key / no port omits -i and -p', async () => {
     const minimal: AccessProfile = {
-      kind: 'ssh', name: 'jump', fields: { host: '192.168.1.2', user: 'root' },
+      kind: 'ssh', name: 'jump', tier: 'ro', fields: { host: '192.168.1.2', user: 'root' },
     }
     const h = setup({ profile: minimal })
     const { value } = await h.runSsh({ host: 'jump', command: 'hostname' })

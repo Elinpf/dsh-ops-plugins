@@ -33,7 +33,7 @@ export function apply(ctx: Context): void {
     description: 'Run a command on a remote host over SSH, using a registered ssh access profile (key, port, user@host injected automatically). Non-interactive: BatchMode is on, so anything that would prompt fails fast. Use list_access to see available host names.',
     targetParamDescription: 'SSH host profile name. Use list_access to see options.',
     commandDescription: 'Command to run on the remote host, e.g. "systemctl status ceph-osd@3". Pipes and redirects are interpreted by the LOCAL shell before ssh — keep the remote command simple.',
-    buildCommand(fields, command) {
+    buildCommand(fields, command, ref) {
       const { host, user, key, port } = fields as {
         host: string, user: string, key?: string, port?: number
       }
@@ -41,7 +41,8 @@ export function apply(ctx: Context): void {
       // accept-new: trust a host key on first contact, refuse changed ones —
       // ops hosts are reached by name from the registry, not typed by hand.
       const opts = ['-o BatchMode=yes', '-o ConnectTimeout=10', '-o StrictHostKeyChecking=accept-new']
-      if (key !== undefined) opts.push(`-i "${key}"`)
+      // Only the key path gets a credential token; user@host/port stay inline.
+      if (key !== undefined) opts.push(`-i ${ref('key')}`)
       if (port !== undefined) opts.push(`-p ${port}`)
       return `ssh ${opts.join(' ')} ${user}@${host} ${command}`
     },

@@ -40,6 +40,8 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 
 **命令工具工厂**（`packages/ops-shell-tool`，纯库不是插件）。所有消费方共享的那套机器的唯一事实源：标准结果形状 `{ exitCode, stdout, stderr, command, error? }`、output schema、render、execute 模板（`ctx.get('opsAccess')` 现解析 → buildCommand 拼命令 → `ctx.shell` 执行，30s 超时，信号死亡 exitCode 归一为 -1，错误原样透传）。消费方只剩身份四件：工具名、解析的 kind、档案名参数名、`buildCommand`。
 
+**凭证引用 token（credential reference）**是路径不出日志的统一机制，只在工厂实现一次：buildCommand 用 `ref('字段名')` 标记文件类字段，得到展示 token `<id@tier:field>`（如 `<pf-test-cluster@rw:kubeconfigPath>`）；工厂在执行前把 token 换成 shell 安全引用的真实路径，并把展示命令、stdout、stderr 里所有真实路径的出现一律擦回 token（CLI 报错也会回显 --kubeconfig 路径，只改命令字符串堵不住）。模型和事件日志只看到 token，永远看不到 `/root/.dsh-ops/credentials/...`。
+
 ### 登记文件 (access.yaml)
 
 凭证清单的唯一事实源（默认 `~/.dsh-ops/access.yaml`，Config 里只有 `registryFile` 一个路径字段）。按类型分段：`version: 1` 顶字段，段落名是 kind，条目 key 是档案名。**只显式登记，无自动发现**——发现逻辑是退役原型 k8s-plugin.js 里最脆的部分。
@@ -50,9 +52,9 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 
 ### 访问档案 (AccessProfile)
 
-`resolve(kind, name)` 的返回：`{ kind, name, description?, environment?, fields }`。`description`/`environment` 是所有类型通用的 envelope 字段；`fields` 是提供方 schema 校验+加工后的类型特有字段（k8s 是 `kubeconfigPath`，ceph 是 `conf`/`keyring`/`name?`，ssh 是 `host`/`user`/`key?`/`port?`）。
+`resolve(kind, name)` 的返回：`{ kind, name, tier, description?, environment?, fields }`。`tier` 是本次实际发放的档位（broker 授权后为 `rw`，否则 `ro`），消费方用它标注凭证引用 token。`description`/`environment` 是所有类型通用的 envelope 字段；`fields` 是提供方 schema 校验+加工后的类型特有字段（k8s 是 `kubeconfigPath`，ceph 是 `conf`/`keyring`/`name?`，ssh 是 `host`/`user`/`key?`/`port?`）。
 
-**安全纪律是结构性的**：fields 里只有路径和连接参数，密钥内容永不过服务的手，因此日志、错误信息、模型上下文里天然不会出现秘密。`list_access` 工具的输出连 fields 都不带——只有 envelope 和 ro/rw 就绪标记（基于 `listAll`，rw-only 条目也可见并标注派生提示）。
+**安全纪律是结构性的**：fields 里只有路径和连接参数，密钥内容永不过服务的手；连路径也不进日志——命令工具一律以 `<id@tier:field>` token 展示（见上「凭证引用 token」），因此日志、错误信息、模型上下文里天然不会出现秘密，也不出现凭证落盘位置。`list_access` 工具的输出连 fields 都不带——只有 envelope 和 ro/rw 就绪标记（基于 `listAll`，rw-only 条目也可见并标注派生提示）。
 
 ### @ 档案引用 (dsh-access mention)
 

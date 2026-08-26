@@ -19,7 +19,7 @@ describe('ceph', () => {
     expect(h.calls.resolve).toBe(1)
     expect(h.calls.shellResolve).toBe(1)
     expect(h.calls.shellRun).toBe(1)
-    expect(value.command).toBe('ceph --conf="/etc/ceph/prod.conf" --keyring="/etc/ceph/prod.keyring" health detail')
+    expect(value.command).toBe('ceph --conf=<prod@ro:conf> --keyring=<prod@ro:keyring> health detail')
     expect(value.exitCode).toBe(0)
     expect(value.stdout).toBe('HEALTH_OK\n')
     // 30s timeout and the exec AbortSignal pass through to the shell service
@@ -39,12 +39,13 @@ describe('ceph', () => {
   it('injects --name when the profile carries a cephx user', async () => {
     const h = setup({
       resolveImpl: async () => ({
-        kind: 'ceph', name: 'rook-test',
+        kind: 'ceph', name: 'rook-test', tier: 'ro' as const,
         fields: { conf: '/etc/ceph/rook.conf', keyring: '/etc/ceph/rook.keyring', name: 'client.dsh-test' },
       }),
     })
     const { value } = await h.runCeph({ cluster: 'rook-test', command: 'fsid' })
-    expect(value.command).toBe('ceph --conf="/etc/ceph/rook.conf" --keyring="/etc/ceph/rook.keyring" --name client.dsh-test fsid')
+    // The cephx entity name stays inline (not secret); file paths are tokens.
+    expect(value.command).toBe('ceph --conf=<rook-test@ro:conf> --keyring=<rook-test@ro:keyring> --name client.dsh-test fsid')
   })
 
   it('normalizes a null exitCode (signal death) to -1', async () => {
@@ -84,7 +85,7 @@ describe('ceph', () => {
     const a = h.renderCeph({ cluster: 'prod', command: 'health' }, value)
     const b = h.renderCeph({ cluster: 'prod', command: 'health' }, value)
     expect(a).toBe(b)
-    expect(a).toContain('$ ceph --conf="/etc/ceph/prod.conf" --keyring="/etc/ceph/prod.keyring" health')
+    expect(a).toContain('$ ceph --conf=<prod@ro:conf> --keyring=<prod@ro:keyring> health')
     expect(a).toContain('HEALTH_OK')
     // non-zero exit surfaces the exit code line
     const err = h.renderCeph({}, { exitCode: 1, stdout: '', stderr: 'boom', command: 'ceph x' })

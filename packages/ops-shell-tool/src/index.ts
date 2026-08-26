@@ -9,6 +9,15 @@
  * fixed 30s timeout, normalize a signal-killed exitCode to -1, pass errors
  * through verbatim).
  *
+ * Credential paths never reach the model or the event log. Consumers mark
+ * file-bearing fields with the `ref()` helper, which emits a display token
+ * `<id@tier:field>`; the factory substitutes the shell-quoted real value
+ * only in the command handed to `ctx.shell`, and scrubs every occurrence
+ * of a referenced value back to its token in the displayed command AND in
+ * captured stdout/stderr (CLIs like kubectl print their --kubeconfig path
+ * in error output). The model sees `kubectl --kubeconfig=<prod@rw:kubeconfigPath>`,
+ * never `/root/.dsh-ops/credentials/...`.
+ *
  * A consumer package keeps only its identity: tool name, the kind it
  * resolves, and how to assemble the command from profile fields.
  *
@@ -49,14 +58,86 @@ export interface ProfiledShellToolSpec {
   targetParamDescription: string
   /** Description for the command parameter. */
   commandDescription: string
-  /** Assemble the full shell command from resolved profile fields + the model's command arg. */
-  buildCommand: (fields: Record<string, unknown>, command: string) => string
+  /**
+   * Assemble the full shell command from resolved profile fields + the
+   * model's command arg. Mark every file-bearing field with `ref(field)` —
+   * it returns a display token `<id@tier:field>` that the factory swaps for
+   * the shell-quoted real value at execution time and scrubs back out of all
+   * captured output. Inline only non-secret values (flags, user@host, names).
+   */
+  buildCommand: (fields: Record<string, unknown>, command: string, ref: CredentialRef) => string
 }
+
+/**
+ * Mints a credential display token for one resolved profile field and
+ * registers the field's value for execution-time substitution and output
+ * scrubbing. Throws when the field is absent or not a non-empty string —
+ * ref() exists for credential file fields, not optional inline values.
+ */
+export type CredentialRef = (field: string) => string
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function errorMessage(e: unknown): string {
   return String((e as Error | null)?.message || e)
+}
+
+/** Single-quote a value for safe shell embedding (the substitute for a ref token). */
+function shellQuote(value: string): string {
+  return "'" + value.split("'").join("'\\''") + "'"
+}
+
+/** Per-call credential reference tokens: mint, substitute, and scrub. */
+interface CredentialTokenSet {
+  /** The ref() helper handed to buildCommand. */
+  readonly ref: CredentialRef
+  /** The command handed to ctx.shell: tokens swapped for quoted real values. */
+  executable(displayCommand: string): string
+  /**
+   * Replace every occurrence of a referenced value with its token. Applied
+   * to the display command (the model may paste a real path into its command
+   * arg) and to captured stdout/stderr (CLI errors echo flag values). Values
+   * shorter than 8 chars are skipped — they are never credential paths and
+   * replacing them could garble ordinary output.
+   */
+  scrub(text: string): string
+}
+
+/**
+ * Credential tokens minted per tool call: display token `<id@tier:field>` →
+ * raw field value. The display command keeps tokens; the executed command
+ * substitutes quoted values; captured output is scrubbed value → token so
+ * credential paths never reach the model or the session event log — one
+ * mechanism, shared by every consumer tool.
+ */
+function createCredentialTokens(profileName: string, tier: string, fields: Record<string, unknown>): CredentialTokenSet {
+  const secrets = new Map<string, string>()
+  const ref: CredentialRef = (field) => {
+    const value = fields[field]
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new Error('ops-access: profile ' + profileName + ' field "' + field + '" is not a non-empty string — ref() is for credential file fields')
+    }
+    const token = '<' + profileName + '@' + tier + ':' + field + '>'
+    secrets.set(token, value)
+    return token
+  }
+  return {
+    ref,
+    executable(displayCommand) {
+      let out = displayCommand
+      for (const [token, value] of secrets) {
+        out = out.split(token).join(shellQuote(value))
+      }
+      return out
+    },
+    scrub(text) {
+      let out = text
+      for (const [token, value] of secrets) {
+        if (value.length >= 8) out = out.split(value).join(token)
+      }
+      return out
+    },
+  }
 }
 
 /** The shared output contract: schema + render, both pure. */
@@ -129,12 +210,23 @@ export function registerProfiledShellTool(ctx: Context, spec: ProfiledShellToolS
         // Pass the caller agent through so the access gate (if mounted) can
         // key grants on the session id. Without a gate this arg is inert.
         const profile = await opsAccess.resolve(spec.kind, args[spec.targetParam] as string, exec.agent)
-        fullCommand = spec.buildCommand(profile.fields, args.command as string)
-        const request: ShellExecRequest = { command: fullCommand, timeoutMs: 30000, signal: exec.signal }
+        // Mint per-call credential tokens: buildCommand marks file fields via
+        // ref(); the display command (model-visible, logged) keeps the tokens,
+        // only the executed command carries the real values.
+        const tokens = createCredentialTokens(profile.name, profile.tier, profile.fields)
+        fullCommand = tokens.scrub(spec.buildCommand(profile.fields, args.command as string, tokens.ref))
+        const request: ShellExecRequest = { command: tokens.executable(fullCommand), timeoutMs: 30000, signal: exec.signal }
         const resolved = ctx.shell.resolve(request)
         const result = await ctx.shell.run(resolved)
-        // exitCode is null when the process died from a signal — normalize to -1.
-        return { exitCode: result.exitCode ?? -1, stdout: result.stdout.text, stderr: result.stderr.text, command: fullCommand }
+        // exitCode is null when the process died from a signal — normalize to
+        // -1. stdout/stderr are scrubbed value → token: CLIs echo credential
+        // paths in errors, and the event log must never see them.
+        return {
+          exitCode: result.exitCode ?? -1,
+          stdout: tokens.scrub(result.stdout.text),
+          stderr: tokens.scrub(result.stderr.text),
+          command: fullCommand,
+        }
       } catch (e) {
         // Unknown profile names land here too — resolve's message already
         // lists the available names, so pass it through verbatim.

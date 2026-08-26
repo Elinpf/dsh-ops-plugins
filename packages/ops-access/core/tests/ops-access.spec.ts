@@ -107,10 +107,29 @@ describe('resolve', () => {
     expect(profile).toEqual({
       kind: 'test',
       name: 'alpha',
+      tier: 'ro',
       description: 'alpha 环境',
       environment: 'staging',
       fields: { endpoint: 'https://alpha.internal', processedName: 'alpha' },
     })
+  })
+
+  it('resolve reports the tier the broker issued (rw on a grant)', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(`version: 1
+test:
+  alpha:
+    ro:
+      endpoint: https://alpha.internal
+    rw:
+      endpoint: https://alpha-rw.internal
+`)
+    handle.registerBroker(() => 'rw')
+
+    const profile = await handle.resolve('test', 'alpha')
+    expect(profile.tier).toBe('rw')
+    expect(profile.fields).toMatchObject({ endpoint: 'https://alpha-rw.internal' })
   })
 
   it('throws on unknown kind', async () => {
@@ -1234,6 +1253,27 @@ describe('register_access tool', () => {
     expect(existsSync(registryFile)).toBe(false)
   })
 
+  it('schema failure after content write rolls the credential file back', async () => {
+    const { handle, callRegisterAccess, registryFile, credentialsDir } = setup()
+    handle.register(fileProvider)
+    // note must be a string — 42 fails schema AFTER the kubeconfig content
+    // file is written. The write must be rolled back: no registry, no file.
+    const res = await callRegisterAccess({ profile: 'files/prod', fields: { kubeconfig: 'yaml content', note: 42 } })
+    expect(res.ok).toBe(false)
+    expect(res.message).toMatch(/registration failed/)
+    expect(existsSync(registryFile)).toBe(false)
+    expect(existsSync(join(credentialsDir, 'files', 'prod', 'ro', 'kubeconfig'))).toBe(false)
+  })
+
+  it('rejects a path-hostile id BEFORE writing any credential file', async () => {
+    const { handle, callRegisterAccess, credentialsDir } = setup()
+    handle.register(fileProvider)
+    const res = await callRegisterAccess({ profile: 'files/evil/name', fields: { kubeconfig: 'yaml content' } })
+    expect(res.ok).toBe(false)
+    expect(res.message).toMatch(/invalid profile name/)
+    expect(existsSync(join(credentialsDir, 'files'))).toBe(false)
+  })
+
   it('help() surfaces derivation recipes and the register_access pointer', () => {
     const { handle } = setup()
     handle.register(fileProvider)
@@ -1324,6 +1364,31 @@ describe('admin content files', () => {
     })
     expect(status).toBe(400)
     expect(body.error).toMatch(/invalid file field name/)
+  })
+
+  it('POST with an invalid id writes NO credential files (validation before file IO)', async () => {
+    const h = setup()
+    h.handle.register(fileProvider)
+    const { status, body } = await h.adminEntryRoute({
+      method: 'POST',
+      body: JSON.stringify({ kind: 'files', name: '_bad', tier: 'ro', fields: {}, contentFiles: { kubeconfig: 'yaml content' } }),
+    })
+    expect(status).toBe(400)
+    expect(body.error).toMatch(/invalid profile name/)
+    expect(existsSync(join(h.credentialsDir, 'files', '_bad'))).toBe(false)
+  })
+
+  it('POST schema failure after content write rolls the credential file back', async () => {
+    const h = setup()
+    h.handle.register(fileProvider)
+    // note must be a string — 42 fails schema AFTER the content file lands.
+    const { status, body } = await h.adminEntryRoute({
+      method: 'POST',
+      body: JSON.stringify({ kind: 'files', name: 'prod', tier: 'ro', fields: { note: 42 }, contentFiles: { kubeconfig: 'yaml content' } }),
+    })
+    expect(status).toBe(400)
+    expect(existsSync(join(h.credentialsDir, 'files', 'prod', 'ro', 'kubeconfig'))).toBe(false)
+    expect(existsSync(join(h.credentialsDir, 'files', 'prod'))).toBe(false)
   })
 })
 

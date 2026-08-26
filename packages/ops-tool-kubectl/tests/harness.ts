@@ -13,6 +13,7 @@ export const DEFAULT_KUBECONFIG = '/home/test/.kube/prod.yaml'
 export const DEFAULT_PROFILE: AccessProfile = {
   kind: 'k8s',
   name: 'prod',
+  tier: 'ro',
   description: '生产集群',
   environment: 'prod',
   fields: { kubeconfigPath: DEFAULT_KUBECONFIG },
