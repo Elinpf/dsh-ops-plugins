@@ -152,6 +152,7 @@ provider 的 zod schema 是简单的 zod.object({...})（k8s 一个字段、ceph
 - **只写 ro**：rw 档永远由人经管理 UI 注册/覆盖，工具写不到。注册不设授权门槛（决策：ro 是 agent 的默认工作面，自助补齐；人随时可覆盖修正）。每次注册随工具调用进 session 事件流，可重建。
 - **派生配方**：provider 新增 `derivationDoc`（prose，含命名约定 k8s `<id>-ro` / ceph `client.<id>-ro`），由 help() 经 `list_access help: true` 按需拉取。配方不落代码——命令随基础设施版本漂移，由 agent 用判断力执行。
 - **内容落盘加固**：`writeContentFiles` 只接受 provider 声明的 fileFields（其余拒绝）、字段名字符集守卫（防路径逃逸）、一律 0600。落盘根目录可配 `credentialsDir`（默认 `~/.dsh-ops/credentials`，测试隔离用）。
+- **保存时内容校验**：provider 可选 `validateContent(field, content)` 钩子，落盘前做结构性格式校验（不做连通性/值判断）；校验失败拒绝写入且不留任何文件。写入顺序纪律：id 校验 → 内容校验 → 落盘 → writeEntry（失败回滚已写文件）。
 - **配套可发现性**：rw-only 条目（人注册了 rw、ro 未派生）在 @ 菜单、list_access、mention 注入三处都可见并标注「可派生」——`GET /ops-access/list` 与 mention 渲染改用 `listAll`，list_access 输出带 ro/rw 就绪标记。`request_access` 预检对两档 kind 只要求 rw 档可解析（ro 缺失正是派生引导场景，卡 ro 检查会死锁）；ssh 类仍查 ro（凭证本体在 ro 档）。ro 缺失且 rw 存在时 resolve 报错直接指向 register_access。
 
 ## Testing Decisions

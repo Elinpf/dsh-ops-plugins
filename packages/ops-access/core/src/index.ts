@@ -101,6 +101,17 @@ export interface AccessProvider {
    * Fields not listed here are inline values stored as-is (e.g. ssh host, user, port).
    */
   fileFields?: string[]
+  /**
+   * Save-time validator for a file field's pasted CONTENT, run before the
+   * content is written to disk (the admin UI route and the register_access
+   * tool share this check). Return an error message to reject the write,
+   * nothing to accept. Keep it structural — format and shape only (a ceph
+   * keyring has an indented, base64-decodable key line; a kubeconfig parses
+   * as YAML with clusters/contexts/users), never connectivity or value
+   * judgments. Catching paste corruption here beats a cryptic CLI parse
+   * error at use time.
+   */
+  validateContent?: (field: string, content: string) => string | null | undefined
 }
 
 /** A resolved access profile: envelope fields plus the provider-processed type-specific fields. */
@@ -457,7 +468,7 @@ function assertValidProfileName(profileName: string): void {
   }
 }
 
-async function writeContentFiles(credentialsDir: string, kind: string, profileName: string, tier: string, fileFields: readonly string[], contentFiles: Record<string, unknown>, entryFields: Record<string, unknown>): Promise<string[]> {
+async function writeContentFiles(credentialsDir: string, kind: string, profileName: string, tier: string, fileFields: readonly string[], contentFiles: Record<string, unknown>, entryFields: Record<string, unknown>, validateContent?: AccessProvider['validateContent']): Promise<string[]> {
   const allowed = new Set(fileFields)
   const written: string[] = []
   for (const [fieldName, content] of Object.entries(contentFiles)) {
@@ -469,6 +480,12 @@ async function writeContentFiles(credentialsDir: string, kind: string, profileNa
     }
     if (!allowed.has(fieldName)) {
       throw new Error(`ops-access: "${fieldName}" is not a declared file field for kind "${kind}" (declared: ${fileFields.join(', ') || '(none)'})`)
+    }
+    // Save-time content validation (provider hook): reject corrupt pastes
+    // BEFORE anything lands on disk.
+    const problem = validateContent?.(fieldName, content)
+    if (problem) {
+      throw new Error(`ops-access: invalid content for ${kind}/${profileName} ${tier} ${fieldName}: ${problem}`)
     }
     const dir = credentialsDir + '/' + kind + '/' + profileName + '/' + tier
     await mkdir(dir, { recursive: true })
@@ -918,7 +935,7 @@ export function apply(ctx: Context, config: Config): void {
       let written: string[] = []
       try {
         if (Object.keys(contentFiles).length > 0) {
-          written = await writeContentFiles(credentialsDir, kind, profileName, 'ro', descriptor.fileFields ?? [], contentFiles, entryFields)
+          written = await writeContentFiles(credentialsDir, kind, profileName, 'ro', descriptor.fileFields ?? [], contentFiles, entryFields, providers.get(kind)?.validateContent)
         }
         // writeEntry validates against the provider schema BEFORE touching
         // the registry; its errors carry zod issue paths + messages, never
@@ -1034,7 +1051,7 @@ export function apply(ctx: Context, config: Config): void {
             assertValidProfileName(name)
             let writtenFiles: string[] = []
             if (isPlainObject(contentFiles)) {
-              writtenFiles = await writeContentFiles(credentialsDir, kind, name, tier, provider?.fileFields ?? [], contentFiles, entryFields)
+              writtenFiles = await writeContentFiles(credentialsDir, kind, name, tier, provider?.fileFields ?? [], contentFiles, entryFields, provider?.validateContent)
             }
             // Write-only-after-save preserve: file fields never come back
             // from the UI (getEntry withholds them), so an edit request

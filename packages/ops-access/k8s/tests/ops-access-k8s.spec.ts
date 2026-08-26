@@ -95,3 +95,88 @@ it('carries a derivationDoc naming convention for help()', () => {
   expect(plugin.provider.derivationDoc).toContain('<id>-ro')
   expect(plugin.provider.derivationDoc).toContain('register_access')
 })
+
+// ── validateContent (save-time paste guard) ──────────────────────────────────
+
+describe('validateContent', () => {
+  const VALID = [
+    'apiVersion: v1',
+    'kind: Config',
+    'clusters:',
+    '- name: prod',
+    '  cluster:',
+    '    server: https://10.0.0.1:6443',
+    'contexts:',
+    '- name: prod',
+    '  context:',
+    '    cluster: prod',
+    '    user: admin',
+    'current-context: prod',
+    'users:',
+    '- name: admin',
+    '  user:',
+    '    token: abc',
+    '',
+  ].join('\n')
+
+  it('accepts a full kubeconfig', () => {
+    expect(plugin.provider.validateContent?.('kubeconfig', VALID)).toBeNull()
+  })
+
+  it('rejects non-YAML garbage', () => {
+    expect(plugin.provider.validateContent?.('kubeconfig', '}{][')).toMatch(/not valid YAML/)
+  })
+
+  it('rejects YAML without clusters/contexts/users', () => {
+    expect(plugin.provider.validateContent?.('kubeconfig', 'foo: bar\n')).toMatch(/no clusters defined/)
+    expect(plugin.provider.validateContent?.('kubeconfig', 'clusters: []\ncontexts: []\nusers: []\n')).toMatch(/no clusters defined/)
+  })
+
+  it('ignores non-file fields', () => {
+    expect(plugin.provider.validateContent?.('note', 'anything')).toBeNull()
+  })
+})
+
+describe('validateContent current-context', () => {
+  const base = [
+    'apiVersion: v1',
+    'kind: Config',
+    'clusters:',
+    '- name: chaos',
+    '  cluster:',
+    '    server: https://10.0.0.1:6443',
+    'contexts:',
+    '- name: chaos',
+    '  context:',
+    '    cluster: chaos',
+    '    user: chaos',
+    'users:',
+    '- name: chaos',
+    '  user:',
+    '    token: abc',
+  ]
+
+  it('accepts when current-context names a defined context', () => {
+    const content = [...base, 'current-context: chaos', ''].join('\n')
+    expect(plugin.provider.validateContent?.('kubeconfig', content)).toBeNull()
+  })
+
+  it('rejects a stale current-context (the incident case: rw kubeconfig pointing at a nonexistent context)', () => {
+    const content = [...base, 'current-context: kubernetes-admin@kubernetes', ''].join('\n')
+    expect(plugin.provider.validateContent?.('kubeconfig', content))
+      .toMatch(/current-context "kubernetes-admin@kubernetes" does not match any defined context \(defined: chaos\)/)
+  })
+
+  it('rejects a missing current-context (ops tools never pass --context)', () => {
+    const content = [...base, ''].join('\n')
+    expect(plugin.provider.validateContent?.('kubeconfig', content))
+      .toMatch(/no current-context.*Defined contexts: chaos/)
+  })
+
+  it('derivationDoc covers --raw CA extraction, naming, current-context, and write-denial verification', () => {
+    const d = plugin.provider.derivationDoc ?? ''
+    expect(d).toContain('--raw')
+    expect(d).toContain('current-context')
+    expect(d).toContain('forbidden')
+  })
+})

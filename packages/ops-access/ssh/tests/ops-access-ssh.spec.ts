@@ -99,3 +99,21 @@ it('carries fieldsDoc for help()', () => {
 it('carries a derivationDoc for help()', () => {
   expect(plugin.provider.derivationDoc).toContain('register_access')
 })
+
+// ── validateContent (save-time paste guard) ──────────────────────────────────
+
+describe('validateContent', () => {
+  it('accepts PEM and OpenSSH private key blocks', () => {
+    expect(plugin.provider.validateContent?.('key', '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAA=\n-----END OPENSSH PRIVATE KEY-----\n')).toBeNull()
+    expect(plugin.provider.validateContent?.('key', '-----BEGIN RSA PRIVATE KEY-----\nMIIEow==\n-----END RSA PRIVATE KEY-----\n')).toBeNull()
+  })
+
+  it('rejects content that is not a private key', () => {
+    expect(plugin.provider.validateContent?.('key', 'ssh-ed25519 AAAA... ops@host\n')).toMatch(/not a private key/)
+    expect(plugin.provider.validateContent?.('key', '-----BEGIN OPENSSH PRIVATE KEY-----\ntruncated\n')).toMatch(/not a private key/)
+  })
+
+  it('ignores non-file fields', () => {
+    expect(plugin.provider.validateContent?.('host', 'anything')).toBeNull()
+  })
+})

@@ -44,6 +44,35 @@ export const provider: AccessProvider = {
     if (name !== undefined) fields.name = name
     return fields
   },
+  // Save-time guard against corrupt pastes. ceph's buffer parser rejects
+  // input without a trailing newline and requires key lines indented under
+  // their [section] — both are classic copy-paste losses, so they are caught
+  // here instead of surfacing as "cannot parse buffer: Malformed input" at
+  // connection time. Structural only — no connectivity checks.
+  validateContent(field, content) {
+    if (field !== 'conf' && field !== 'keyring') return null
+    if (!content.endsWith('\n')) {
+      return 'content must end with a newline — ceph rejects buffers without one (often lost when pasting)'
+    }
+    if (field === 'conf') {
+      if (!/^\[global\][\t ]*$/m.test(content)) return 'no [global] section — paste the full ceph.conf'
+      if (!/^[\t ]*mon_host[\t ]*=/m.test(content)) return 'no mon_host set — paste the full ceph.conf'
+      return null
+    }
+    // keyring
+    if (!/^\[client\.[^\]]+\][\t ]*$/m.test(content)) return 'no [client.<name>] section — paste the full keyring'
+    const keyMatch = content.match(/^[\t ]+key[\t ]*=[\t ]*(\S+)[\t ]*$/m)
+    if (!keyMatch) {
+      return 'no indented "key = <base64>" line — ceph requires the key line to be indented under its [client.x] section'
+    }
+    // Strict base64 alphabet + decoded length >= 16 bytes (cephx AES keys
+    // are longer; this only rules out garbled pastes). Decoded length is
+    // derived from the encoded length — no Buffer dependency here.
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(keyMatch[1]) || keyMatch[1].length < 24) {
+      return 'the key value is not valid base64 (or too short for a cephx key)'
+    }
+    return null
+  },
 }
 
 // ── Plugin apply ─────────────────────────────────────────────────────────────

@@ -33,7 +33,8 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 凭证体系按 dsh 的能力缝拆成三层，全部收在 `packages/ops-access/` 大文件夹里（分层一眼可见）：
 
 - **定义包 ops-access/core**（npm 名 `@deepseek-ai/dsh-ops-access`，不变）— 拥有 `ctx.opsAccess` 服务和登记文件，定义词汇类型
-- **提供方 ops-access/{k8s,ceph,ssh}** — 每种凭证类型一个，只有两样东西：该类型的 zod schema 和字段加工（如 `~` 展开）。apply 里只调定义包的 `registerAccessProvider(ctx, provider)` 帮手注册——不要手写 `ctx.inject(['opsAccess'], ...)`（静态 inject 兄弟行服务会让 loader 死锁，帮手内含这段防护）
+- **提供方 ops-access/{k8s,ceph,ssh}** — 每种凭证类型一个：该类型的 zod schema、字段加工（如 `~` 展开）、可选的 `validateContent` 保存时内容校验。apply 里只调定义包的 `registerAccessProvider(ctx, provider)` 帮手注册——不要手写 `ctx.inject(['opsAccess'], ...)`（静态 inject 兄弟行服务会让 loader 死锁，帮手内含这段防护）
+- **保存时内容校验 (validateContent)** — provider 可选钩子，文件类字段的粘贴内容**落盘前**做结构性校验（k8s：合法 YAML 且有 clusters/contexts/users，且 `current-context` 必须指向已定义的 context——ops 工具不带 `--context`，缺失或失效的 current-context 会让每次调用都炸；ceph：行尾换行 + [global]/mon_host + keyring 的 key 行缩进且 base64 ≥16 字节；ssh：含 PRIVATE KEY 块）。两条写入路径（admin UI、register_access）共用，校验失败 400/ok:false 且零文件 IO——粘贴丢格式（如 ceph keyring 的 TAB 缩进）在保存时就报明确错误，而不是使用时爆 cannot parse buffer
 - **消费方 ops-tool-{kubectl,ceph,ssh}** — 模型工具，按名字解析凭证后拼命令。留在 `packages/` 顶层：它们是工具层，不是凭证层
 
 ### ops-shell-tool

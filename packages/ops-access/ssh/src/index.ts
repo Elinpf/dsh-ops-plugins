@@ -46,6 +46,15 @@ export const provider: AccessProvider = {
     if (port !== undefined) fields.port = port
     return fields
   },
+  // Save-time guard against corrupt pastes: the key must look like a PEM/
+  // OpenSSH private key block. Structural only — the key is never parsed.
+  validateContent(field, content) {
+    if (field !== 'key') return null
+    if (!/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/.test(content) || !/-----END [A-Z0-9 ]*PRIVATE KEY-----/.test(content)) {
+      return 'not a private key — expected a -----BEGIN ... PRIVATE KEY----- block (paste the full key file)'
+    }
+    return null
+  },
 }
 
 // ── Plugin apply ─────────────────────────────────────────────────────────────

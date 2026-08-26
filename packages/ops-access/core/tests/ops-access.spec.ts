@@ -1174,6 +1174,9 @@ const fileProvider: AccessProvider = {
   fieldsDoc: 'kubeconfig: path to the kubeconfig file; note: optional inline value',
   fileFields: ['kubeconfig'],
   derivationDoc: 'create account <id>-ro, then register_access',
+  // Save-time paste guard: 'corrupt' content stands in for format damage.
+  validateContent: (field, content) =>
+    field === 'kubeconfig' && content.includes('corrupt') ? 'not a valid kubeconfig' : null,
 }
 
 describe('register_access tool', () => {
@@ -1263,6 +1266,16 @@ describe('register_access tool', () => {
     expect(res.message).toMatch(/registration failed/)
     expect(existsSync(registryFile)).toBe(false)
     expect(existsSync(join(credentialsDir, 'files', 'prod', 'ro', 'kubeconfig'))).toBe(false)
+  })
+
+  it('rejects provider-invalid content BEFORE writing any file', async () => {
+    const { handle, callRegisterAccess, registryFile, credentialsDir } = setup()
+    handle.register(fileProvider)
+    const res = await callRegisterAccess({ profile: 'files/prod', fields: { kubeconfig: 'corrupt paste' } })
+    expect(res.ok).toBe(false)
+    expect(res.message).toMatch(/invalid content for files\/prod ro kubeconfig: not a valid kubeconfig/)
+    expect(existsSync(registryFile)).toBe(false)
+    expect(existsSync(join(credentialsDir, 'files'))).toBe(false)
   })
 
   it('rejects a path-hostile id BEFORE writing any credential file', async () => {
@@ -1364,6 +1377,18 @@ describe('admin content files', () => {
     })
     expect(status).toBe(400)
     expect(body.error).toMatch(/invalid file field name/)
+  })
+
+  it('POST rejects provider-invalid content before any file IO', async () => {
+    const h = setup()
+    h.handle.register(fileProvider)
+    const { status, body } = await h.adminEntryRoute({
+      method: 'POST',
+      body: JSON.stringify({ kind: 'files', name: 'prod', tier: 'ro', fields: {}, contentFiles: { kubeconfig: 'corrupt paste' } }),
+    })
+    expect(status).toBe(400)
+    expect(body.error).toMatch(/invalid content for files\/prod ro kubeconfig/)
+    expect(existsSync(join(h.credentialsDir, 'files', 'prod'))).toBe(false)
   })
 
   it('POST with an invalid id writes NO credential files (validation before file IO)', async () => {
