@@ -25,6 +25,7 @@ import type { SpawnFn } from './prometheus.js'
 import type {
   ClusterScan,
   ScannedConfigMap,
+  ScannedEndpoints,
   ScannedIngress,
   ScannedSecret,
   ScannedService,
@@ -210,6 +211,16 @@ function reduceConfigMap(item: Record<string, any>): ScannedConfigMap {
   return { namespace: meta.namespace ?? 'default', name: meta.name ?? '', data }
 }
 
+/** Endpoints reduced to ready-address count (subsets[].addresses; notReady excluded). */
+function reduceEndpoints(item: Record<string, any>): ScannedEndpoints {
+  const meta = item.metadata ?? {}
+  let addresses = 0
+  for (const subset of item.subsets ?? []) {
+    addresses += (subset?.addresses ?? []).length
+  }
+  return { namespace: meta.namespace ?? 'default', name: meta.name ?? '', addresses }
+}
+
 /**
  * Metadata-only Secret list. The scanner asks kubectl for a jsonpath of
  * `namespace<TAB>name` per item so Secret data never crosses into this
@@ -265,6 +276,11 @@ export async function scanCluster(input: ScanClusterInput): Promise<ClusterScan>
   // secretRefs (from pod specs) already carry the reference names.
   const secrets = await run(['get', 'secrets', '--all-namespaces', '-o', `jsonpath=${SECRETS_JSONPATH}`])
     .catch(() => ({ stdout: '' }))
+  // Endpoints feed the backend-less-Service anomaly detector. Same degraded
+  // discipline: a failed read yields undefined and the detector skips —
+  // never a guess, never a scan failure.
+  const endpointsRaw = await run(['get', 'endpoints', '--all-namespaces', '-o', 'json'])
+    .catch(() => undefined)
 
   const workloadItems: ScannedWorkload[] = []
   // A combined `get a,b,c -o json` returns a single List whose items mix kinds.
@@ -301,6 +317,9 @@ export async function scanCluster(input: ScanClusterInput): Promise<ClusterScan>
     ingresses: (parseOrThrow(ingresses.stdout, 'ingresses').items ?? []).map(reduceIngress),
     configMaps: (parseOrThrow(configMaps.stdout, 'configmaps').items ?? []).map(reduceConfigMap),
     secrets: parseSecretNames(secrets.stdout),
+  }
+  if (endpointsRaw !== undefined) {
+    scan.endpoints = (parseOrThrow(endpointsRaw.stdout, 'endpoints').items ?? []).map(reduceEndpoints)
   }
   if (prometheus !== undefined) scan.prometheus = prometheus
   return scan

@@ -20,6 +20,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { classifyWorkload, expandHome, isMiddlewareType } from './classify.js'
+import { detectAnomalies } from './anomalies.js'
 import { matchTargetsToWorkloads } from './prometheus.js'
 import type { SpawnFn } from './prometheus.js'
 import { buildRelations } from './relations.js'
@@ -134,6 +135,7 @@ export function buildClusterInventory(
   const inventory: ClusterInventory = {
     scannedAt: scan.scannedAt,
     middleware,
+    anomalies: detectAnomalies({ edges, services, endpoints: scan.endpoints }),
     workloads: classified,
     services,
     ingresses: [...scan.ingresses].sort(byNsName),
@@ -171,7 +173,7 @@ async function writeInventory(file: string, inventory: EnvironmentInventory): Pr
 }
 
 function emptySection(scannedAt: string): InventorySection {
-  return { scannedAt, middleware: [], workloads: [], services: [], ingresses: [], edges: [] }
+  return { scannedAt, middleware: [], anomalies: [], workloads: [], services: [], ingresses: [], edges: [] }
 }
 
 /**

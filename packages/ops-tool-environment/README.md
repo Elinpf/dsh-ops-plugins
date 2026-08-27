@@ -18,6 +18,7 @@ For each registered k8s cluster, the scanner pulls workloads (deploy/sts/ds), Se
 - **Freshness** — each section carries `scannedAt`; a failed refresh keeps the old section and marks it `stale: true`
 - **Unknown bucket** — unrecognized workloads stay listed with name and image
 - **Prometheus corroboration** — when a cluster has a discoverable Prometheus service (name contains `prometheus`, port 9090, `monitoring` namespace preferred), the scanner reads `/api/v1/targets` over a short-lived `kubectl port-forward` and attaches `monitoring: { up, down }` per workload. Any failure here degrades silently — the cluster section is still written and never marked stale for it
+- **Anomaly detection** — two generic-semantics detectors per section: `cross-namespace-ref` (a workload references a Service in another namespace) and `service-no-backend` (a Service has a selector but zero ready Endpoints addresses — Endpoints being k8s' authoritative backend answer). overview lists them in one section; show annotates entries in place
 - **User rules** — `~/.dsh-ops/environment-rules.yaml` appends/overrides classification rules
 
 ## Security discipline
@@ -33,6 +34,7 @@ For each registered k8s cluster, the scanner pulls workloads (deploy/sts/ds), Se
 | `src/scanner.ts` | kubectl reads → `ClusterScan` (pure data, injectable exec, 30s timeout) |
 | `src/classify.ts` | image/chart/label → middleware type; built-in table + user rules file |
 | `src/relations.ts` | best-effort edges: `uses-service`, `fronts`, `uses-middleware`, `references-secret` |
+| `src/anomalies.ts` | rule-based anomaly detectors: `cross-namespace-ref`, `service-no-backend` (endpoints-based) |
 | `src/prometheus.ts` | Prometheus corroboration: service discovery, `kubectl port-forward` lifecycle (always reaped), targets parsing, workload matching |
 | `src/inventory.ts` | `environment.yaml` persistence, read API, refresh + stale logic |
 | `src/tool.ts` | the `environment` tool factory (actions, TTL gate, render); `createEnvironmentTool` takes injectable deps for tests |

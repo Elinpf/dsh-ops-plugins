@@ -69,6 +69,30 @@ export interface ScannedSecret {
   name: string
 }
 
+/** An Endpoints object reduced to what anomaly detection needs. */
+export interface ScannedEndpoints {
+  namespace: string
+  name: string
+  /** Ready backend address count (sum of subsets[].addresses). */
+  addresses: number
+}
+
+/**
+ * A rule-detected anomaly in a cluster section. Rules only use generic k8s
+ * semantics (namespace comparison, selector/endpoints agreement) — never
+ * environment-specific names.
+ */
+export interface Anomaly {
+  kind: 'cross-namespace-ref' | 'service-no-backend'
+  severity: 'info' | 'warning'
+  /** The object the anomaly is about (the referencing workload, or the backend-less Service). */
+  ref: ResourceRef
+  /** The other side, for cross-namespace references. */
+  related?: ResourceRef
+  /** One-line human-readable statement. */
+  message: string
+}
+
 /** One active Prometheus target, reduced to what matching needs. */
 export interface PromTarget {
   namespace?: string
@@ -96,6 +120,11 @@ export interface ClusterScan {
   ingresses: ScannedIngress[]
   configMaps: ScannedConfigMap[]
   secrets: ScannedSecret[]
+  /**
+   * Endpoints read (ready-address counts per Service). Undefined when the
+   * read failed — detectors that need it then skip, rather than guessing.
+   */
+  endpoints?: ScannedEndpoints[]
   /**
    * Prometheus corroboration, when a Prometheus service was discovered and
    * scraped (undefined otherwise — enhancement, never a hard dependency).
@@ -137,7 +166,7 @@ export interface RelationEdge {
   kind: 'uses-service' | 'fronts' | 'uses-middleware' | 'references-secret'
   from: ResourceRef
   to: ResourceRef
-  /** Where the link was seen, e.g. 'env:PG_HOST' or 'configmap:baizeops-config:PG_HOST'. */
+  /** Where the link was seen, e.g. 'env:PG_HOST' or 'configmap:app-config:PG_HOST'. */
   via: string
   /** Middleware type, set on uses-middleware edges. */
   targetType?: string
@@ -149,6 +178,8 @@ export interface ClusterInventory {
   scannedAt: string
   /** Middleware instances recognized by the classification table. */
   middleware: MiddlewareInstance[]
+  /** Rule-detected anomalies (cross-namespace references, backend-less Services). */
+  anomalies: Anomaly[]
   /**
    * Every scanned workload with its classification. Workloads with
    * type 'unknown' are the unknown bucket — listed, never dropped.

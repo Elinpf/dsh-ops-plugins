@@ -7,7 +7,7 @@
       "kind": "Deployment",
       "metadata": {
         "name": "user-service",
-        "namespace": "baizeops",
+        "namespace": "acme",
         "labels": {}
       },
       "spec": {
@@ -19,14 +19,14 @@
             "containers": [
               {
                 "name": "user-service",
-                "image": "harbor.cnzbai.com/baizeops/user-service:1.4.2",
+                "image": "registry.example.com/acme/user-service:1.4.2",
                 "env": [
-                  { "name": "REDIS_ADDR", "value": "redis.baizeops.svc.cluster.local:6379" },
+                  { "name": "REDIS_ADDR", "value": "redis.acme.svc.cluster.local:6379" },
                   { "name": "POD_IP", "valueFrom": { "fieldRef": { "fieldPath": "status.podIP" } } }
                 ],
                 "envFrom": [
-                  { "configMapRef": { "name": "baizeops-config" } },
-                  { "secretRef": { "name": "baizeops-secret" } }
+                  { "configMapRef": { "name": "acme-config" } },
+                  { "secretRef": { "name": "acme-secret" } }
                 ]
               }
             ]
@@ -39,7 +39,7 @@
       "kind": "Deployment",
       "metadata": {
         "name": "gateway",
-        "namespace": "baizeops"
+        "namespace": "acme"
       },
       "spec": {
         "template": {
@@ -50,10 +50,10 @@
             "containers": [
               {
                 "name": "gateway",
-                "image": "harbor.cnzbai.com/baizeops/gateway:2.0.0",
+                "image": "registry.example.com/acme/gateway:2.0.0",
                 "env": [
-                  { "name": "REPORT_DB", "valueFrom": { "configMapKeyRef": { "name": "baizeops-config", "key": "REPORT_DB" } } },
-                  { "name": "DB_PASSWORD", "valueFrom": { "secretKeyRef": { "name": "baizeops-secret", "key": "DB_PASSWORD" } } }
+                  { "name": "REPORT_DB", "valueFrom": { "configMapKeyRef": { "name": "acme-config", "key": "REPORT_DB" } } },
+                  { "name": "DB_PASSWORD", "valueFrom": { "secretKeyRef": { "name": "acme-secret", "key": "DB_PASSWORD" } } }
                 ]
               }
             ]
@@ -66,7 +66,7 @@
       "kind": "StatefulSet",
       "metadata": {
         "name": "postgres",
-        "namespace": "baizeops",
+        "namespace": "acme",
         "labels": { "app": "postgres" }
       },
       "spec": {
@@ -79,7 +79,7 @@
             "containers": [
               {
                 "name": "postgres",
-                "image": "harbor.cnzbai.com/middleware/postgres:16.2",
+                "image": "registry.example.com/middleware/postgres:16.2",
                 "envFrom": [
                   { "secretRef": { "name": "postgres-auth" } }
                 ]
@@ -94,7 +94,7 @@
       "kind": "StatefulSet",
       "metadata": {
         "name": "redis",
-        "namespace": "baizeops",
+        "namespace": "acme",
         "labels": { "app": "redis" }
       },
       "spec": {
@@ -107,11 +107,11 @@
             "containers": [
               {
                 "name": "redis",
-                "image": "harbor.cnzbai.com/middleware/redis:7.2"
+                "image": "registry.example.com/middleware/redis:7.2"
               },
               {
                 "name": "exporter",
-                "image": "harbor.cnzbai.com/middleware/redis-exporter:1.55"
+                "image": "registry.example.com/middleware/redis-exporter:1.55"
               }
             ]
           }
@@ -144,7 +144,7 @@
             "containers": [
               {
                 "name": "prometheus",
-                "image": "harbor.cnzbai.com/middleware/prometheus:v2.53.0"
+                "image": "registry.example.com/middleware/prometheus:v2.53.0"
               }
             ]
           }
@@ -192,7 +192,7 @@
             "containers": [
               {
                 "name": "node-exporter",
-                "image": "harbor.cnzbai.com/middleware/node-exporter:v1.8.1"
+                "image": "registry.example.com/middleware/node-exporter:v1.8.1"
               }
             ]
           }

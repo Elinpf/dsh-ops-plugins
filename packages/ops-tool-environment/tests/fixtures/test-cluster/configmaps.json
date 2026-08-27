@@ -5,18 +5,18 @@
     {
       "apiVersion": "v1",
       "kind": "ConfigMap",
-      "metadata": { "name": "baizeops-config", "namespace": "baizeops" },
+      "metadata": { "name": "acme-config", "namespace": "acme" },
       "data": {
-        "PG_HOST": "postgres.baizeops.svc.cluster.local",
+        "PG_HOST": "postgres.acme.svc.cluster.local",
         "PG_PORT": "5432",
-        "REPORT_DB": "jdbc:postgresql://postgres.baizeops.svc.cluster.local:5432/report",
+        "REPORT_DB": "jdbc:postgresql://postgres.acme.svc.cluster.local:5432/report",
         "LOG_LEVEL": "info"
       }
     },
     {
       "apiVersion": "v1",
       "kind": "ConfigMap",
-      "metadata": { "name": "kube-root-ca.crt", "namespace": "baizeops" },
+      "metadata": { "name": "kube-root-ca.crt", "namespace": "acme" },
       "data": { "ca.crt": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n" }
     }
   ]

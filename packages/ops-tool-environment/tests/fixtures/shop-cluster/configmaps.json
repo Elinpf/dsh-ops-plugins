@@ -1,0 +1,19 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "metadata": {
+        "name": "shop-frontend-config",
+        "namespace": "shop",
+        "labels": { "app.kubernetes.io/name": "frontend", "app.kubernetes.io/instance": "shop" }
+      },
+      "data": {
+        "CACHE_URL": "redis://shop-redis.data.svc.cluster.local:6379/0",
+        "FEATURE_FLAGS": "{}"
+      }
+    }
+  ]
+}

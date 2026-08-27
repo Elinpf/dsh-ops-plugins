@@ -16,7 +16,7 @@ function byImage(image: string, labels: Record<string, string> = {}): string {
 describe('built-in table — middleware (spec 0003 list)', () => {
   const cases: Array<[string, string]> = [
     ['nacos/nacos-server:v2.3.2', 'nacos'],
-    ['harbor.cnzbai.com/middleware/sentinel-dashboard:1.8.7', 'sentinel'],
+    ['registry.example.com/middleware/sentinel-dashboard:1.8.7', 'sentinel'],
     ['seataio/seata-server:1.7.0', 'seata'],
     ['redis:7.2', 'redis'],
     ['docker.elastic.co/elasticsearch/elasticsearch:8.14.0', 'elasticsearch'],
@@ -65,7 +65,7 @@ describe('built-in table — infra class', () => {
 describe('labels and charts as signals', () => {
   it('helm labels classify a prometheus sts even under a mirrored image', () => {
     const type = classifySignals({
-      images: ['harbor.cnzbai.com/middleware/prometheus:v2.53.0'],
+      images: ['registry.example.com/middleware/prometheus:v2.53.0'],
       labels: { 'app.kubernetes.io/name': 'prometheus', 'helm.sh/chart': 'prometheus-25.8.0' },
     }, builtinRules)
     expect(type).toBe('prometheus')
@@ -73,7 +73,7 @@ describe('labels and charts as signals', () => {
 
   it('chart label alone can carry the classification', () => {
     const type = classifySignals({
-      images: ['harbor.cnzbai.com/mirror/a1b2c3:latest'],
+      images: ['registry.example.com/mirror/a1b2c3:latest'],
       labels: { 'helm.sh/chart': 'redis-19.6.0' },
     }, builtinRules)
     expect(type).toBe('redis')
@@ -82,7 +82,7 @@ describe('labels and charts as signals', () => {
 
 describe('unknown bucket', () => {
   it('an in-house app image without labels is unknown, not dropped', () => {
-    expect(byImage('harbor.cnzbai.com/baizeops/user-service:1.4.2')).toBe('unknown')
+    expect(byImage('registry.example.com/acme/user-service:1.4.2')).toBe('unknown')
   })
 })
 
@@ -95,9 +95,9 @@ describe('user rules file', () => {
   }
 
   it('appends rules: an in-house app becomes classifiable', () => {
-    const file = rulesFile('rules:\n  - pattern: "baizeops/user-service"\n    type: app\n')
+    const file = rulesFile('rules:\n  - pattern: "acme/user-service"\n    type: app\n')
     const type = classifyWorkload(
-      { images: ['harbor.cnzbai.com/baizeops/user-service:1.4.2'], labels: {} },
+      { images: ['registry.example.com/acme/user-service:1.4.2'], labels: {} },
       { userRulesFile: file },
     )
     expect(type).toBe('app')
@@ -127,11 +127,11 @@ describe('user rules file', () => {
       '  - pattern: "ok"',
       '  - pattern: "([bad"',
       '    type: app',
-      '  - pattern: "harbor.cnzbai.com/baizeops"',
+      '  - pattern: "registry.example.com/acme"',
       '    type: app',
     ].join('\n'))
     const rules = loadUserRules(file)
-    expect(rules).toEqual([{ pattern: 'harbor.cnzbai.com/baizeops', type: 'app' }])
+    expect(rules).toEqual([{ pattern: 'registry.example.com/acme', type: 'app' }])
   })
 
   it('expands ~ in the rules file path', () => {

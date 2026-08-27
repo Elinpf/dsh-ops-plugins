@@ -71,4 +71,19 @@ When a cluster has a discoverable Prometheus service (monitoring
 namespace, port 9090), entries carry monitoring: { up, down } counts
 scraped from /api/v1/targets over a short-lived kubectl port-forward.
 A down count means Prometheus sees the instance failing — investigate
-those first. Clusters without Prometheus simply have no monitoring data.`
+those first. Clusters without Prometheus simply have no monitoring data.
+
+## Anomalies
+
+Each cluster section carries rule-detected anomalies (generic k8s
+semantics only, zero LLM):
+
+- cross-namespace-ref (info) — a workload references a Service in a
+  DIFFERENT namespace. Often legitimate for shared infrastructure, but a
+  prime suspect when an environment behaves like another one (e.g. a
+  test environment pointing at another namespace's database).
+- service-no-backend (warning) — a Service has a pod selector but its
+  Endpoints have zero ready addresses: nothing answers on it.
+
+overview lists all anomalies in one section; show annotates the involved
+entries in place with [!].`

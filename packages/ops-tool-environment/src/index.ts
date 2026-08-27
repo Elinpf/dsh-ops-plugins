@@ -46,6 +46,7 @@ export function apply(ctx: Context, config: EnvironmentToolConfig): void {
 // ── Scanner-core re-exports (ticket 01 API surface) ─────────────────────────
 
 export type {
+  Anomaly,
   ClassifiedWorkload,
   ClusterInventory,
   ClusterScan,
@@ -55,6 +56,7 @@ export type {
   RelationEdge,
   ResourceRef,
   ScannedConfigMap,
+  ScannedEndpoints,
   ScannedIngress,
   ScannedSecret,
   ScannedService,
@@ -84,6 +86,9 @@ export type { ExecFn, ScanClusterInput } from './scanner.js'
 export { buildRelations, findServiceAddresses } from './relations.js'
 export type { BuildRelationsInput } from './relations.js'
 
+export { detectAnomalies } from './anomalies.js'
+export type { DetectAnomaliesInput } from './anomalies.js'
+
 export {
   findPrometheusService,
   matchTargetsToWorkloads,
@@ -109,10 +114,12 @@ export { createEnvironmentTool, filterDetail } from './tool.js'
 export type {
   ClusterDetail,
   ClusterSummary,
+  DisplayAnomaly,
   DisplayEdge,
   EnvironmentToolConfig,
   EnvironmentToolDeps,
   EnvironmentToolResult,
+  OverviewAnomaly,
   RefreshResultEntry,
   ShowFilter,
   UnknownWorkload,

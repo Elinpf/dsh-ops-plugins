@@ -11,34 +11,35 @@ import type { EnvironmentInventory, InventorySection } from '../src/inventory.js
 import { HELP_TEXT } from '../src/doctrine.js'
 
 const NOW = Date.parse('2026-08-27T12:00:00Z')
-const KUBECONFIG = '/home/tester/.dsh-ops/credentials/k8s/pf-test/ro/kubeconfig'
+const KUBECONFIG = '/home/tester/.dsh-ops/credentials/k8s/test/ro/kubeconfig'
 
 function section(overrides: Partial<InventorySection> = {}): InventorySection {
   return {
     scannedAt: '2026-08-27T11:30:00.000Z', // 30m old — fresh under the 60m TTL
     middleware: [
       {
-        type: 'postgres', namespace: 'baizeops', workload: 'postgres',
-        workloadKind: 'StatefulSet', images: ['harbor.cnzbai.com/middleware/postgres:16.2'],
+        type: 'postgres', namespace: 'acme', workload: 'postgres',
+        workloadKind: 'StatefulSet', images: ['registry.example.com/middleware/postgres:16.2'],
         serviceEntries: ['postgres'],
       },
     ],
     workloads: [
       {
-        kind: 'Deployment', namespace: 'baizeops', name: 'user-service',
-        images: ['harbor.cnzbai.com/baizeops/user-service:1.4.2'],
+        kind: 'Deployment', namespace: 'acme', name: 'user-service',
+        images: ['registry.example.com/acme/user-service:1.4.2'],
         labels: {}, podLabels: { app: 'user-service' }, env: {},
-        configMapRefs: ['baizeops-config'], secretRefs: ['baizeops-secret'], type: 'unknown',
+        configMapRefs: ['acme-config'], secretRefs: ['acme-secret'], type: 'unknown',
       },
     ],
     services: [],
     ingresses: [],
+    anomalies: [],
     edges: [
       {
         kind: 'uses-middleware',
-        from: { kind: 'Deployment', namespace: 'baizeops', name: 'user-service' },
-        to: { kind: 'StatefulSet', namespace: 'baizeops', name: 'postgres' },
-        via: 'configmap:baizeops-config:PG_HOST',
+        from: { kind: 'Deployment', namespace: 'acme', name: 'user-service' },
+        to: { kind: 'StatefulSet', namespace: 'acme', name: 'postgres' },
+        via: 'configmap:acme-config:PG_HOST',
         targetType: 'postgres',
       },
     ],
@@ -61,7 +62,7 @@ interface SetupOpts {
 
 function setup(opts: SetupOpts = {}) {
   const calls = { read: 0, refresh: 0, resolve: 0 }
-  let stored = opts.inventory === undefined ? inventory({ 'pf-test': section() }) : opts.inventory
+  let stored = opts.inventory === undefined ? inventory({ 'test': section() }) : opts.inventory
   const refreshTargets: Array<{ cluster: string, kubeconfigPath: string }> = []
 
   const deps: EnvironmentToolDeps = {
@@ -87,7 +88,7 @@ function setup(opts: SetupOpts = {}) {
   }
 
   const opsAccess = {
-    listAll: async () => (opts.k8sEntries ?? [{ name: 'pf-test' }]).map(e => ({
+    listAll: async () => (opts.k8sEntries ?? [{ name: 'test' }]).map(e => ({
       kind: 'k8s', name: e.name, envelope: {},
       tiers: { ro: { ok: e.roOk ?? true }, rw: { ok: false } },
     })),
@@ -139,17 +140,17 @@ describe('environment tool', () => {
     expect(calls.refresh).toBe(0)
     expect(value.totalClusters).toBe(1)
     expect(value.clusters[0]).toMatchObject({
-      name: 'pf-test', stale: false, middleware: 1, unknown: 1,
+      name: 'test', stale: false, middleware: 1, unknown: 1,
       byType: [{ type: 'postgres', count: 1 }],
     })
   })
 
   it('show returns middleware, unknown bucket, and edges for a known cluster', async () => {
     const { tool } = setup()
-    const value = await tool.execute({ action: 'show', cluster: 'pf-test' }, exec())
-    expect(value.cluster.name).toBe('pf-test')
+    const value = await tool.execute({ action: 'show', cluster: 'test' }, exec())
+    expect(value.cluster.name).toBe('test')
     expect(value.cluster.middleware[0]).toMatchObject({ type: 'postgres', serviceEntries: ['postgres'] })
-    expect(value.cluster.unknown[0]).toMatchObject({ name: 'user-service', namespace: 'baizeops' })
+    expect(value.cluster.unknown[0]).toMatchObject({ name: 'user-service', namespace: 'acme' })
     expect(value.cluster.edges[0]).toMatchObject({ kind: 'uses-middleware', targetType: 'postgres' })
   })
 
@@ -159,7 +160,7 @@ describe('environment tool', () => {
     expect(missing.error).toContain('requires the cluster parameter')
     const unknown = await tool.execute({ action: 'show', cluster: 'nope' }, exec())
     expect(unknown.error).toContain('unknown cluster "nope"')
-    expect(unknown.error).toContain('pf-test')
+    expect(unknown.error).toContain('test')
   })
 })
 
@@ -173,7 +174,7 @@ describe('TTL gate', () => {
 
   it('a section older than the TTL triggers a refresh', async () => {
     const { tool, calls } = setup({
-      inventory: inventory({ 'pf-test': section({ scannedAt: '2026-08-27T10:00:00.000Z' }) }), // 2h old
+      inventory: inventory({ 'test': section({ scannedAt: '2026-08-27T10:00:00.000Z' }) }), // 2h old
     })
     await tool.execute({ action: 'overview' }, exec())
     expect(calls.refresh).toBe(1)
@@ -181,7 +182,7 @@ describe('TTL gate', () => {
 
   it('a stale-marked but young section does NOT trigger a refresh', async () => {
     const { tool, calls } = setup({
-      inventory: inventory({ 'pf-test': section({ stale: true, lastError: 'boom' }) }),
+      inventory: inventory({ 'test': section({ stale: true, lastError: 'boom' }) }),
     })
     const value = await tool.execute({ action: 'overview' }, exec())
     expect(calls.refresh).toBe(0)
@@ -200,16 +201,16 @@ describe('TTL gate', () => {
 describe('refresh action', () => {
   it('resolves every k8s entry agent-less (broker falls back to ro) and reports per cluster', async () => {
     const { tool, calls, refreshTargets } = setup({
-      k8sEntries: [{ name: 'pf-test' }, { name: 'broken' }],
+      k8sEntries: [{ name: 'test' }, { name: 'broken' }],
     })
     const value = await tool.execute({ action: 'refresh' }, exec())
     expect(calls.resolve).toBe(2)
     expect(refreshTargets).toEqual([
-      { cluster: 'pf-test', kubeconfigPath: KUBECONFIG },
+      { cluster: 'test', kubeconfigPath: KUBECONFIG },
       { cluster: 'broken', kubeconfigPath: '/x/broken/kubeconfig' },
     ])
     const byCluster = Object.fromEntries(value.results.map((r: any) => [r.cluster, r]))
-    expect(byCluster['pf-test']).toMatchObject({ status: 'ok', middleware: 1, unknown: 1 })
+    expect(byCluster['test']).toMatchObject({ status: 'ok', middleware: 1, unknown: 1 })
     expect(byCluster['broken']).toMatchObject({ status: 'stale' })
   })
 
@@ -230,8 +231,8 @@ describe('refresh action', () => {
   })
 
   it('no kubeconfig path appears anywhere in tool output', async () => {
-    const { tool } = setup({ k8sEntries: [{ name: 'pf-test' }, { name: 'broken' }] })
-    for (const args of [{ action: 'refresh' }, { action: 'overview' }, { action: 'show', cluster: 'pf-test' }]) {
+    const { tool } = setup({ k8sEntries: [{ name: 'test' }, { name: 'broken' }] })
+    for (const args of [{ action: 'refresh' }, { action: 'overview' }, { action: 'show', cluster: 'test' }]) {
       const value = await tool.execute(args, exec())
       expect(JSON.stringify(value)).not.toContain(KUBECONFIG)
       expect(JSON.stringify(value)).not.toContain('/x/broken/kubeconfig')
@@ -245,24 +246,24 @@ describe('render', () => {
   it('renders overview compactly with stale markers', async () => {
     const { tool } = setup({
       inventory: inventory({
-        'pf-test': section(),
+        'test': section(),
         'down': section({ middleware: [], workloads: [], stale: true, lastError: 'connection refused' }),
       }),
     })
     const value = await tool.execute({ action: 'overview' }, exec())
     const text = tool.output.render({ action: 'overview' }, value).map((b: any) => b.text).join('\n')
     expect(text).toContain('2 cluster(s)')
-    expect(text).toContain('pf-test: 1 middleware (postgres×1), 1 unknown')
+    expect(text).toContain('test: 1 middleware (postgres×1), 1 unknown')
     expect(text).toContain('down: 0 middleware (none), 0 unknown')
     expect(text).toContain('[STALE]')
     expect(text).toContain('connection refused')
   })
 
   it('renders refresh results with per-cluster status', async () => {
-    const { tool } = setup({ k8sEntries: [{ name: 'pf-test' }, { name: 'broken' }] })
+    const { tool } = setup({ k8sEntries: [{ name: 'test' }, { name: 'broken' }] })
     const value = await tool.execute({ action: 'refresh' }, exec())
     const text = tool.output.render({ action: 'refresh' }, value).map((b: any) => b.text).join('\n')
-    expect(text).toContain('pf-test: ok (1 middleware, 1 unknown)')
+    expect(text).toContain('test: ok (1 middleware, 1 unknown)')
     expect(text).toContain('broken: FAILED — kept previous data (stale)')
   })
 
@@ -270,37 +271,37 @@ describe('render', () => {
     const monitored = section({
       prometheusService: 'monitoring/prometheus',
       middleware: [{
-        type: 'redis', namespace: 'baizeops', workload: 'redis', workloadKind: 'StatefulSet',
-        images: ['harbor.cnzbai.com/middleware/redis:7.2'], serviceEntries: ['redis'],
+        type: 'redis', namespace: 'acme', workload: 'redis', workloadKind: 'StatefulSet',
+        images: ['registry.example.com/middleware/redis:7.2'], serviceEntries: ['redis'],
         monitoring: { up: 1, down: 1 },
       }],
       workloads: [
         {
-          kind: 'StatefulSet', namespace: 'baizeops', name: 'redis',
-          images: ['harbor.cnzbai.com/middleware/redis:7.2'],
+          kind: 'StatefulSet', namespace: 'acme', name: 'redis',
+          images: ['registry.example.com/middleware/redis:7.2'],
           labels: {}, podLabels: { app: 'redis' }, env: {},
           configMapRefs: [], secretRefs: [], type: 'redis',
           monitoring: { up: 1, down: 1 },
         },
         {
-          kind: 'Deployment', namespace: 'baizeops', name: 'user-service',
-          images: ['harbor.cnzbai.com/baizeops/user-service:1.4.2'],
+          kind: 'Deployment', namespace: 'acme', name: 'user-service',
+          images: ['registry.example.com/acme/user-service:1.4.2'],
           labels: {}, podLabels: { app: 'user-service' }, env: {},
           configMapRefs: [], secretRefs: [], type: 'unknown',
           monitoring: { up: 1, down: 0 },
         },
       ],
     })
-    const { tool } = setup({ inventory: inventory({ 'pf-test': monitored }) })
+    const { tool } = setup({ inventory: inventory({ 'test': monitored }) })
 
     const overview = await tool.execute({ action: 'overview' }, exec())
     expect(overview.clusters[0].down).toBe(1)
     const overviewText = tool.output.render({ action: 'overview' }, overview).map((b: any) => b.text).join('\n')
     expect(overviewText).toContain('PROMETHEUS DOWN: 1')
 
-    const show = await tool.execute({ action: 'show', cluster: 'pf-test' }, exec())
+    const show = await tool.execute({ action: 'show', cluster: 'test' }, exec())
     expect(show.cluster.prometheusService).toBe('monitoring/prometheus')
-    const showText = tool.output.render({ action: 'show', cluster: 'pf-test' }, show).map((b: any) => b.text).join('\n')
+    const showText = tool.output.render({ action: 'show', cluster: 'test' }, show).map((b: any) => b.text).join('\n')
     expect(showText).toContain('prometheus: monitoring/prometheus')
     expect(showText).toContain('prometheus: up 1 [DOWN 1]')
     expect(showText).toContain('prometheus: up 1')
@@ -312,26 +313,27 @@ describe('render', () => {
 /** A two-namespace detail used by the filter tests. */
 function richDetail(): ClusterDetail {
   return {
-    name: 'pf-test',
+    name: 'test',
     scannedAt: '2026-08-27T11:30:00.000Z',
     stale: false,
     middleware: [
-      { type: 'postgres', namespace: 'baizeops', workload: 'postgres', workloadKind: 'StatefulSet', images: ['postgres:16'], serviceEntries: ['postgres'] },
+      { type: 'postgres', namespace: 'acme', workload: 'postgres', workloadKind: 'StatefulSet', images: ['postgres:16'], serviceEntries: ['postgres'] },
       { type: 'prometheus', namespace: 'monitoring', workload: 'prometheus', workloadKind: 'StatefulSet', images: ['prom:v2'], serviceEntries: ['prometheus'] },
     ],
     unknown: [
-      { name: 'user-service', namespace: 'baizeops', kind: 'Deployment', images: ['harbor.cnzbai.com/baizeops/user-service:1.4.2'] },
-      { name: 'mystery', namespace: 'monitoring', kind: 'Deployment', images: ['harbor.cnzbai.com/baizeops/mystery:0.1'] },
+      { name: 'user-service', namespace: 'acme', kind: 'Deployment', images: ['registry.example.com/acme/user-service:1.4.2'] },
+      { name: 'mystery', namespace: 'monitoring', kind: 'Deployment', images: ['registry.example.com/acme/mystery:0.1'] },
     ],
     edges: [
-      // app in baizeops uses postgres — survives a baizeops filter
-      { kind: 'uses-middleware', from: { kind: 'Deployment', namespace: 'baizeops', name: 'user-service' }, to: { kind: 'StatefulSet', namespace: 'baizeops', name: 'postgres' }, via: 'env:PG_HOST', targetType: 'postgres' },
+      // app in acme uses postgres — survives a acme filter
+      { kind: 'uses-middleware', from: { kind: 'Deployment', namespace: 'acme', name: 'user-service' }, to: { kind: 'StatefulSet', namespace: 'acme', name: 'postgres' }, via: 'env:PG_HOST', targetType: 'postgres' },
       // fronts: from is the Service, the workload endpoint is `to`
-      { kind: 'fronts', from: { kind: 'Service', namespace: 'baizeops', name: 'postgres' }, to: { kind: 'StatefulSet', namespace: 'baizeops', name: 'postgres' }, via: 'selector' },
+      { kind: 'fronts', from: { kind: 'Service', namespace: 'acme', name: 'postgres' }, to: { kind: 'StatefulSet', namespace: 'acme', name: 'postgres' }, via: 'selector' },
       { kind: 'fronts', from: { kind: 'Service', namespace: 'monitoring', name: 'prometheus' }, to: { kind: 'StatefulSet', namespace: 'monitoring', name: 'prometheus' }, via: 'selector' },
-      // cross-namespace edge whose workload end is filtered out by ns=baizeops
-      { kind: 'uses-middleware', from: { kind: 'Deployment', namespace: 'monitoring', name: 'mystery' }, to: { kind: 'StatefulSet', namespace: 'baizeops', name: 'postgres' }, via: 'env:X', targetType: 'postgres' },
+      // cross-namespace edge whose workload end is filtered out by ns=acme
+      { kind: 'uses-middleware', from: { kind: 'Deployment', namespace: 'monitoring', name: 'mystery' }, to: { kind: 'StatefulSet', namespace: 'acme', name: 'postgres' }, via: 'env:X', targetType: 'postgres' },
     ],
+    anomalies: [],
     counts: { services: 4, ingresses: 1, workloads: 6 },
   }
 }
@@ -343,15 +345,15 @@ describe('show filters', () => {
   })
 
   it('namespace filter narrows middleware, unknown bucket, and edges', () => {
-    const filtered = filterDetail(richDetail(), { namespace: 'baizeops' })
+    const filtered = filterDetail(richDetail(), { namespace: 'acme' })
     expect(filtered.middleware.map(m => m.workload)).toEqual(['postgres'])
     expect(filtered.unknown.map(u => u.name)).toEqual(['user-service'])
     const edgeIds = filtered.edges.map(e => `${e.kind}:${e.from.namespace}/${e.from.name}→${e.to.namespace}/${e.to.name}`)
     // user-service → postgres kept (from in set); postgres fronts kept (to in set);
     // prometheus fronts and the monitoring-originated edge dropped.
     expect(edgeIds).toEqual([
-      'uses-middleware:baizeops/user-service→baizeops/postgres',
-      'fronts:baizeops/postgres→baizeops/postgres',
+      'uses-middleware:acme/user-service→acme/postgres',
+      'fronts:acme/postgres→acme/postgres',
     ])
   })
 
@@ -381,38 +383,92 @@ describe('show filters', () => {
   it('the tool applies filters end-to-end and render echoes them', async () => {
     const { tool } = setup({
       inventory: inventory({
-        'pf-test': section({
+        'test': section({
           middleware: richDetail().middleware,
           edges: richDetail().edges as any,
           workloads: [
             {
-              kind: 'Deployment', namespace: 'baizeops', name: 'user-service',
-              images: ['harbor.cnzbai.com/baizeops/user-service:1.4.2'],
+              kind: 'Deployment', namespace: 'acme', name: 'user-service',
+              images: ['registry.example.com/acme/user-service:1.4.2'],
               labels: {}, podLabels: {}, env: {}, configMapRefs: [], secretRefs: [], type: 'unknown',
             },
             {
               kind: 'Deployment', namespace: 'monitoring', name: 'mystery',
-              images: ['harbor.cnzbai.com/baizeops/mystery:0.1'],
+              images: ['registry.example.com/acme/mystery:0.1'],
               labels: {}, podLabels: {}, env: {}, configMapRefs: [], secretRefs: [], type: 'unknown',
             },
           ],
         }),
       }),
     })
-    const value = await tool.execute({ action: 'show', cluster: 'pf-test', namespace: 'baizeops' }, exec())
+    const value = await tool.execute({ action: 'show', cluster: 'test', namespace: 'acme' }, exec())
     expect(value.cluster.middleware.map((m: any) => m.workload)).toEqual(['postgres'])
     expect(value.cluster.unknown.map((u: any) => u.name)).toEqual(['user-service'])
     expect(value.cluster.edges).toHaveLength(2)
-    const text = tool.output.render({ action: 'show', cluster: 'pf-test', namespace: 'baizeops' }, value).map((b: any) => b.text).join('\n')
-    expect(text).toContain('filtered by namespace=baizeops')
+    const text = tool.output.render({ action: 'show', cluster: 'test', namespace: 'acme' }, value).map((b: any) => b.text).join('\n')
+    expect(text).toContain('filtered by namespace=acme')
   })
 
   it('unfiltered show output is byte-identical to before (render carries no filter line)', async () => {
     const { tool } = setup()
-    const value = await tool.execute({ action: 'show', cluster: 'pf-test' }, exec())
-    const text = tool.output.render({ action: 'show', cluster: 'pf-test' }, value).map((b: any) => b.text).join('\n')
+    const value = await tool.execute({ action: 'show', cluster: 'test' }, exec())
+    const text = tool.output.render({ action: 'show', cluster: 'test' }, value).map((b: any) => b.text).join('\n')
     expect(text).not.toContain('filtered by')
     expect(value.cluster.middleware).toHaveLength(1)
     expect(value.cluster.edges).toHaveLength(1)
+  })
+})
+
+describe('anomalies surfacing', () => {
+  const anomalySection = () => section({
+    anomalies: [{
+      kind: 'cross-namespace-ref',
+      severity: 'info',
+      ref: { kind: 'Deployment', namespace: 'acme', name: 'user-service' },
+      related: { kind: 'Service', namespace: 'data', name: 'postgresql' },
+      message: 'acme/user-service references Service data/postgresql across namespaces',
+    }],
+  })
+
+  it('overview lists anomalies in their own section, only when present', async () => {
+    const withAnomaly = setup({ inventory: inventory({ 'test': anomalySection() }) })
+    const value = await withAnomaly.tool.execute({ action: 'overview' }, exec())
+    expect(value.clusters[0].anomalies).toBe(1)
+    const text = withAnomaly.tool.output.render({ action: 'overview' }, value).map((b: any) => b.text).join('\n')
+    expect(text).toContain('Anomalies:')
+    expect(text).toContain('[info] test: acme/user-service references Service data/postgresql across namespaces')
+    expect(text).toContain('1 anomalies')
+
+    const clean = setup()
+    const cleanValue = await clean.tool.execute({ action: 'overview' }, exec())
+    const cleanText = clean.tool.output.render({ action: 'overview' }, cleanValue).map((b: any) => b.text).join('\n')
+    expect(cleanText).not.toContain('Anomalies:')
+    expect(cleanValue.anomalies).toBeUndefined()
+  })
+
+  it('show annotates the involved workload in place', async () => {
+    const { tool } = setup({ inventory: inventory({ 'test': anomalySection() }) })
+    const value = await tool.execute({ action: 'show', cluster: 'test' }, exec())
+    expect(value.cluster.anomalies).toHaveLength(1)
+    const text = tool.output.render({ action: 'show', cluster: 'test' }, value).map((b: any) => b.text).join('\n')
+    expect(text).toContain('[!] acme/user-service references Service data/postgresql across namespaces')
+  })
+
+  it('service-no-backend anomalies annotate the middleware they front', async () => {
+    const svcAnomaly = section({
+      anomalies: [{
+        kind: 'service-no-backend',
+        severity: 'warning',
+        ref: { kind: 'Service', namespace: 'acme', name: 'postgres' },
+        message: 'Service acme/postgres has a selector but no ready endpoints (no backend pods)',
+      }],
+    })
+    const { tool } = setup({ inventory: inventory({ 'test': svcAnomaly }) })
+    const value = await tool.execute({ action: 'show', cluster: 'test' }, exec())
+    const text = tool.output.render({ action: 'show', cluster: 'test' }, value).map((b: any) => b.text).join('\n')
+    // postgres middleware has serviceEntries ['postgres'] — the warning lands on its line.
+    const pgLine = text.split('\n').find(l => l.includes('postgres · acme/postgres'))!
+    expect(pgLine).toContain('[!]')
+    expect(pgLine).toContain('no ready endpoints')
   })
 })

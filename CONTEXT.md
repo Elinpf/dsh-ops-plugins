@@ -119,6 +119,10 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 
 盘点时尝试发现集群内 Prometheus service，经 `kubectl port-forward` 读 targets API，把 up/down 附到清单条目上，与 k8s 数据互相印证。找不到就跳过，是增强项不是硬依赖。agent 主动加监控点位是后续方向，不在本期。
 
+### 异常标注 (anomaly)
+
+清单段的规则检测异常（`src/anomalies.ts`，纯 k8s 通用语义零 LLM）：`cross-namespace-ref`（工作负载引用别的命名空间的 Service，info 级）和 `service-no-backend`（Service 有 selector 但 Endpoints 零就绪地址，warning 级——endpoints 是权威答案，不从 fronts 边反推）。overview 单列一节，show 就地标注。规则代码禁止出现任何环境特定名字，通用性由合成陌生环境夹具（tests/fixtures/shop-cluster）证明。
+
 ## 调查树 (Investigation Tree)
 
 ### 树 (Tree) 与 森林 (Forest)
@@ -163,7 +167,7 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 - **complete / resolve（带 summary）= 证实、正面关闭**：记录结论。两者等价——resolve 是领域语言直觉（"resolve 一个假设"），complete 保留为别名；打在任意非 goal 节点上都只关闭该节点
 - **abandon = 证伪**：死路留在树上
 - **start / reopen**：进入 / 回到进行中
-- **resolve 打在 goal 上 = 全案收口**：只调一次，标记最终目标达成，树转入历史。只有这一发会置树级 `resolved` 标志（活跃树判定的唯一依据）
+- **resolve 打在 goal 上 = 全案收口**：只调一次，标记最终目标达成，树转入历史。**硬门槛**：所有非根节点必须先定论（done/dead_end），否则拒绝并列出未定论节点，引导先 complete/abandon；`force: true` 是「调查中途放弃」的显式逃生口（维持 WARN 放行）。约束只放在 goal 收口这一处——step complete 时不做任何「提示收口 milestone」的逻辑，避免早收口压力抑制下钻。只有这一发会置树级 `resolved` 标志（活跃树判定的唯一依据）
 
 ### detail 与 summary 的分工
 

@@ -5,10 +5,10 @@
     {
       "apiVersion": "v1",
       "kind": "Service",
-      "metadata": { "name": "postgres", "namespace": "baizeops", "labels": { "app": "postgres" } },
+      "metadata": { "name": "postgres", "namespace": "acme", "labels": { "app": "postgres" } },
       "spec": {
         "type": "ClusterIP",
-        "clusterIP": "10.96.10.20",
+        "clusterIP": "192.0.2.20",
         "selector": { "app": "postgres" },
         "ports": [ { "name": "tcp", "port": 5432, "targetPort": 5432 } ]
       }
@@ -16,10 +16,10 @@
     {
       "apiVersion": "v1",
       "kind": "Service",
-      "metadata": { "name": "redis", "namespace": "baizeops", "labels": { "app": "redis" } },
+      "metadata": { "name": "redis", "namespace": "acme", "labels": { "app": "redis" } },
       "spec": {
         "type": "ClusterIP",
-        "clusterIP": "10.96.10.21",
+        "clusterIP": "192.0.2.21",
         "selector": { "app": "redis" },
         "ports": [ { "name": "redis", "port": 6379, "targetPort": 6379 } ]
       }
@@ -27,10 +27,10 @@
     {
       "apiVersion": "v1",
       "kind": "Service",
-      "metadata": { "name": "user-service", "namespace": "baizeops" },
+      "metadata": { "name": "user-service", "namespace": "acme" },
       "spec": {
         "type": "ClusterIP",
-        "clusterIP": "10.96.10.30",
+        "clusterIP": "192.0.2.30",
         "selector": { "app": "user-service" },
         "ports": [ { "port": 8080, "targetPort": 8080 } ]
       }
@@ -41,7 +41,7 @@
       "metadata": { "name": "prometheus", "namespace": "monitoring" },
       "spec": {
         "type": "ClusterIP",
-        "clusterIP": "10.96.20.10",
+        "clusterIP": "192.0.2.40",
         "selector": {
           "app.kubernetes.io/name": "prometheus",
           "app.kubernetes.io/instance": "kube-prometheus"
@@ -52,7 +52,7 @@
     {
       "apiVersion": "v1",
       "kind": "Service",
-      "metadata": { "name": "legacy-erp", "namespace": "baizeops" },
+      "metadata": { "name": "legacy-erp", "namespace": "acme" },
       "spec": {
         "type": "ExternalName",
         "externalName": "erp.corp.internal",
@@ -65,7 +65,7 @@
       "metadata": { "name": "kube-dns", "namespace": "kube-system", "labels": { "k8s-app": "kube-dns" } },
       "spec": {
         "type": "ClusterIP",
-        "clusterIP": "10.96.0.10",
+        "clusterIP": "192.0.2.10",
         "selector": { "k8s-app": "kube-dns" },
         "ports": [ { "name": "dns", "port": 53, "targetPort": 53 } ]
       }

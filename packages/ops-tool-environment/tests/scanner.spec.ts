@@ -1,5 +1,5 @@
 /**
- * scanner spec: scanCluster against the recorded pf-test-cluster fixtures
+ * scanner spec: scanCluster against the recorded test-cluster fixtures
  * through a fake exec, covering reduction shape, the secrets metadata-only
  * discipline, error scrubbing, and the default spawn-based runner.
  */
@@ -12,14 +12,14 @@ describe('scanCluster', () => {
   it('reduces workloads/services/ingresses/configmaps from recorded responses', async () => {
     const { exec, calls } = fakeExec()
     const scan = await scanCluster({
-      cluster: 'pf-test',
+      cluster: 'test',
       kubeconfigPath: FAKE_KUBECONFIG,
       exec,
       spawn: failSpawn,
       now: new Date('2026-08-27T00:00:00Z'),
     })
 
-    expect(scan.cluster).toBe('pf-test')
+    expect(scan.cluster).toBe('test')
     expect(scan.scannedAt).toBe('2026-08-27T00:00:00.000Z')
     expect(scan.workloads).toHaveLength(7)
     expect(scan.services).toHaveLength(6)
@@ -37,24 +37,24 @@ describe('scanCluster', () => {
 
   it('captures literal env values and reference names, but never valueFrom values', async () => {
     const { exec } = fakeExec()
-    const scan = await scanCluster({ cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn: failSpawn })
+    const scan = await scanCluster({ cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn: failSpawn })
 
     const userService = scan.workloads.find(w => w.name === 'user-service')!
-    expect(userService.env).toEqual({ REDIS_ADDR: 'redis.baizeops.svc.cluster.local:6379' })
-    expect(userService.configMapRefs).toEqual(['baizeops-config'])
-    expect(userService.secretRefs).toEqual(['baizeops-secret'])
-    expect(userService.images).toEqual(['harbor.cnzbai.com/baizeops/user-service:1.4.2'])
+    expect(userService.env).toEqual({ REDIS_ADDR: 'redis.acme.svc.cluster.local:6379' })
+    expect(userService.configMapRefs).toEqual(['acme-config'])
+    expect(userService.secretRefs).toEqual(['acme-secret'])
+    expect(userService.images).toEqual(['registry.example.com/acme/user-service:1.4.2'])
     expect(userService.podLabels).toEqual({ app: 'user-service' })
 
     const gateway = scan.workloads.find(w => w.name === 'gateway')!
     expect(gateway.env).toEqual({}) // both envs are valueFrom — no literal values
-    expect(gateway.configMapRefs).toEqual(['baizeops-config'])
-    expect(gateway.secretRefs).toEqual(['baizeops-secret'])
+    expect(gateway.configMapRefs).toEqual(['acme-config'])
+    expect(gateway.secretRefs).toEqual(['acme-secret'])
   })
 
   it('reads Secrets metadata-only via jsonpath — data is never requested', async () => {
     const { exec, calls } = fakeExec()
-    const scan = await scanCluster({ cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn: failSpawn })
+    const scan = await scanCluster({ cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn: failSpawn })
 
     const secretsCall = calls.find(c => c.args.includes('secrets'))!
     const outputArg = secretsCall.args.find(a => a.startsWith('jsonpath=') || a === 'json')
@@ -67,8 +67,8 @@ describe('scanCluster', () => {
     expect(outputArg).not.toContain('stringData')
 
     expect(scan.secrets).toEqual([
-      { namespace: 'baizeops', name: 'baizeops-secret' },
-      { namespace: 'baizeops', name: 'postgres-auth' },
+      { namespace: 'acme', name: 'acme-secret' },
+      { namespace: 'acme', name: 'postgres-auth' },
       { namespace: 'monitoring', name: 'prometheus-token-x1v2c' },
     ])
     // No Secret data shape anywhere in the scan output.
@@ -78,7 +78,7 @@ describe('scanCluster', () => {
 
   it('parses ingress hosts and service backends', async () => {
     const { exec } = fakeExec()
-    const scan = await scanCluster({ cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn: failSpawn })
+    const scan = await scanCluster({ cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn: failSpawn })
     const ingress = scan.ingresses[0]
     expect(ingress.hosts).toEqual(['ops.example.com'])
     expect(ingress.serviceBackends).toEqual([
@@ -89,20 +89,20 @@ describe('scanCluster', () => {
 
   it('kubectl failure rejects with ScanError — kubeconfig path scrubbed', async () => {
     const { exec } = fakeExec({ failFor: ['services'] })
-    await expect(scanCluster({ cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn: failSpawn }))
+    await expect(scanCluster({ cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn: failSpawn }))
       .rejects.toSatisfy((err: unknown) => {
         expect(err).toBeInstanceOf(ScanError)
         const message = (err as Error).message
         expect(message).toContain('<kubeconfig>')
         expect(message).not.toContain(FAKE_KUBECONFIG)
-        expect((err as ScanError).cluster).toBe('pf-test')
+        expect((err as ScanError).cluster).toBe('test')
         return true
       })
   })
 
   it('cluster unreachable (all calls fail) is a single ScanError, path-scrubbed', async () => {
     const { exec } = fakeExec({ failFor: ['*'] })
-    await expect(scanCluster({ cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn: failSpawn }))
+    await expect(scanCluster({ cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn: failSpawn }))
       .rejects.toSatisfy((err: unknown) => {
         expect(err).toBeInstanceOf(ScanError)
         expect((err as Error).message).not.toContain(FAKE_KUBECONFIG)
@@ -114,7 +114,7 @@ describe('scanCluster', () => {
     const exec = async () => {
       throw new Error(`command timed out after 30000ms (kubeconfig ${FAKE_KUBECONFIG})`)
     }
-    await expect(scanCluster({ cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn: failSpawn }))
+    await expect(scanCluster({ cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn: failSpawn }))
       .rejects.toSatisfy((err: unknown) => {
         expect(err).toBeInstanceOf(ScanError)
         expect((err as Error).message).toContain('timed out')
@@ -129,7 +129,7 @@ describe('scanCluster', () => {
       if (args.includes('services')) return { stdout: '{not json' }
       return exec(args, opts)
     }
-    await expect(scanCluster({ cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG, exec: broken, spawn: failSpawn }))
+    await expect(scanCluster({ cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG, exec: broken, spawn: failSpawn }))
       .rejects.toThrow(ScanError)
   })
 
@@ -137,7 +137,7 @@ describe('scanCluster', () => {
     const { exec } = fakeExec()
     const { spawn } = fakeSpawn({ ready: true })
     const scan = await scanCluster({
-      cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn, fetchFn: fakeFetch,
+      cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn, fetchFn: fakeFetch,
     })
     expect(scan.prometheus?.service).toBe('monitoring/prometheus')
     expect(scan.prometheus?.targets).toHaveLength(9)
@@ -146,7 +146,7 @@ describe('scanCluster', () => {
   it('Prometheus failure never breaks the main scan', async () => {
     const { exec } = fakeExec()
     const scan = await scanCluster({
-      cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG, exec,
+      cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG, exec,
       spawn: failSpawn, // port-forward cannot even start
     })
     expect(scan.prometheus).toBeUndefined()
@@ -157,7 +157,7 @@ describe('scanCluster', () => {
     // The k8s view ClusterRole does not include secrets — the metadata-only
     // read must not fail the whole cluster.
     const { exec } = fakeExec({ failFor: ['secrets'] })
-    const scan = await scanCluster({ cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn: failSpawn })
+    const scan = await scanCluster({ cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn: failSpawn })
     expect(scan.secrets).toEqual([])
     expect(scan.workloads).toHaveLength(7)
   })

@@ -59,7 +59,7 @@ describe('parseActiveTargets', () => {
     const targets = parseActiveTargets(JSON.parse(fixtureText('prometheus-targets.json')))
     expect(targets).toHaveLength(9)
     expect(targets[0]).toEqual({
-      namespace: 'baizeops', pod: 'postgres-0', service: 'postgres',
+      namespace: 'acme', pod: 'postgres-0', service: 'postgres',
       job: 'postgres-exporter', health: 'up',
     })
     expect(targets.find(t => t.pod === 'redis-1')?.health).toBe('down')
@@ -79,28 +79,28 @@ describe('parseActiveTargets', () => {
 
 describe('matchTargetsToWorkloads', () => {
   const workloads = [
-    { namespace: 'baizeops', name: 'postgres' },
-    { namespace: 'baizeops', name: 'redis' },
-    { namespace: 'baizeops', name: 'user-service' },
-    { namespace: 'baizeops', name: 'user' }, // prefix-collision bait
+    { namespace: 'acme', name: 'postgres' },
+    { namespace: 'acme', name: 'redis' },
+    { namespace: 'acme', name: 'user-service' },
+    { namespace: 'acme', name: 'user' }, // prefix-collision bait
     { namespace: 'monitoring', name: 'prometheus' },
   ]
   const targets = parseActiveTargets(JSON.parse(fixtureText('prometheus-targets.json')))
 
   it('matches pods to workloads by namespace + name prefix', () => {
     const statuses = matchTargetsToWorkloads(workloads, targets)
-    expect(statuses.get('baizeops/postgres')).toEqual({ up: 1, down: 0 })
-    expect(statuses.get('baizeops/redis')).toEqual({ up: 1, down: 1 })
+    expect(statuses.get('acme/postgres')).toEqual({ up: 1, down: 0 })
+    expect(statuses.get('acme/redis')).toEqual({ up: 1, down: 1 })
     expect(statuses.get('monitoring/prometheus')).toEqual({ up: 1, down: 0 })
   })
 
   it('the longest name wins prefix collisions; unmatched and pod-less targets drop', () => {
     const statuses = matchTargetsToWorkloads(workloads, targets)
     // user-service-7d9f4c6b5-x1a2b matches BOTH `user-service-` and `user-` prefixes.
-    expect(statuses.get('baizeops/user-service')).toEqual({ up: 1, down: 0 })
-    expect(statuses.get('baizeops/user')).toBeUndefined()
+    expect(statuses.get('acme/user-service')).toEqual({ up: 1, down: 0 })
+    expect(statuses.get('acme/user')).toBeUndefined()
     // ghost-0 matches no workload; the blackbox target has no pod label.
-    expect(statuses.get('baizeops/ghost')).toBeUndefined()
+    expect(statuses.get('acme/ghost')).toBeUndefined()
     expect([...statuses.keys()]).toHaveLength(4)
   })
 })

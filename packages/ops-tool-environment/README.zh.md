@@ -18,6 +18,7 @@ DeepSeek Harness 运维模式的环境清单 —— 只读、纯确定性的盘�
 - **新鲜度** —— 每段带 `scannedAt`；刷新失败保留旧段并标 `stale: true`
 - **unknown 桶** —— 识别不出的工作负载照常列出名称与镜像
 - **Prometheus 印证** —— 集群里有可发现的 Prometheus service（名字含 `prometheus`、带 9090 端口、`monitoring` 命名空间优先）时，经短生命周期 `kubectl port-forward` 读 `/api/v1/targets`，给工作负载附 `monitoring: { up, down }`。此增强任何失败都静默降级——清单段照常写入，不标 stale
+- **异常标注** —— 每段跑两条通用语义检测器：`cross-namespace-ref`（工作负载引用别的命名空间的 Service）和 `service-no-backend`（Service 有 selector 但 Endpoints 零就绪地址——endpoints 是 k8s 自己的权威答案）。overview 单列一节，show 就地标注
 - **用户规则** —— `~/.dsh-ops/environment-rules.yaml` 可追加/覆盖分类规则
 
 ## 安全纪律
@@ -33,6 +34,7 @@ DeepSeek Harness 运维模式的环境清单 —— 只读、纯确定性的盘�
 | `src/scanner.ts` | kubectl 读取 → `ClusterScan`（纯数据，exec 可注入，30s 超时） |
 | `src/classify.ts` | 镜像/chart/label → 中间件类型；内置表 + 用户规则文件 |
 | `src/relations.ts` | 关联边：`uses-service`、`fronts`、`uses-middleware`、`references-secret` |
+| `src/anomalies.ts` | 异常检测器：`cross-namespace-ref`、`service-no-backend`（基于 endpoints） |
 | `src/prometheus.ts` | Prometheus 印证：service 发现、`kubectl port-forward` 生命周期（必然回收）、targets 解析、工作负载匹配 |
 | `src/inventory.ts` | `environment.yaml` 落盘、读接口、refresh + stale 逻辑 |
 | `src/tool.ts` | `environment` 工具工厂（动作、TTL 门、render）；`createEnvironmentTool` 依赖可注入便于测试 |

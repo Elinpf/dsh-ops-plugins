@@ -1,5 +1,5 @@
 /**
- * relations spec: edges derived from the recorded pf-test-cluster scan —
+ * relations spec: edges derived from the recorded test-cluster scan —
  * Service fronts, env/ConfigMap svc addresses, composed uses-middleware
  * edges, and reference-only Secret edges. Best-effort: noise yields nothing.
  */
@@ -14,7 +14,7 @@ import { FAKE_KUBECONFIG, fakeExec, failSpawn } from './helper.ts'
 async function scanAndClassify() {
   const { exec } = fakeExec()
   const scan = await scanCluster({
-    cluster: 'pf-test',
+    cluster: 'test',
     kubeconfigPath: FAKE_KUBECONFIG,
     exec,
     spawn: failSpawn,
@@ -40,14 +40,14 @@ function edgeExists(edges: RelationEdge[], expected: Partial<RelationEdge> & { f
 
 describe('findServiceAddresses', () => {
   it('extracts FQDNs from bare hosts, URLs, and JDBC strings', () => {
-    expect(findServiceAddresses('postgres.baizeops.svc.cluster.local')).toEqual([
-      { name: 'postgres', namespace: 'baizeops' },
+    expect(findServiceAddresses('postgres.acme.svc.cluster.local')).toEqual([
+      { name: 'postgres', namespace: 'acme' },
     ])
-    expect(findServiceAddresses('jdbc:postgresql://postgres.baizeops.svc.cluster.local:5432/report')).toEqual([
-      { name: 'postgres', namespace: 'baizeops' },
+    expect(findServiceAddresses('jdbc:postgresql://postgres.acme.svc.cluster.local:5432/report')).toEqual([
+      { name: 'postgres', namespace: 'acme' },
     ])
-    expect(findServiceAddresses('redis.baizeops.svc:6379')).toEqual([
-      { name: 'redis', namespace: 'baizeops' },
+    expect(findServiceAddresses('redis.acme.svc:6379')).toEqual([
+      { name: 'redis', namespace: 'acme' },
     ])
   })
 
@@ -58,7 +58,7 @@ describe('findServiceAddresses', () => {
   })
 })
 
-describe('buildRelations on the recorded pf-test-cluster scan', () => {
+describe('buildRelations on the recorded test-cluster scan', () => {
   it('fronts edges come from Service selectors matching pod template labels', async () => {
     const { scan, classified } = await scanAndClassify()
     const edges = buildRelations({ scan, classified })
@@ -73,20 +73,20 @@ describe('buildRelations on the recorded pf-test-cluster scan', () => {
   it('uses-service edges come from ConfigMap data and plaintext env values', async () => {
     const { scan, classified } = await scanAndClassify()
     const edges = buildRelations({ scan, classified })
-    // user-service consumes baizeops-config via envFrom -> PG_HOST.
+    // user-service consumes acme-config via envFrom -> PG_HOST.
     expect(edgeExists(edges, {
       kind: 'uses-service', fromName: 'user-service', toName: 'postgres',
-      via: 'configmap:baizeops-config:PG_HOST',
+      via: 'configmap:acme-config:PG_HOST',
     })).toBe(true)
     // ... and points at redis directly via a literal env value.
     expect(edgeExists(edges, {
       kind: 'uses-service', fromName: 'user-service', toName: 'redis',
       via: 'env:REDIS_ADDR',
     })).toBe(true)
-    // gateway reads baizeops-config through a configMapKeyRef -> REPORT_DB JDBC URL.
+    // gateway reads acme-config through a configMapKeyRef -> REPORT_DB JDBC URL.
     expect(edgeExists(edges, {
       kind: 'uses-service', fromName: 'gateway', toName: 'postgres',
-      via: 'configmap:baizeops-config:REPORT_DB',
+      via: 'configmap:acme-config:REPORT_DB',
     })).toBe(true)
   })
 
@@ -109,7 +109,7 @@ describe('buildRelations on the recorded pf-test-cluster scan', () => {
   it('Secret references are name-only edges — no values anywhere', async () => {
     const { scan, classified } = await scanAndClassify()
     const edges = buildRelations({ scan, classified })
-    expect(edgeExists(edges, { kind: 'references-secret', fromName: 'user-service', toName: 'baizeops-secret' })).toBe(true)
+    expect(edgeExists(edges, { kind: 'references-secret', fromName: 'user-service', toName: 'acme-secret' })).toBe(true)
     expect(edgeExists(edges, { kind: 'references-secret', fromName: 'postgres', toName: 'postgres-auth' })).toBe(true)
     const json = JSON.stringify(edges)
     expect(json).not.toContain('DB_PASSWORD')

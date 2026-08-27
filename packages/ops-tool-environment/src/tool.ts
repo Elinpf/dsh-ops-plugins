@@ -29,7 +29,7 @@ import type { OpsAccess } from '@deepseek-ai/dsh-ops-access'
 import { readInventory, refreshInventory } from './inventory.js'
 import { HELP_TEXT, TOOL_DESCRIPTION } from './doctrine.js'
 import type { EnvironmentInventory, InventorySection, RefreshTarget } from './inventory.js'
-import type { MonitoringStatus, RelationEdge } from './types.js'
+import type { Anomaly, MonitoringStatus, RelationEdge, ResourceRef } from './types.js'
 
 const MONITORING_SCHEMA = {
   type: 'object',
@@ -37,6 +37,28 @@ const MONITORING_SCHEMA = {
   properties: {
     up: { type: 'integer', required: true },
     down: { type: 'integer', required: true },
+  },
+} as const
+
+const RESOURCE_REF_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    kind: { type: 'string', required: true },
+    namespace: { type: 'string', required: true },
+    name: { type: 'string', required: true },
+  },
+} as const
+
+const ANOMALY_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    kind: { type: 'string', required: true },
+    severity: { type: 'string', required: true },
+    message: { type: 'string', required: true },
+    ref: { ...RESOURCE_REF_SCHEMA, required: true },
+    related: RESOURCE_REF_SCHEMA,
   },
 } as const
 
@@ -63,6 +85,8 @@ export interface ClusterSummary {
   unknown: number
   /** Prometheus-down target count across workloads (0 when unmonitored/healthy). */
   down: number
+  /** Detected anomaly count. */
+  anomalies: number
   /** Middleware type → instance count. */
   byType: Array<{ type: string, count: number }>
   lastError?: string
@@ -99,7 +123,25 @@ export interface ClusterDetail {
   middleware: InventorySection['middleware']
   unknown: UnknownWorkload[]
   edges: DisplayEdge[]
+  anomalies: DisplayAnomaly[]
   counts: { services: number, ingresses: number, workloads: number }
+}
+
+/** Anomaly as shown to the model: Anomaly with plain-string kind/severity. */
+export interface DisplayAnomaly {
+  kind: string
+  severity: string
+  message: string
+  ref: ResourceRef
+  related?: ResourceRef
+}
+
+/** One anomaly line in overview output. */
+export interface OverviewAnomaly {
+  cluster: string
+  kind: string
+  severity: string
+  message: string
 }
 
 export interface RefreshResultEntry {
@@ -117,6 +159,8 @@ export interface EnvironmentToolResult {
   /** overview */
   totalClusters?: number
   clusters?: ClusterSummary[]
+  /** overview: every detected anomaly across clusters, one line each. */
+  anomalies?: OverviewAnomaly[]
   /** show */
   cluster?: ClusterDetail
   /** refresh */
@@ -147,6 +191,7 @@ function summarize(name: string, section: InventorySection): ClusterSummary {
     middleware: section.middleware.length,
     unknown: section.workloads.filter(w => w.type === 'unknown').length,
     down: section.workloads.reduce((n, w) => n + (w.monitoring?.down ?? 0), 0),
+    anomalies: (section.anomalies ?? []).length,
     byType: [...byTypeMap.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([type, count]) => ({ type, count })),
   }
   if (section.lastError !== undefined) summary.lastError = section.lastError
@@ -167,6 +212,7 @@ function detailOf(name: string, section: InventorySection): ClusterDetail {
         return u
       }),
     edges: section.edges,
+    anomalies: section.anomalies ?? [], // absent in sections written before anomalies existed
     counts: {
       services: section.services.length,
       ingresses: section.ingresses.length,
@@ -211,7 +257,16 @@ export function filterDetail(detail: ClusterDetail, filter: ShowFilter): Cluster
     const wl = e.kind === 'fronts' ? e.to : e.from
     return kept.has(`${wl.namespace}/${wl.name}`)
   })
-  return { ...detail, middleware, unknown, edges }
+  // Anomalies narrow with the lists: workload-subject anomalies follow the
+  // workload filter; Service-subject anomalies survive when a surviving
+  // middleware instance is fronted by that Service.
+  const anomalies = detail.anomalies.filter(a => {
+    if (a.ref.kind === 'Service') {
+      return middleware.some(m => m.namespace === a.ref.namespace && m.serviceEntries.includes(a.ref.name))
+    }
+    return matches(a.ref.namespace, a.ref.name)
+  })
+  return { ...detail, middleware, unknown, edges, anomalies }
 }
 
 // ── The tool factory ─────────────────────────────────────────────────────────
@@ -328,6 +383,19 @@ export function createEnvironmentTool(
           error: { type: 'string' },
           totalClusters: { type: 'integer' },
           refreshedAt: { type: 'string' },
+          anomalies: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                cluster: { type: 'string', required: true },
+                kind: { type: 'string', required: true },
+                severity: { type: 'string', required: true },
+                message: { type: 'string', required: true },
+              },
+            },
+          },
           clusters: {
             type: 'array',
             items: {
@@ -340,6 +408,7 @@ export function createEnvironmentTool(
                 middleware: { type: 'integer', required: true },
                 unknown: { type: 'integer', required: true },
                 down: { type: 'integer', required: true },
+                anomalies: { type: 'integer', required: true },
                 byType: {
                   type: 'array',
                   required: true,
@@ -436,6 +505,11 @@ export function createEnvironmentTool(
                   },
                 },
               },
+              anomalies: {
+                type: 'array',
+                required: true,
+                items: ANOMALY_SCHEMA,
+              },
             },
           },
           results: {
@@ -467,11 +541,18 @@ export function createEnvironmentTool(
             const inventory = await read(config.inventoryFile)
             const clusters = Object.entries(inventory?.clusters ?? {})
               .map(([name, section]) => summarize(name, section))
+            const anomalies: OverviewAnomaly[] = []
+            for (const [name, section] of Object.entries(inventory?.clusters ?? {})) {
+              for (const a of section.anomalies ?? []) {
+                anomalies.push({ cluster: name, kind: a.kind, severity: a.severity, message: a.message })
+              }
+            }
             const result: EnvironmentToolResult = {
               action: 'overview',
               totalClusters: clusters.length,
               clusters,
             }
+            if (anomalies.length > 0) result.anomalies = anomalies
             if (note !== undefined) result.note = note
             if (clusters.length === 0) {
               result.note = (result.note ? result.note + '; ' : '')
@@ -541,13 +622,34 @@ function renderResult(value: EnvironmentToolResult, args: { namespace?: string, 
       const types = c.byType.map(t => `${t.type}×${t.count}`).join(', ') || 'none'
       const stale = c.stale ? ' [STALE]' : ''
       const down = c.down > 0 ? ` · PROMETHEUS DOWN: ${c.down}` : ''
-      lines.push(`- ${c.name}: ${c.middleware} middleware (${types}), ${c.unknown} unknown, scanned ${c.scannedAt}${stale}${down}`)
+      const anomalies = c.anomalies > 0 ? ` · ${c.anomalies} anomalies` : ''
+      lines.push(`- ${c.name}: ${c.middleware} middleware (${types}), ${c.unknown} unknown, scanned ${c.scannedAt}${stale}${down}${anomalies}`)
       if (c.lastError !== undefined) lines.push(`  last error: ${c.lastError}`)
+    }
+    if (value.anomalies !== undefined && value.anomalies.length > 0) {
+      lines.push('Anomalies:')
+      for (const a of value.anomalies) {
+        lines.push(`- [${a.severity}] ${a.cluster}: ${a.message}`)
+      }
     }
   }
 
   if (value.cluster !== undefined) {
     const c = value.cluster
+    // In-place annotation: workload-subject anomalies mark their workload
+    // line; Service-subject anomalies mark the middleware they front.
+    const workloadNotes = new Map<string, string[]>()
+    const serviceNotes = new Map<string, string[]>()
+    for (const a of c.anomalies) {
+      const map = a.ref.kind === 'Service' ? serviceNotes : workloadNotes
+      const key = `${a.ref.namespace}/${a.ref.name}`
+      map.set(key, [...(map.get(key) ?? []), a.message])
+    }
+    const notesFor = (namespace: string, name: string, serviceEntries: string[]): string => {
+      const notes = [...(workloadNotes.get(`${namespace}/${name}`) ?? [])]
+      for (const svc of serviceEntries) notes.push(...(serviceNotes.get(`${namespace}/${svc}`) ?? []))
+      return notes.map(n => ` · [!] ${n}`).join('')
+    }
     lines.push(`Cluster ${c.name} — scanned ${c.scannedAt}${c.stale ? ' [STALE]' : ''}`
       + ` (${c.counts.workloads} workloads, ${c.counts.services} services, ${c.counts.ingresses} ingresses)`
       + (c.prometheusService !== undefined ? ` · prometheus: ${c.prometheusService}` : ''))
@@ -559,12 +661,12 @@ function renderResult(value: EnvironmentToolResult, args: { namespace?: string, 
     if (c.lastError !== undefined) lines.push(`last error: ${c.lastError}`)
     lines.push('Middleware:')
     for (const m of c.middleware) {
-      lines.push(`- ${m.type} · ${m.namespace}/${m.workload} (${m.workloadKind}) · svc: ${m.serviceEntries.join(', ') || 'none'} · ${m.images.join(', ')}${renderMonitoring(m.monitoring)}`)
+      lines.push(`- ${m.type} · ${m.namespace}/${m.workload} (${m.workloadKind}) · svc: ${m.serviceEntries.join(', ') || 'none'} · ${m.images.join(', ')}${renderMonitoring(m.monitoring)}${notesFor(m.namespace, m.workload, m.serviceEntries)}`)
     }
     if (c.middleware.length === 0) lines.push('- (none recognized)')
     lines.push('Unknown workloads:')
     for (const u of c.unknown) {
-      lines.push(`- ${u.namespace}/${u.name} (${u.kind}) · ${u.images.join(', ')}${renderMonitoring(u.monitoring)}`)
+      lines.push(`- ${u.namespace}/${u.name} (${u.kind}) · ${u.images.join(', ')}${renderMonitoring(u.monitoring)}${notesFor(u.namespace, u.name, [])}`)
     }
     if (c.unknown.length === 0) lines.push('- (none)')
     lines.push('Relations:')

@@ -27,19 +27,19 @@ describe('refreshInventory — happy path', () => {
     const file = tempFile()
     const { exec } = fakeExec()
     const inventory = await refreshInventory(
-      [{ cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG }],
+      [{ cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG }],
       { file, exec, now: NOW, userRulesFile: NO_USER_RULES },
     )
 
-    const section = inventory.clusters['pf-test']
+    const section = inventory.clusters['test']
     expect(section.scannedAt).toBe('2026-08-27T00:00:00.000Z')
     expect(section.stale).toBeUndefined()
 
     // Middleware instances recognized from the fixture.
     const types = section.middleware.map(m => `${m.namespace}/${m.workload}:${m.type}`).sort()
     expect(types).toEqual([
-      'baizeops/postgres:postgres',
-      'baizeops/redis:redis',
+      'acme/postgres:postgres',
+      'acme/redis:redis',
       'monitoring/prometheus:prometheus',
     ])
     expect(section.middleware.find(m => m.workload === 'postgres')!.serviceEntries).toEqual(['postgres'])
@@ -65,12 +65,12 @@ describe('refreshInventory — happy path', () => {
   it('is deterministic: scanning the same cluster twice yields identical bytes', async () => {
     const file = tempFile()
     const first = await refreshInventory(
-      [{ cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG }],
+      [{ cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG }],
       { file, exec: fakeExec().exec, spawn: failSpawn, now: NOW, userRulesFile: NO_USER_RULES },
     )
     const firstText = readFileSync(file, 'utf8')
     const second = await refreshInventory(
-      [{ cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG }],
+      [{ cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG }],
       { file, exec: fakeExec().exec, spawn: failSpawn, now: NOW, userRulesFile: NO_USER_RULES },
     )
     expect(second).toEqual(first)
@@ -82,17 +82,17 @@ describe('refreshInventory — stale semantics', () => {
   it('cluster failure keeps the old section and marks it stale', async () => {
     const file = tempFile()
     await refreshInventory(
-      [{ cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG }],
+      [{ cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG }],
       { file, exec: fakeExec().exec, spawn: failSpawn, now: NOW, userRulesFile: NO_USER_RULES },
     )
 
     const later = new Date('2026-08-27T01:00:00Z')
     const inventory = await refreshInventory(
-      [{ cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG }],
+      [{ cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG }],
       { file, exec: fakeExec({ failFor: ['*'] }).exec, spawn: failSpawn, now: later, userRulesFile: NO_USER_RULES },
     )
 
-    const section = inventory.clusters['pf-test']
+    const section = inventory.clusters['test']
     // Old data retained with the ORIGINAL timestamp…
     expect(section.scannedAt).toBe('2026-08-27T00:00:00.000Z')
     expect(section.middleware).toHaveLength(3)
@@ -119,12 +119,12 @@ describe('refreshInventory — stale semantics', () => {
     const file = tempFile()
     const inventory = await refreshInventory(
       [
-        { cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG },
+        { cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG },
         { cluster: 'down-cluster', kubeconfigPath: '/other/kubeconfig' },
       ],
       { file, exec: fakeExec({ failFor: [] }).exec, spawn: failSpawn, now: NOW, userRulesFile: NO_USER_RULES },
     )
-    expect(inventory.clusters['pf-test'].stale).toBeUndefined()
+    expect(inventory.clusters['test'].stale).toBeUndefined()
     // fakeExec serves fixtures for both; down-cluster is fine here. Now fail it.
     const second = await refreshInventory(
       [{ cluster: 'down-cluster', kubeconfigPath: '/other/kubeconfig' }],
@@ -132,8 +132,8 @@ describe('refreshInventory — stale semantics', () => {
     )
     expect(second.clusters['down-cluster'].stale).toBe(true)
     // Untouched cluster keeps its section verbatim.
-    expect(second.clusters['pf-test'].stale).toBeUndefined()
-    expect(second.clusters['pf-test'].middleware).toHaveLength(3)
+    expect(second.clusters['test'].stale).toBeUndefined()
+    expect(second.clusters['test'].middleware).toHaveLength(3)
   })
 })
 
@@ -143,11 +143,11 @@ describe('credential discipline of the written file', () => {
     // First a good scan, then a failing one — so both data AND error text
     // are in the file when we assert.
     await refreshInventory(
-      [{ cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG }],
+      [{ cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG }],
       { file, exec: fakeExec().exec, spawn: failSpawn, now: NOW, userRulesFile: NO_USER_RULES },
     )
     await refreshInventory(
-      [{ cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG }],
+      [{ cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG }],
       { file, exec: fakeExec({ failFor: ['*'] }).exec, spawn: failSpawn, now: NOW, userRulesFile: NO_USER_RULES },
     )
     const text = readFileSync(file, 'utf8')
@@ -156,7 +156,7 @@ describe('credential discipline of the written file', () => {
     expect(text).not.toContain('DB_PASSWORD')
     expect(text).not.toContain('stringData')
     // Secret reference NAMES are expected — that is the allowed level.
-    expect(text).toContain('baizeops-secret')
+    expect(text).toContain('acme-secret')
   })
 })
 
@@ -177,7 +177,7 @@ describe('buildClusterInventory', () => {
   it('sorts output for stable snapshots', async () => {
     const { exec } = fakeExec()
     const scan = await scanCluster({
-      cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn: failSpawn, now: NOW,
+      cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn: failSpawn, now: NOW,
     })
     const inventory = buildClusterInventory(scan, { userRulesFile: NO_USER_RULES })
     const names = inventory.workloads.map(w => `${w.namespace}/${w.name}`)
@@ -191,11 +191,11 @@ describe('prometheus corroboration in the persisted inventory', () => {
     const { exec } = fakeExec()
     const { spawn } = fakeSpawn({ ready: true })
     const inventory = await refreshInventory(
-      [{ cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG }],
+      [{ cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG }],
       { file, exec, spawn, fetchFn: fakeFetch, now: NOW, userRulesFile: NO_USER_RULES },
     )
 
-    const section = inventory.clusters['pf-test']
+    const section = inventory.clusters['test']
     expect(section.prometheusService).toBe('monitoring/prometheus')
 
     const postgres = section.middleware.find(m => m.workload === 'postgres')!
@@ -212,7 +212,7 @@ describe('prometheus corroboration in the persisted inventory', () => {
     const text = readFileSync(file, 'utf8')
     expect(text).toContain('monitoring')
     const back = await readInventory(file)
-    expect(back!.clusters['pf-test'].middleware.find(m => m.workload === 'redis')!.monitoring)
+    expect(back!.clusters['test'].middleware.find(m => m.workload === 'redis')!.monitoring)
       .toEqual({ up: 1, down: 1 })
   })
 
@@ -220,10 +220,10 @@ describe('prometheus corroboration in the persisted inventory', () => {
     const file = tempFile()
     const { exec } = fakeExec()
     const inventory = await refreshInventory(
-      [{ cluster: 'pf-test', kubeconfigPath: FAKE_KUBECONFIG }],
+      [{ cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG }],
       { file, exec, spawn: failSpawn, now: NOW, userRulesFile: NO_USER_RULES },
     )
-    const section = inventory.clusters['pf-test']
+    const section = inventory.clusters['test']
     expect(section.prometheusService).toBeUndefined()
     expect(section.stale).toBeUndefined() // enhancement failure is NOT staleness
     expect(section.middleware.every(m => m.monitoring === undefined)).toBe(true)

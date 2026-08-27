@@ -1,6 +1,6 @@
 /**
  * Shared test helper: a fake kubectl runner replaying the recorded
- * pf-test-cluster fixtures, keyed by the resource argument.
+ * test-cluster fixtures, keyed by the resource argument.
  */
 
 import { readFileSync } from 'node:fs'
@@ -11,13 +11,17 @@ import { fileURLToPath } from 'node:url'
 import type { SpawnFn } from '../src/prometheus.js'
 import type { ExecFn } from '../src/scanner.js'
 
-const FIXTURE_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'pf-test-cluster')
+const FIXTURE_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'test-cluster')
 
 /** A kubeconfig path that looks real — tests assert it never leaks. */
-export const FAKE_KUBECONFIG = '/home/tester/.dsh-ops/credentials/k8s/pf-test/ro/kubeconfig'
+export const FAKE_KUBECONFIG = '/home/tester/.dsh-ops/credentials/k8s/test/ro/kubeconfig'
 
-export function fixtureText(name: string): string {
-  return readFileSync(join(FIXTURE_DIR, name), 'utf8')
+export function fixtureText(name: string, fixtureDir: string = FIXTURE_DIR): string {
+  return readFileSync(join(fixtureDir, name), 'utf8')
+}
+
+export function fixtureDirFor(cluster: string): string {
+  return join(dirname(fileURLToPath(import.meta.url)), 'fixtures', cluster)
 }
 
 export interface FakeExecCall {
@@ -26,7 +30,8 @@ export interface FakeExecCall {
 }
 
 /** Build an exec that serves fixtures. `failFor` resources reject instead. */
-export function fakeExec(opts: { failFor?: string[] } = {}): { exec: ExecFn, calls: FakeExecCall[] } {
+export function fakeExec(opts: { failFor?: string[], fixtureDir?: string } = {}): { exec: ExecFn, calls: FakeExecCall[] } {
+  const dir = opts.fixtureDir ?? FIXTURE_DIR
   const calls: FakeExecCall[] = []
   const exec: ExecFn = async (args, { timeoutMs }) => {
     calls.push({ args, timeoutMs })
@@ -35,11 +40,12 @@ export function fakeExec(opts: { failFor?: string[] } = {}): { exec: ExecFn, cal
       // kubectl echoes the kubeconfig path in its errors — as the real CLI does.
       throw new Error(`kubectl exited with code 1: error loading config file "${FAKE_KUBECONFIG}": connection refused`)
     }
-    if (resource === 'deployments,statefulsets,daemonsets') return { stdout: fixtureText('workloads.json') }
-    if (resource === 'services') return { stdout: fixtureText('services.json') }
-    if (resource === 'ingresses') return { stdout: fixtureText('ingresses.json') }
-    if (resource === 'configmaps') return { stdout: fixtureText('configmaps.json') }
-    if (resource === 'secrets') return { stdout: fixtureText('secrets.jsonpath') }
+    if (resource === 'deployments,statefulsets,daemonsets') return { stdout: fixtureText('workloads.json', dir) }
+    if (resource === 'services') return { stdout: fixtureText('services.json', dir) }
+    if (resource === 'ingresses') return { stdout: fixtureText('ingresses.json', dir) }
+    if (resource === 'configmaps') return { stdout: fixtureText('configmaps.json', dir) }
+    if (resource === 'endpoints') return { stdout: fixtureText('endpoints.json', dir) }
+    if (resource === 'secrets') return { stdout: fixtureText('secrets.jsonpath', dir) }
     throw new Error(`unexpected resource: ${resource}`)
   }
   return { exec, calls }

@@ -1,0 +1,51 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "shop-frontend",
+        "namespace": "shop",
+        "labels": { "app.kubernetes.io/name": "frontend", "app.kubernetes.io/instance": "shop" }
+      },
+      "spec": {
+        "type": "ClusterIP",
+        "clusterIP": "192.0.2.110",
+        "selector": { "app.kubernetes.io/name": "frontend", "app.kubernetes.io/instance": "shop" },
+        "ports": [ { "name": "http", "port": 80, "targetPort": 8080 } ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "shop-postgresql",
+        "namespace": "data",
+        "labels": { "app.kubernetes.io/name": "postgresql", "app.kubernetes.io/instance": "shop" }
+      },
+      "spec": {
+        "type": "ClusterIP",
+        "clusterIP": "192.0.2.120",
+        "selector": { "app.kubernetes.io/name": "postgresql", "app.kubernetes.io/instance": "shop" },
+        "ports": [ { "name": "tcp-postgresql", "port": 5432, "targetPort": 5432 } ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "shop-redis",
+        "namespace": "data",
+        "labels": { "app.kubernetes.io/name": "redis", "app.kubernetes.io/instance": "shop" }
+      },
+      "spec": {
+        "type": "ClusterIP",
+        "clusterIP": "192.0.2.121",
+        "selector": { "app.kubernetes.io/name": "redis", "app.kubernetes.io/instance": "shop" },
+        "ports": [ { "name": "tcp-redis", "port": 6379, "targetPort": 6379 } ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "status": "success",
+  "data": {
+    "activeTargets": [
+      {
+        "labels": { "namespace": "acme", "pod": "postgres-0", "service": "postgres", "job": "postgres-exporter", "instance": "198.51.100.11:9187" },
+        "health": "up",
+        "lastScrape": "2026-08-27T03:59:58Z"
+      },
+      {
+        "labels": { "namespace": "acme", "pod": "redis-0", "service": "redis", "job": "redis-exporter", "instance": "198.51.100.12:9121" },
+        "health": "up"
+      },
+      {
+        "labels": { "namespace": "acme", "pod": "redis-1", "service": "redis", "job": "redis-exporter", "instance": "198.51.100.13:9121" },
+        "health": "down",
+        "lastError": "context deadline exceeded"
+      },
+      {
+        "labels": { "namespace": "acme", "pod": "user-service-7d9f4c6b5-x1a2b", "job": "acme-apps", "instance": "198.51.100.21:8080" },
+        "health": "up"
+      },
+      {
+        "labels": { "namespace": "acme", "pod": "gateway-86c5d9f7c4-z9y8x", "job": "acme-apps", "instance": "198.51.100.22:8080" },
+        "health": "up"
+      },
+      {
+        "labels": { "namespace": "monitoring", "pod": "prometheus-0", "service": "prometheus", "job": "prometheus-self", "instance": "198.51.100.40:9090" },
+        "health": "up"
+      },
+      {
+        "labels": { "namespace": "monitoring", "pod": "node-exporter-qw12", "job": "node-exporter", "instance": "198.51.100.5:9100" },
+        "health": "up"
+      },
+      {
+        "labels": { "namespace": "acme", "pod": "ghost-0", "job": "retired", "instance": "198.51.100.99:9000" },
+        "health": "down"
+      },
+      {
+        "labels": { "job": "external-blackbox", "instance": "203.0.113.10:9115" },
+        "health": "up"
+      }
+    ],
+    "droppedTargets": []
+  }
+}
