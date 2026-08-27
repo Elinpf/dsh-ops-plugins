@@ -1,0 +1,546 @@
+/**
+ * The `environment` model tool — the preset-plane face of the inventory.
+ *
+ * Three working actions plus help:
+ *
+ * - `overview` — compact all-cluster summary (middleware counts by type,
+ *   unknown count, stale flag, scan time).
+ * - `show` — one cluster in detail: middleware instances, the unknown
+ *   bucket, relation edges.
+ * - `refresh` — re-scan every k8s profile in the ops-access registry.
+ *
+ * Freshness: overview/show call ensureFresh first — when the inventory is
+ * missing or its oldest section is older than the configured TTL, a refresh
+ * runs before answering. Nothing scans at session start; apply() only
+ * registers the tool.
+ *
+ * Refresh resolves each k8s profile WITHOUT an agent identity: the access
+ * gate's broker falls back to the ro tier for agent-less resolves, which is
+ * exactly the read-only discipline the scanner wants. kubeconfig paths are
+ * used to spawn kubectl and never surface in results — every error string
+ * crossing into tool output is scrubbed.
+ *
+ * @module @deepseek-ai/dsh-ops-tool-environment
+ */
+
+import type { Context } from '@deepseek-ai/cordis'
+import { defineTool } from '@deepseek-ai/dsh-tools'
+import type { OpsAccess } from '@deepseek-ai/dsh-ops-access'
+import { readInventory, refreshInventory } from './inventory.js'
+import { HELP_TEXT, TOOL_DESCRIPTION } from './doctrine.js'
+import type { EnvironmentInventory, InventorySection, RefreshTarget } from './inventory.js'
+import type { MonitoringStatus, RelationEdge } from './types.js'
+
+const MONITORING_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    up: { type: 'integer', required: true },
+    down: { type: 'integer', required: true },
+  },
+} as const
+
+// ── Config ───────────────────────────────────────────────────────────────────
+
+export interface EnvironmentToolConfig {
+  /** Inventory file path (default ~/.dsh-ops/environment.yaml). */
+  inventoryFile: string
+  /** User classification rules file (default ~/.dsh-ops/environment-rules.yaml). */
+  rulesFile: string
+  /** Sections older than this are re-scanned on the next read (default 60). */
+  ttlMinutes: number
+}
+
+// ── Result shapes ────────────────────────────────────────────────────────────
+
+export interface ClusterSummary {
+  name: string
+  scannedAt: string
+  stale: boolean
+  /** Middleware instance count. */
+  middleware: number
+  /** Unknown-bucket workload count. */
+  unknown: number
+  /** Prometheus-down target count across workloads (0 when unmonitored/healthy). */
+  down: number
+  /** Middleware type → instance count. */
+  byType: Array<{ type: string, count: number }>
+  lastError?: string
+}
+
+export interface UnknownWorkload {
+  name: string
+  namespace: string
+  kind: string
+  images: string[]
+  monitoring?: MonitoringStatus
+}
+
+/**
+ * Edge as shown to the model: same shape as RelationEdge but with a plain
+ * string kind — the output schema cannot express the literal union, and
+ * RelationEdge is assignable to it.
+ */
+export interface DisplayEdge {
+  kind: string
+  from: RelationEdge['from']
+  to: RelationEdge['to']
+  via: string
+  targetType?: string
+}
+
+export interface ClusterDetail {
+  name: string
+  scannedAt: string
+  stale: boolean
+  lastError?: string
+  /** The Prometheus service monitoring data came from, when discovered. */
+  prometheusService?: string
+  middleware: InventorySection['middleware']
+  unknown: UnknownWorkload[]
+  edges: DisplayEdge[]
+  counts: { services: number, ingresses: number, workloads: number }
+}
+
+export interface RefreshResultEntry {
+  cluster: string
+  status: 'ok' | 'stale' | 'skipped'
+  middleware?: number
+  unknown?: number
+  /** Sanitized — never carries a credential path. */
+  error?: string
+}
+
+export interface EnvironmentToolResult {
+  action: string
+  help?: string
+  /** overview */
+  totalClusters?: number
+  clusters?: ClusterSummary[]
+  /** show */
+  cluster?: ClusterDetail
+  /** refresh */
+  results?: RefreshResultEntry[]
+  refreshedAt?: string
+  /** Non-fatal note, e.g. auto-refresh skipped because ops-access is absent. */
+  note?: string
+  error?: string
+}
+
+// ── Injectable seams (tests) ─────────────────────────────────────────────────
+
+export interface EnvironmentToolDeps {
+  readInventory?: typeof readInventory
+  refreshInventory?: typeof refreshInventory
+  now?: () => number
+}
+
+// ── Shaping helpers ──────────────────────────────────────────────────────────
+
+function summarize(name: string, section: InventorySection): ClusterSummary {
+  const byTypeMap = new Map<string, number>()
+  for (const m of section.middleware) byTypeMap.set(m.type, (byTypeMap.get(m.type) ?? 0) + 1)
+  const summary: ClusterSummary = {
+    name,
+    scannedAt: section.scannedAt,
+    stale: section.stale === true,
+    middleware: section.middleware.length,
+    unknown: section.workloads.filter(w => w.type === 'unknown').length,
+    down: section.workloads.reduce((n, w) => n + (w.monitoring?.down ?? 0), 0),
+    byType: [...byTypeMap.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([type, count]) => ({ type, count })),
+  }
+  if (section.lastError !== undefined) summary.lastError = section.lastError
+  return summary
+}
+
+function detailOf(name: string, section: InventorySection): ClusterDetail {
+  const detail: ClusterDetail = {
+    name,
+    scannedAt: section.scannedAt,
+    stale: section.stale === true,
+    middleware: section.middleware,
+    unknown: section.workloads
+      .filter(w => w.type === 'unknown')
+      .map(w => {
+        const u: UnknownWorkload = { name: w.name, namespace: w.namespace, kind: w.kind, images: w.images }
+        if (w.monitoring !== undefined) u.monitoring = w.monitoring
+        return u
+      }),
+    edges: section.edges,
+    counts: {
+      services: section.services.length,
+      ingresses: section.ingresses.length,
+      workloads: section.workloads.length,
+    },
+  }
+  if (section.lastError !== undefined) detail.lastError = section.lastError
+  if (section.prometheusService !== undefined) detail.prometheusService = section.prometheusService
+  return detail
+}
+
+// ── The tool factory ─────────────────────────────────────────────────────────
+
+export function createEnvironmentTool(
+  ctx: Context,
+  config: EnvironmentToolConfig,
+  deps: EnvironmentToolDeps = {},
+) {
+  const read = deps.readInventory ?? readInventory
+  const refreshAll = deps.refreshInventory ?? refreshInventory
+  const now = deps.now ?? (() => Date.now())
+  const ttlMs = config.ttlMinutes * 60_000
+
+  /** Resolve opsAccess per call — never cached, never a static inject. */
+  const getOpsAccess = (): OpsAccess | undefined => ctx.get('opsAccess') as OpsAccess | undefined
+
+  /**
+   * Collect scan targets from the registry: every k8s entry whose ro tier
+   * resolves. Entries that fail resolve are reported as skipped, with the
+   * kubeconfig path scrubbed out of the reason (defense in depth — the
+   * registry's own errors never carry it).
+   */
+  async function collectTargets(opsAccess: OpsAccess): Promise<{ targets: RefreshTarget[], skipped: RefreshResultEntry[] }> {
+    const entries = await opsAccess.listAll()
+    const targets: RefreshTarget[] = []
+    const skipped: RefreshResultEntry[] = []
+    for (const entry of entries.filter(e => e.kind === 'k8s')) {
+      try {
+        // No agent identity on purpose: the gate's broker falls back to ro
+        // for agent-less resolves — scanning is read-only by discipline.
+        const profile = await opsAccess.resolve('k8s', entry.name)
+        const kubeconfigPath = profile.fields.kubeconfigPath
+        if (typeof kubeconfigPath === 'string' && kubeconfigPath !== '') {
+          targets.push({ cluster: entry.name, kubeconfigPath })
+        } else {
+          skipped.push({ cluster: entry.name, status: 'skipped', error: 'profile has no kubeconfigPath field' })
+        }
+      } catch (err) {
+        skipped.push({ cluster: entry.name, status: 'skipped', error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+    return { targets, skipped }
+  }
+
+  /** Re-scan all registered k8s clusters and shape the per-cluster report. */
+  async function doRefresh(opsAccess: OpsAccess): Promise<EnvironmentToolResult> {
+    const { targets, skipped } = await collectTargets(opsAccess)
+    const inventory = await refreshAll(targets, {
+      file: config.inventoryFile,
+      userRulesFile: config.rulesFile,
+    })
+    const results: RefreshResultEntry[] = [...skipped]
+    for (const target of targets) {
+      const section = inventory.clusters[target.cluster]
+      if (!section) {
+        results.push({ cluster: target.cluster, status: 'stale', error: 'scan produced no section' })
+        continue
+      }
+      const summary = summarize(target.cluster, section)
+      const entry: RefreshResultEntry = {
+        cluster: target.cluster,
+        status: summary.stale ? 'stale' : 'ok',
+        middleware: summary.middleware,
+        unknown: summary.unknown,
+      }
+      if (summary.lastError !== undefined) entry.error = summary.lastError
+      results.push(entry)
+    }
+    results.sort((a, b) => a.cluster.localeCompare(b.cluster))
+    return { action: 'refresh', results, refreshedAt: new Date(now()).toISOString() }
+  }
+
+  /**
+   * TTL gate before reads: refresh when the inventory is missing or its
+   * oldest section is past the TTL. Best-effort — without opsAccess (or on
+   * total scan failure) the caller answers from whatever cache exists.
+   */
+  async function ensureFresh(): Promise<string | undefined> {
+    const inventory = await read(config.inventoryFile)
+    const sections = Object.values(inventory?.clusters ?? {})
+    const oldest = sections.reduce<number>((min, s) => {
+      const t = Date.parse(s.scannedAt)
+      return Number.isNaN(t) ? 0 : Math.min(min, t)
+    }, Number.POSITIVE_INFINITY)
+    const expired = oldest === Number.POSITIVE_INFINITY || now() - oldest > ttlMs
+    if (!expired) return undefined
+    const opsAccess = getOpsAccess()
+    if (!opsAccess) return 'inventory is expired or missing, but the ops-access service is unavailable — answering from cache'
+    await doRefresh(opsAccess)
+    return undefined
+  }
+
+  return defineTool({
+    name: 'environment',
+    description: TOOL_DESCRIPTION,
+    parameters: {
+      action: {
+        type: 'string', required: true, enum: ['overview', 'show', 'refresh', 'help'],
+        description: 'overview: all clusters, compact. show: one cluster, details + edges (requires cluster). refresh: re-scan now. help: full usage.',
+      },
+      cluster: { type: 'string', description: 'Cluster name (required for show). Use overview or list_access to see names.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          action: { type: 'string', required: true },
+          help: { type: 'string' },
+          note: { type: 'string' },
+          error: { type: 'string' },
+          totalClusters: { type: 'integer' },
+          refreshedAt: { type: 'string' },
+          clusters: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                name: { type: 'string', required: true },
+                scannedAt: { type: 'string', required: true },
+                stale: { type: 'boolean', required: true },
+                middleware: { type: 'integer', required: true },
+                unknown: { type: 'integer', required: true },
+                down: { type: 'integer', required: true },
+                byType: {
+                  type: 'array',
+                  required: true,
+                  items: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      type: { type: 'string', required: true },
+                      count: { type: 'integer', required: true },
+                    },
+                  },
+                },
+                lastError: { type: 'string' },
+              },
+            },
+          },
+          cluster: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              name: { type: 'string', required: true },
+              scannedAt: { type: 'string', required: true },
+              stale: { type: 'boolean', required: true },
+              lastError: { type: 'string' },
+              prometheusService: { type: 'string' },
+              counts: {
+                type: 'object',
+                additionalProperties: false,
+                required: true,
+                properties: {
+                  services: { type: 'integer', required: true },
+                  ingresses: { type: 'integer', required: true },
+                  workloads: { type: 'integer', required: true },
+                },
+              },
+              middleware: {
+                type: 'array',
+                required: true,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    type: { type: 'string', required: true },
+                    namespace: { type: 'string', required: true },
+                    workload: { type: 'string', required: true },
+                    workloadKind: { type: 'string', required: true },
+                    images: { type: 'array', required: true, items: { type: 'string' } },
+                    serviceEntries: { type: 'array', required: true, items: { type: 'string' } },
+                    monitoring: MONITORING_SCHEMA,
+                  },
+                },
+              },
+              unknown: {
+                type: 'array',
+                required: true,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    name: { type: 'string', required: true },
+                    namespace: { type: 'string', required: true },
+                    kind: { type: 'string', required: true },
+                    images: { type: 'array', required: true, items: { type: 'string' } },
+                    monitoring: MONITORING_SCHEMA,
+                  },
+                },
+              },
+              edges: {
+                type: 'array',
+                required: true,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    kind: { type: 'string', required: true },
+                    from: {
+                      type: 'object', required: true, additionalProperties: false,
+                      properties: {
+                        kind: { type: 'string', required: true },
+                        namespace: { type: 'string', required: true },
+                        name: { type: 'string', required: true },
+                      },
+                    },
+                    to: {
+                      type: 'object', required: true, additionalProperties: false,
+                      properties: {
+                        kind: { type: 'string', required: true },
+                        namespace: { type: 'string', required: true },
+                        name: { type: 'string', required: true },
+                      },
+                    },
+                    via: { type: 'string', required: true },
+                    targetType: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+          results: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                cluster: { type: 'string', required: true },
+                status: { type: 'string', required: true, enum: ['ok', 'stale', 'skipped'] },
+                middleware: { type: 'integer' },
+                unknown: { type: 'integer' },
+                error: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+      render: (_args, value) => [{ type: 'text' as const, text: renderResult(value) }],
+    },
+    async execute(args: { action: string, cluster?: string }): Promise<EnvironmentToolResult> {
+      try {
+        switch (args.action) {
+          case 'help':
+            return { action: 'help', help: HELP_TEXT }
+
+          case 'overview': {
+            const note = await ensureFresh()
+            const inventory = await read(config.inventoryFile)
+            const clusters = Object.entries(inventory?.clusters ?? {})
+              .map(([name, section]) => summarize(name, section))
+            const result: EnvironmentToolResult = {
+              action: 'overview',
+              totalClusters: clusters.length,
+              clusters,
+            }
+            if (note !== undefined) result.note = note
+            if (clusters.length === 0) {
+              result.note = (result.note ? result.note + '; ' : '')
+                + 'inventory is empty — no k8s clusters registered in ops-access, or every scan has failed so far'
+            }
+            return result
+          }
+
+          case 'show': {
+            if (!args.cluster) return { action: 'show', error: 'show requires the cluster parameter' }
+            const note = await ensureFresh()
+            const inventory = await read(config.inventoryFile)
+            const section = inventory?.clusters[args.cluster]
+            if (!section) {
+              const known = Object.keys(inventory?.clusters ?? {}).sort()
+              return {
+                action: 'show',
+                error: `unknown cluster "${args.cluster}" in the inventory` + (known.length > 0 ? `. Known: ${known.join(', ')}` : ' — the inventory is empty'),
+              }
+            }
+            const result: EnvironmentToolResult = { action: 'show', cluster: detailOf(args.cluster, section) }
+            if (note !== undefined) result.note = note
+            return result
+          }
+
+          case 'refresh': {
+            const opsAccess = getOpsAccess()
+            if (!opsAccess) {
+              return { action: 'refresh', error: 'ops-access service unavailable — is the ops-access plugin mounted in this preset?' }
+            }
+            return await doRefresh(opsAccess)
+          }
+
+          default:
+            return { action: args.action, error: `unknown action "${args.action}" — use overview, show, refresh, or help` }
+        }
+      } catch (err) {
+        // refreshInventory folds per-cluster failures into sections and
+        // collectTargets catches resolve errors, so reaching here means an
+        // unexpected bug — no credential path flows through this message.
+        const message = err instanceof Error ? err.message : String(err)
+        return { action: args.action, error: message }
+      }
+    },
+  })
+}
+
+// ── Render ───────────────────────────────────────────────────────────────────
+
+function renderMonitoring(m: MonitoringStatus | undefined): string {
+  if (m === undefined) return ''
+  return m.down > 0 ? ` · prometheus: up ${m.up} [DOWN ${m.down}]` : ` · prometheus: up ${m.up}`
+}
+
+function renderResult(value: EnvironmentToolResult): string {
+  if (value.help !== undefined) return value.help
+  const lines: string[] = []
+  if (value.error !== undefined) lines.push(`[error] ${value.error}`)
+  if (value.note !== undefined) lines.push(`[note] ${value.note}`)
+
+  if (value.clusters !== undefined) {
+    lines.push(`Environment inventory — ${value.totalClusters ?? 0} cluster(s):`)
+    for (const c of value.clusters) {
+      const types = c.byType.map(t => `${t.type}×${t.count}`).join(', ') || 'none'
+      const stale = c.stale ? ' [STALE]' : ''
+      const down = c.down > 0 ? ` · PROMETHEUS DOWN: ${c.down}` : ''
+      lines.push(`- ${c.name}: ${c.middleware} middleware (${types}), ${c.unknown} unknown, scanned ${c.scannedAt}${stale}${down}`)
+      if (c.lastError !== undefined) lines.push(`  last error: ${c.lastError}`)
+    }
+  }
+
+  if (value.cluster !== undefined) {
+    const c = value.cluster
+    lines.push(`Cluster ${c.name} — scanned ${c.scannedAt}${c.stale ? ' [STALE]' : ''}`
+      + ` (${c.counts.workloads} workloads, ${c.counts.services} services, ${c.counts.ingresses} ingresses)`
+      + (c.prometheusService !== undefined ? ` · prometheus: ${c.prometheusService}` : ''))
+    if (c.lastError !== undefined) lines.push(`last error: ${c.lastError}`)
+    lines.push('Middleware:')
+    for (const m of c.middleware) {
+      lines.push(`- ${m.type} · ${m.namespace}/${m.workload} (${m.workloadKind}) · svc: ${m.serviceEntries.join(', ') || 'none'} · ${m.images.join(', ')}${renderMonitoring(m.monitoring)}`)
+    }
+    if (c.middleware.length === 0) lines.push('- (none recognized)')
+    lines.push('Unknown workloads:')
+    for (const u of c.unknown) {
+      lines.push(`- ${u.namespace}/${u.name} (${u.kind}) · ${u.images.join(', ')}${renderMonitoring(u.monitoring)}`)
+    }
+    if (c.unknown.length === 0) lines.push('- (none)')
+    lines.push('Relations:')
+    for (const e of c.edges) {
+      lines.push(`- [${e.kind}] ${e.from.namespace}/${e.from.name} → ${e.to.namespace}/${e.to.name}`
+        + (e.targetType !== undefined ? ` (${e.targetType})` : '') + ` via ${e.via}`)
+    }
+    if (c.edges.length === 0) lines.push('- (none)')
+  }
+
+  if (value.results !== undefined) {
+    lines.push(`Refresh finished at ${value.refreshedAt ?? '?'}:`)
+    for (const r of value.results) {
+      if (r.status === 'ok') {
+        lines.push(`- ${r.cluster}: ok (${r.middleware ?? 0} middleware, ${r.unknown ?? 0} unknown)`)
+      } else if (r.status === 'stale') {
+        lines.push(`- ${r.cluster}: FAILED — kept previous data (stale)${r.error !== undefined ? ` · ${r.error}` : ''}`)
+      } else {
+        lines.push(`- ${r.cluster}: skipped${r.error !== undefined ? ` · ${r.error}` : ''}`)
+      }
+    }
+  }
+
+  return lines.join('\n')
+}

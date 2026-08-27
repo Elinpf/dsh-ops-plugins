@@ -1,0 +1,23 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "metadata": { "name": "baizeops-config", "namespace": "baizeops" },
+      "data": {
+        "PG_HOST": "postgres.baizeops.svc.cluster.local",
+        "PG_PORT": "5432",
+        "REPORT_DB": "jdbc:postgresql://postgres.baizeops.svc.cluster.local:5432/report",
+        "LOG_LEVEL": "info"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "metadata": { "name": "kube-root-ca.crt", "namespace": "baizeops" },
+      "data": { "ca.crt": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n" }
+    }
+  ]
+}

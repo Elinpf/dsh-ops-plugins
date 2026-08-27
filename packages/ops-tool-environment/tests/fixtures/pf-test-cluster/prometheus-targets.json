@@ -1,0 +1,46 @@
+{
+  "status": "success",
+  "data": {
+    "activeTargets": [
+      {
+        "labels": { "namespace": "baizeops", "pod": "postgres-0", "service": "postgres", "job": "postgres-exporter", "instance": "10.1.2.11:9187" },
+        "health": "up",
+        "lastScrape": "2026-08-27T03:59:58Z"
+      },
+      {
+        "labels": { "namespace": "baizeops", "pod": "redis-0", "service": "redis", "job": "redis-exporter", "instance": "10.1.2.12:9121" },
+        "health": "up"
+      },
+      {
+        "labels": { "namespace": "baizeops", "pod": "redis-1", "service": "redis", "job": "redis-exporter", "instance": "10.1.2.13:9121" },
+        "health": "down",
+        "lastError": "context deadline exceeded"
+      },
+      {
+        "labels": { "namespace": "baizeops", "pod": "user-service-7d9f4c6b5-x1a2b", "job": "baizeops-apps", "instance": "10.1.3.21:8080" },
+        "health": "up"
+      },
+      {
+        "labels": { "namespace": "baizeops", "pod": "gateway-86c5d9f7c4-z9y8x", "job": "baizeops-apps", "instance": "10.1.3.22:8080" },
+        "health": "up"
+      },
+      {
+        "labels": { "namespace": "monitoring", "pod": "prometheus-0", "service": "prometheus", "job": "prometheus-self", "instance": "10.1.4.10:9090" },
+        "health": "up"
+      },
+      {
+        "labels": { "namespace": "monitoring", "pod": "node-exporter-qw12", "job": "node-exporter", "instance": "10.1.0.5:9100" },
+        "health": "up"
+      },
+      {
+        "labels": { "namespace": "baizeops", "pod": "ghost-0", "job": "retired", "instance": "10.1.9.9:9000" },
+        "health": "down"
+      },
+      {
+        "labels": { "job": "external-blackbox", "instance": "203.0.113.10:9115" },
+        "health": "up"
+      }
+    ],
+    "droppedTargets": []
+  }
+}

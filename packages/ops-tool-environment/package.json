@@ -1,0 +1,55 @@
+{
+  "name": "@deepseek-ai/dsh-ops-tool-environment",
+  "version": "0.1.0",
+  "description": "Environment inventory for ops mode — read-only scanner that maps registered k8s clusters (workloads, services, middleware instances, best-effort relation edges) into ~/.dsh-ops/environment.yaml, plus the model-facing environment tool (overview/show/refresh). Deterministic code only, zero LLM.",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./prompt": {
+      "types": "./lib/prompt.d.ts",
+      "default": "./lib/prompt.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/**/*.js",
+    "lib/**/*.d.ts",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "yaml": "^2.7.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-ops-access": "^0.1.0",
+    "@deepseek-ai/dsh-ops-prompts": "^0.1.0",
+    "@deepseek-ai/dsh-tools": "^0.0.1-rc.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-ops-access": "workspace:*",
+    "@deepseek-ai/dsh-ops-prompts": "workspace:*",
+    "@deepseek-ai/dsh-tools": "0.0.1-rc.1",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.11"
+  },
+  "license": "MIT"
+}

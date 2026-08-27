@@ -93,6 +93,32 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 - **kind 描述符 (KindDescriptor)** — `{ kind, jsonSchema, fieldsDoc?, fileFields? }`，通过 zod v4 的 `z.toJSONSchema()` 序列化 provider 的 zod schema 为标准 JSON Schema，前端据此动态渲染表单字段；fileFields 字段渲染为内容粘贴文本框
 - **派生注册 (derived registration)** — agent 持 rw 凭证在基础设施上自助创建只读账号（命名约定：k8s ServiceAccount `<id>-ro`、ceph `client.<id>-ro`），再调 **`register_access`** 工具把派生凭证写入 ro 档。不设授权门槛：ro 档是 agent 默认工作面，人可随时在管理 UI 注册/覆盖；rw 档永远只能人注册（工具只写 ro，kind/id 缺失时整条新建）。每次注册随工具调用进 session 事件流，可重建。各 kind 的派生配方是 provider 的 `derivationDoc`（prose 而非代码——命令随基础设施版本漂移，由 agent 用判断力执行），经 `list_access help: true` 按需拉取。文件类字段内容与 UI 粘贴共用同一落盘机器（`writeContentFiles`，0600，根目录可配 `credentialsDir`，默认 `~/.dsh-ops/credentials`）。配套可发现性：rw-only 条目在 @ 菜单、list_access、mention 注入三处都可见并标注「可派生」；`request_access` 对两档 kind 只要求 rw 档可解析（ro 缺失正是派生引导场景，若卡 ro 检查会死锁）；ro 缺失且 rw 存在时 resolve 的报错直接指向 register_access
 
+## 环境清单 (Environment Inventory)
+
+### 环境清单 (environment inventory)
+
+只读的环境地图，构建内容见 `docs/specs/0003-environment-inventory.md`。遍历 ops-access 注册的 k8s 集群，从 k8s API 盘出「集群 → 命名空间 → 中间件实例/应用 → 尽力而为的关联边 + Prometheus 监控状态」，落盘为 `~/.dsh-ops/environment.yaml`（自动生成、勿手改）。agent 通过 preset 平面的 `environment` 工具消费（overview / show / refresh），系统提示词只放一句引导。
+
+### 盘点 (scan)
+
+清单的生成过程。**纯确定性代码**（list + 分类表归类 + 写文件），零 LLM 参与——同一集群扫两次结果必须一致，这是清单能当地图用的前提。LLM 只消费清单做推理。
+
+### 新鲜度纪律 (TTL + stale)
+
+清单段带盘点时间戳，TTL（默认 1 小时）过期自动重扫，agent 可用 `refresh` 显式重扫；会话启动不阻塞、读缓存。集群连不上时**保留旧数据并标记 stale**，整块缺失或报错都是事故。
+
+### 识别分类表与 unknown 桶
+
+中间件识别靠镜像名/chart 名/label 的分类表：常见中间件内置代码，用户规则文件（`~/.dsh-ops/` 下）可追加覆盖。识别不出的工作负载进 **unknown 桶**——照常列出名称与镜像，不从视野消失。
+
+### 关联边 (relation edge)
+
+「谁连谁」的边。**尽力而为**：粗粒度（应用 ↔ 集群 ↔ 中间件）必须准；细粒度靠解析 ConfigMap 与明文 env 的值连边（如 `*.svc.cluster.local` 模式）。**Secret 只记引用名、绝不读值**——凭证材料不进清单、日志、模型上下文，与凭证体系同一条底线。更深的下钻留给排查时的 kubectl 工具现场做。
+
+### 监控状态印证 (Prometheus corroboration)
+
+盘点时尝试发现集群内 Prometheus service，经 `kubectl port-forward` 读 targets API，把 up/down 附到清单条目上，与 k8s 数据互相印证。找不到就跳过，是增强项不是硬依赖。agent 主动加监控点位是后续方向，不在本期。
+
 ## 调查树 (Investigation Tree)
 
 ### 树 (Tree) 与 森林 (Forest)

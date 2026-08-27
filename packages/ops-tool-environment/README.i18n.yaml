@@ -1,0 +1,6 @@
+---
+title: "@deepseek-ai/dsh-ops-tool-environment"
+description:
+  zh: "环境清单 — 只读扫描注册的 k8s 集群落盘 environment.yaml，附 environment 工具（overview/show/refresh）"
+  en: "Environment inventory — read-only scan of registered k8s clusters into environment.yaml, plus the environment tool (overview/show/refresh)"
+---

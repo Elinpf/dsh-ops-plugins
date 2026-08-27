@@ -255,6 +255,12 @@
     - id: tool-ops-trace
       name: '@deepseek-ai/dsh-ops-tool-trace'
 
+    # Prompt half of the environment inventory: registers the one-line
+    # methodology section through opsPrompts (this realm). The tool half
+    # sits in ops-access-registry — it needs opsAccess, not opsPrompts.
+    - id: tool-ops-environment-prompt
+      name: '@deepseek-ai/dsh-ops-tool-environment/prompt'
+
 # The `web` service and its search provider stay in the host composition; only
 # the model-facing tool is per-session.
 - id: tool-web
@@ -308,3 +314,9 @@
 
     - id: ops-tool-ssh
       name: '@deepseek-ai/dsh-ops-tool-ssh'
+
+    # Environment inventory tool: overview/show/refresh over the scanned
+    # cluster map. Needs THIS realm's opsAccess (resolves k8s ro profiles);
+    # its prompt half lives in the ops-orchestration group.
+    - id: ops-tool-environment
+      name: '@deepseek-ai/dsh-ops-tool-environment'
