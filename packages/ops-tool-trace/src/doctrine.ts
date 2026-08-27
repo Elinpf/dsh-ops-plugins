@@ -38,6 +38,17 @@ export const TRIGGER_NODE_RULE =
 /** A milestone must be writable in this form, or it is not a hypothesis. */
 export const HYPOTHESIS_FORM = '"我怀疑 X, 因为看到了 Y"'
 
+/**
+ * Hard-gate error for resolve on the goal while nodes are still undecided
+ * (not done / not dead_end). Lists the undecided nodes and points at the
+ * two ways forward: decide them (complete/abandon), or force — the explicit
+ * escape hatch for abandoning an investigation mid-way.
+ */
+export function resolveGateError(undecided: Array<{ id: string, status: string }>): string {
+  const list = undecided.map((n) => `${n.id} (${n.status})`).join(', ')
+  return `trace: 还有 ${undecided.length} 个节点未定论, 不能 resolve goal: ${list}。先给它们定论 — 证实 complete/resolve 带 summary, 证伪 abandon; 调查中途放弃的正当场景用 force: true 强制收口(带 WARN)。`
+}
+
 /** Where the full documentation lives. */
 export const HELP_POINTER = '完整用法与纪律: 调 `trace` action=help。'
 
@@ -85,7 +96,7 @@ export const HELP_TEXT = [
   '- add_milestone(id, parent_id, title, detail?) — 立假设; detail 写 because 分句。',
   '- add_step(id, parent_id, title, detail?) — 加验证动作; detail 写查证对象。',
   '- start / complete / abandon / reopen(id 或 ids) — 状态流转; complete 可带 summary。',
-  '- resolve(id, summary) — 正面关闭一个节点(等同 complete 带 summary); 打在 goal 上 = 全案收口, 只调一次。',
+  '- resolve(id, summary) — 正面关闭一个节点(等同 complete 带 summary); 打在 goal 上 = 全案收口: 只调一次, 所有非根节点须先定论(complete 证实 / abandon 证伪), force: true 是中途放弃的逃生口(带 WARN)。',
   '- link(id, caused_by) 或 links 数组 — 跨分支因果边。',
   '- view — 完整树; status_filter 可选; format=tree 输出缩进树总览(只看形状)。',
   '',
@@ -115,5 +126,5 @@ export const HELP_TEXT = [
   '### 其他',
   '- 死路 abandon, 保留在树上; 迷失方向先 view; 每 5 步排查至少更新 1 次 trace。',
   '- link 只表达 parent 无法表达的因果边(跨分支); 父子关系已隐含触发链, 不重复 link。',
-  '- 新调查 create_tree; 全案收口 = resolve 打在 goal 上, 只调一次, 标记最终目标达成。证实 = complete 或 resolve(两者等价), 证伪 = abandon。',
+  '- 新调查 create_tree; 全案收口 = resolve 打在 goal 上, 只调一次, 标记最终目标达成。证实 = complete 或 resolve(两者等价), 证伪 = abandon。收口的硬门槛只在 goal 这一处; step complete 时不做任何"提示收口"——避免早收口压力抑制下钻。',
 ].join('\n')

@@ -307,6 +307,35 @@ describe('resolve', () => {
     expect(forest!.trees[0].resolved).toBe(false)
     expect(forest!.trees[0].nodes.find((n) => n.id === 'goal')!.status).toBe('goal')
   })
+
+  it('hard gate: resolve(goal) without force does not fold while nodes are undecided', () => {
+    // Execute rejects this call, but the event is already logged — the fold
+    // must mirror the gate or replay would close a tree the tool refused to.
+    const forest = foldForest([
+      { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
+      { turn: 1, args: { action: 'add_milestone', id: 'm1', parent_id: 'goal', title: 'M1' } },
+      { turn: 2, args: { action: 'resolve', summary: 'x' } },
+    ])
+    expect(forest!.trees[0].resolved).toBe(false)
+    expect(forest!.trees[0].nodes.find((n) => n.id === 'goal')!.status).toBe('goal')
+  })
+
+  it('hard gate: force in the logged args is honored; decided trees fold normally', () => {
+    const forced = foldForest([
+      { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
+      { turn: 1, args: { action: 'add_milestone', id: 'm1', parent_id: 'goal', title: 'M1' } },
+      { turn: 2, args: { action: 'resolve', summary: 'giving up', force: true } },
+    ])
+    expect(forced!.trees[0].resolved).toBe(true)
+
+    const decided = foldForest([
+      { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
+      { turn: 1, args: { action: 'add_milestone', id: 'm1', parent_id: 'goal', title: 'M1' } },
+      { turn: 2, args: { action: 'abandon', id: 'm1' } },
+      { turn: 3, args: { action: 'resolve', summary: 'closed' } },
+    ])
+    expect(decided!.trees[0].resolved).toBe(true)
+  })
 })
 
 // ── Purity ──────────────────────────────────────────────────────────────────
@@ -340,7 +369,8 @@ describe('full scenario', () => {
       { turn: 3, args: { action: 'add_step', id: 's2', parent_id: 'm1', title: 'Check events' } },
       { turn: 4, args: { action: 'start', id: 's2' } },
       { turn: 4, args: { action: 'abandon', id: 's2' } },
-      { turn: 5, args: { action: 'resolve', summary: 'OOM — increased memory limit' } },
+      // m1 is still undecided — force is the mid-investigation escape hatch
+      { turn: 5, args: { action: 'resolve', summary: 'OOM — increased memory limit', force: true } },
     ])
 
     expect(state!.nodes).toHaveLength(4) // goal, m1, s1, s2
@@ -372,7 +402,7 @@ describe('full scenario', () => {
         { id: 'pod-stuck', caused_by: 'csi-lock' },
         { id: 'downstream', caused_by: 'pod-stuck' },
       ] } },
-      { turn: 4, args: { action: 'resolve', summary: 'Ceph full → CSI lock → pods stuck → downstream 503' } },
+      { turn: 4, args: { action: 'resolve', summary: 'Ceph full → CSI lock → pods stuck → downstream 503', force: true } },
     ])
 
     expect(state!.nodes.find((n) => n.id === 'csi-lock')!.caused_by).toEqual(['ceph-full'])

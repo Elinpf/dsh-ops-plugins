@@ -53,7 +53,7 @@ import { activeTree, NODE_STATUSES } from './types.js'
 import { SessionForestStore } from './session-forests.js'
 import { buildReminderContext, createIdleRule, createNestingRule, ReminderLatch } from './reminders.js'
 import type { ReminderContext } from './reminders.js'
-import { HELP_TEXT, STATIC_PROMPT, TOOL_DESCRIPTION, TRIGGER_NODE_RULE, milestoneFollowUpHint } from './doctrine.js'
+import { HELP_TEXT, STATIC_PROMPT, TOOL_DESCRIPTION, TRIGGER_NODE_RULE, milestoneFollowUpHint, resolveGateError } from './doctrine.js'
 import { buildTreeIndex, depthOf, flattenTree, sortChildren } from './tree-layout.js'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
@@ -219,6 +219,15 @@ function foldEvent(state: ForestState | null, event: FoldEvent): ForestState | n
         if (!updatedTree) return state
         return replaceTree(forest, tree, updatedTree)
       }
+      // Mirror of the execute-time hard gate: a resolve(goal) rejected for
+      // undecided nodes is still logged (the framework appends the tool/call
+      // event before execute runs) — without this check, replay would close
+      // a tree the tool refused to close. force is honored because accepted
+      // forced resolves carry it in the logged args.
+      if (!args.force && tree.nodes.some((n) =>
+        n.parent !== null && n.status !== 'done' && n.status !== 'dead_end' && n.status !== 'resolved')) {
+        return state
+      }
       const updatedTree = updateNodeInTree(tree, 'goal', turn, (n) => {
         n.status = 'resolved'
         n.summary = args.summary ?? null
@@ -370,8 +379,11 @@ export const traceProjection = {
   apply: foldEvent,
   view: (s: ForestState | null): ForestState | null => s,
   // v4: resolve on a non-goal node folds to complete semantics (was: id
-  // ignored, always closed the tree) — old snapshots must be rebuilt.
-  stateVersion: 4,
+  // ignored, always closed the tree).
+  // v5: resolve(goal) without force folds only when every non-root node is
+  // decided — mirrors the execute-time hard gate so replay cannot close a
+  // tree the tool refused to close. Old snapshots must be rebuilt.
+  stateVersion: 5,
 }
 
 // ── Tree renderers (model-visible output) ────────────────────────────────────
@@ -705,6 +717,8 @@ function apply(ctx: Context, _config: Record<string, never>): void {
       status_filter: { type: 'string', enum: NODE_STATUSES.filter((s) => s !== 'goal'), description: 'Filter view to nodes of one status (view only, optional).' },
 
       format: { type: 'string', enum: ['full', 'tree'], description: 'view 输出格式 (view only, optional): "full" 完整树含 detail/summary (默认); "tree" 缩进树总览, 只看形状。' },
+
+      force: { type: 'boolean', description: 'resolve goal 的逃生口: 还有节点未定论时强制收口(结果带 WARN), 用于调查中途放弃。仅 resolve 打在 goal 上时有效。' },
     },
 
     output: {
@@ -877,6 +891,19 @@ function apply(ctx: Context, _config: Record<string, never>): void {
           if (!goal) throw new Error('trace: no goal node to resolve')
           if (goal.status === 'resolved') {
             return { tree, summary: buildSummary(tree) }
+          }
+          // Hard gate: every non-root node must be decided (done/dead_end)
+          // before the tree closes. The fold mirrors this check — a rejected
+          // call is still logged, and replay must not close the tree either.
+          // force: true is the explicit escape hatch (abandoning an
+          // investigation mid-way) and keeps the old WARN+allow behavior.
+          // Deliberately the ONLY closure pressure: nothing nudges at step
+          // complete time, so the gate cannot suppress drill-down.
+          if (!args.force) {
+            const undecided = buildSummary(tree).incomplete
+            if (undecided.length > 0) {
+              throw new Error(resolveGateError(undecided))
+            }
           }
           if (!canTransition(goal.status, 'resolved')) {
             throw new Error(`trace: goal is "${goal.status}", cannot resolve`)

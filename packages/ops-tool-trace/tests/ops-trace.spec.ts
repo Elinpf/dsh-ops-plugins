@@ -218,6 +218,57 @@ describe('resolve', () => {
   })
 })
 
+// ── resolve goal 硬门槛 ──────────────────────────────────────────────────────
+
+describe('resolve goal hard gate', () => {
+  async function withUndecided() {
+    const h = setup()
+    await h.run({ action: 'create_tree', goal_title: 'G' })
+    await h.run({ action: 'add_milestone', id: 'm1', parent_id: 'goal', title: 'M1' })
+    await h.run({ action: 'add_step', id: 's1', parent_id: 'm1', title: 'S1' })
+    await h.run({ action: 'start', id: 's1' })
+    return h
+  }
+
+  it('rejects while nodes are undecided, listing their ids and statuses', async () => {
+    const h = await withUndecided()
+    await expect(h.run({ action: 'resolve', id: 'goal', summary: 'x' }))
+      .rejects.toThrow('m1 (goal)')
+    await expect(h.run({ action: 'resolve', id: 'goal', summary: 'x' }))
+      .rejects.toThrow('s1 (in_progress)')
+    await expect(h.run({ action: 'resolve', id: 'goal', summary: 'x' }))
+      .rejects.toThrow('force')
+    // the rejection changed nothing
+    const v = await h.run({ action: 'view' })
+    expect(v.tree.resolved).toBe(false)
+    expect(v.tree.nodes[0].status).toBe('goal')
+  })
+
+  it('force: true is the escape hatch — closes with the WARN behavior', async () => {
+    const h = await withUndecided()
+    const r = await h.run({ action: 'resolve', id: 'goal', summary: 'giving up', force: true })
+    expect(r.tree.resolved).toBe(true)
+    expect(r.summary.warning).toContain('2 node(s) still incomplete')
+  })
+
+  it('resolves normally once every non-root node is decided (done or dead_end)', async () => {
+    const h = await withUndecided()
+    await h.run({ action: 'complete', id: 's1', summary: 'found' })
+    await h.run({ action: 'abandon', id: 'm1' })
+    const r = await h.run({ action: 'resolve', id: 'goal', summary: 'closed' })
+    expect(r.tree.resolved).toBe(true)
+    expect(r.summary.warning).toBeNull()
+  })
+
+  it('non-goal resolve (the alias) is NOT gated by undecided siblings', async () => {
+    const h = await withUndecided()
+    // s1 is in_progress and m1 undecided — resolving m1 must still work
+    const r = await h.run({ action: 'resolve', id: 'm1', summary: '证实' })
+    expect(r.tree.nodes.find((n) => n.id === 'm1')!.status).toBe('done')
+    expect(r.tree.resolved).toBe(false)
+  })
+})
+
 // ── link ─────────────────────────────────────────────────────────────────────
 
 describe('link', () => {
@@ -297,7 +348,8 @@ describe('render output', () => {
     const h = setup()
     await h.run({ action: 'create_tree', goal_title: 'G' })
     await h.run({ action: 'add_step', id: 's1', parent_id: 'goal', title: 'S1' })
-    const r = await h.run({ action: 'resolve', id: 'goal', summary: 'done' })
+    // force: the escape hatch keeps the WARN+allow behavior
+    const r = await h.run({ action: 'resolve', id: 'goal', summary: 'done', force: true })
     const text = h.render({ action: 'resolve' }, r)
     expect(text).toContain('WARN: 1 node(s) still incomplete')
   })
