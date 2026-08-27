@@ -85,7 +85,7 @@ export const HELP_TEXT = [
   '- add_milestone(id, parent_id, title, detail?) — 立假设; detail 写 because 分句。',
   '- add_step(id, parent_id, title, detail?) — 加验证动作; detail 写查证对象。',
   '- start / complete / abandon / reopen(id 或 ids) — 状态流转; complete 可带 summary。',
-  '- resolve(summary) — 全案收口, 只调一次, 只作用于最终 goal。',
+  '- resolve(id, summary) — 正面关闭一个节点(等同 complete 带 summary); 打在 goal 上 = 全案收口, 只调一次。',
   '- link(id, caused_by) 或 links 数组 — 跨分支因果边。',
   '- view — 完整树; status_filter 可选; format=tree 输出缩进树总览(只看形状)。',
   '',
@@ -115,5 +115,5 @@ export const HELP_TEXT = [
   '### 其他',
   '- 死路 abandon, 保留在树上; 迷失方向先 view; 每 5 步排查至少更新 1 次 trace。',
   '- link 只表达 parent 无法表达的因果边(跨分支); 父子关系已隐含触发链, 不重复 link。',
-  '- 新调查 create_tree; resolve 只调一次: 全案收口, 标记最终目标达成。假设的证实/证伪走 complete/abandon, 不用 resolve。',
+  '- 新调查 create_tree; 全案收口 = resolve 打在 goal 上, 只调一次, 标记最终目标达成。证实 = complete 或 resolve(两者等价), 证伪 = abandon。',
 ].join('\n')

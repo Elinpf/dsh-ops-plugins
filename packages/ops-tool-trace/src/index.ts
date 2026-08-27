@@ -204,6 +204,21 @@ function foldEvent(state: ForestState | null, event: FoldEvent): ForestState | n
       const forest = state ?? { trees: [] }
       const tree = activeTree(forest)
       if (!tree) return state
+      const targetId = args.id ?? 'goal'
+      if (targetId !== 'goal') {
+        // Non-goal resolve = positive close of one node — complete semantics.
+        // The logged event keeps the model's word ('resolve'); the fold maps
+        // it to the same state change complete would make and never closes
+        // the tree. This also repairs replay of historically REJECTED
+        // resolve(m1) calls: they were logged before validation and the old
+        // id-ignoring fold would have closed the whole tree on replay.
+        const updatedTree = updateNodeInTree(tree, targetId, turn, (n) => {
+          n.status = 'done'
+          n.summary = args.summary ?? null
+        })
+        if (!updatedTree) return state
+        return replaceTree(forest, tree, updatedTree)
+      }
       const updatedTree = updateNodeInTree(tree, 'goal', turn, (n) => {
         n.status = 'resolved'
         n.summary = args.summary ?? null
@@ -354,7 +369,9 @@ export const traceProjection = {
   init: (): ForestState | null => null,
   apply: foldEvent,
   view: (s: ForestState | null): ForestState | null => s,
-  stateVersion: 3,
+  // v4: resolve on a non-goal node folds to complete semantics (was: id
+  // ignored, always closed the tree) — old snapshots must be rebuilt.
+  stateVersion: 4,
 }
 
 // ── Tree renderers (model-visible output) ────────────────────────────────────
@@ -590,8 +607,18 @@ function renderOutput(args: TraceArgs, value: TraceResult): string {
       lines.push(`~ ${link.id} ← caused_by: ${link.caused_by}`)
     }
   } else if (action === 'resolve') {
-    // Show resolved goal
-    lines.push('= goal: resolved')
+    // goal: tree closure; non-goal: complete-equivalent positive close
+    const targetId = typeof args.id === 'string' && args.id !== 'goal' ? args.id : null
+    if (targetId) {
+      const node = tree.nodes.find((n) => n.id === targetId)
+      if (node) {
+        const label = STATUS_LABEL[node.status] || ''
+        lines.push(`= ${targetId}: ${label}`)
+      }
+    } else {
+      // Show resolved goal
+      lines.push('= goal: resolved')
+    }
   }
 
   if (stats) lines.push(stats)
@@ -647,7 +674,7 @@ function apply(ctx: Context, _config: Record<string, never>): void {
 
       goal_title: { type: 'string', description: 'Title for the investigation goal (create_tree only).' },
 
-      id: { type: 'string', description: 'Node id. For add_step/add_milestone: the new node\'s semantic id (e.g. "ceph-full"). For start/complete/abandon/reopen: single target node. For link: target node (use with caused_by).' },
+      id: { type: 'string', description: 'Node id. For add_step/add_milestone: the new node\'s semantic id (e.g. "ceph-full"). For start/complete/abandon/reopen: single target node. For resolve: goal = 全案收口; any other id = 正面关闭该节点(等同 complete 带 summary). For link: target node (use with caused_by).' },
       parent_id: { type: 'string', description: `Parent node id (add_step/add_milestone only). ${TRIGGER_NODE_RULE}` },
       title: { type: 'string', description: 'Node title (add_step/add_milestone only).' },
       ids: {
@@ -832,10 +859,20 @@ function apply(ctx: Context, _config: Record<string, never>): void {
         case 'resolve': {
           const tree = activeNode()
           if (!tree) throw new Error('trace: no tree')
-          if (args.id && args.id !== 'goal') {
-            throw new Error(`trace: resolve 只用于整棵树收口(最终 goal), 不接受 id "${args.id}"; 证实假设用 complete 带 summary, 证伪用 abandon`)
-          }
           if (!args.summary) throw new Error('trace: summary is required for resolve')
+          const targetId = args.id ?? 'goal'
+          if (targetId !== 'goal') {
+            // resolve on a non-goal node = positive close of that node, the
+            // exact semantics of complete (resolve is the domain-language
+            // intuition; complete stays as the alias). Tree closure happens
+            // only when id is 'goal' (below), byte-for-byte unchanged.
+            const node = tree.nodes.find((n) => n.id === targetId)
+            if (!node) throw new Error(`trace: node "${targetId}" not found`)
+            if (node.status !== 'done' && !canTransition(node.status, 'done')) {
+              throw new Error(`trace: cannot transition "${targetId}" from "${node.status}" to "done"`)
+            }
+            return applyAndSummarize()
+          }
           const goal = tree.nodes.find((n) => n.id === 'goal')
           if (!goal) throw new Error('trace: no goal node to resolve')
           if (goal.status === 'resolved') {

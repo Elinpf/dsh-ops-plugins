@@ -171,15 +171,36 @@ describe('resolve', () => {
     expect(r.tree.nodes[0].summary).toBe('root cause found')
   })
 
-  it('rejects a milestone id with a teaching error (regression: silent no-op)', async () => {
+  it('on a milestone/step it is a positive close — complete semantics, tree stays open', async () => {
+    const h = setup()
+    await h.run({ action: 'create_tree', goal_title: 'G' })
+    await h.run({ action: 'add_milestone', id: 'm1', parent_id: 'goal', title: 'Ceph full' })
+    await h.run({ action: 'add_step', id: 's1', parent_id: 'm1', title: 'Check osd' })
+    // resolve on a milestone (goal status) — was the 47-occurrence vocabulary trap
+    const rm = await h.run({ action: 'resolve', id: 'm1', summary: '证实' })
+    expect(rm.tree.nodes.find((n) => n.id === 'm1')).toMatchObject({ status: 'done', summary: '证实' })
+    expect(rm.tree.resolved).toBe(false)
+    // resolve on a step (pending status)
+    const rs = await h.run({ action: 'resolve', id: 's1', summary: 'osd.1 99%' })
+    expect(rs.tree.nodes.find((n) => n.id === 's1')).toMatchObject({ status: 'done', summary: 'osd.1 99%' })
+    expect(rs.tree.resolved).toBe(false)
+    // render shows the node close, not tree closure
+    expect(h.render({ action: 'resolve', id: 's1' }, rs)).toContain('= s1: done')
+    // the tree still resolves afterwards
+    const rg = await h.run({ action: 'resolve', id: 'goal', summary: 'root cause found' })
+    expect(rg.tree.resolved).toBe(true)
+  })
+
+  it('on a non-goal node it still requires summary, a known id, and a legal transition', async () => {
     const { run } = setup()
     await run({ action: 'create_tree', goal_title: 'G' })
     await run({ action: 'add_milestone', id: 'm1', parent_id: 'goal', title: 'M1' })
-    await expect(run({ action: 'resolve', id: 'm1', summary: 'x' }))
-      .rejects.toThrow('complete')
-    // The tree must NOT be resolved by the rejected call
-    const v = await run({ action: 'view' })
-    expect(v.tree.resolved).toBe(false)
+    await expect(run({ action: 'resolve', id: 'm1' })).rejects.toThrow('summary')
+    await expect(run({ action: 'resolve', id: 'ghost', summary: 'x' })).rejects.toThrow('not found')
+    await run({ action: 'abandon', id: 'm1' })
+    await expect(run({ action: 'resolve', id: 'm1', summary: 'x' })).rejects.toThrow('cannot transition')
+    // tree never closed by the rejected calls
+    expect((await run({ action: 'view' })).tree.resolved).toBe(false)
   })
 
   it('rejects without summary', async () => {

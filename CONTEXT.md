@@ -160,10 +160,10 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 
 ### 状态流转的语义分工
 
-- **complete（带 summary）= 证实**：记录发现了什么
+- **complete / resolve（带 summary）= 证实、正面关闭**：记录结论。两者等价——resolve 是领域语言直觉（"resolve 一个假设"），complete 保留为别名；打在任意非 goal 节点上都只关闭该节点
 - **abandon = 证伪**：死路留在树上
 - **start / reopen**：进入 / 回到进行中
-- **resolve = 全案收口**：只作用于最终 goal，只调一次。假设的证实/证伪走 complete/abandon，**不用 resolve**
+- **resolve 打在 goal 上 = 全案收口**：只调一次，标记最终目标达成，树转入历史。只有这一发会置树级 `resolved` 标志（活跃树判定的唯一依据）
 
 ### detail 与 summary 的分工
 

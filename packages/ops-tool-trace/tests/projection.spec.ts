@@ -282,6 +282,31 @@ describe('resolve', () => {
     expect(lastTree(forest)!.nodes[0].title).toBe('G2')
     expect(forest!.trees[0].resolved).toBe(true)
   })
+
+  it('resolve on a non-goal id folds to complete semantics — node done, tree stays open', () => {
+    const forest = foldForest([
+      { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
+      { turn: 1, args: { action: 'add_milestone', id: 'm1', parent_id: 'goal', title: 'M1' } },
+      { turn: 2, args: { action: 'resolve', id: 'm1', summary: '证实' } },
+    ])
+    const tree = forest!.trees[0]
+    expect(tree.resolved).toBe(false)
+    expect(tree.nodes.find((n) => n.id === 'm1')).toMatchObject({ status: 'done', summary: '证实' })
+    expect(tree.nodes.find((n) => n.id === 'goal')!.status).toBe('goal')
+  })
+
+  it('replay of a historically REJECTED resolve(m1) call no longer closes the tree', () => {
+    // Before the alias change, execute rejected resolve on a milestone but
+    // the tool/call event was already logged, and the old fold ignored the
+    // id — replay would resolve the goal and close the tree.
+    const forest = foldForest([
+      { turn: 1, args: { action: 'create_tree', goal_title: 'G' } },
+      { turn: 1, args: { action: 'add_milestone', id: 'm1', parent_id: 'goal', title: 'M1' } },
+      { turn: 2, args: { action: 'resolve', id: 'm1', summary: 'x' } },
+    ])
+    expect(forest!.trees[0].resolved).toBe(false)
+    expect(forest!.trees[0].nodes.find((n) => n.id === 'goal')!.status).toBe('goal')
+  })
 })
 
 // ── Purity ──────────────────────────────────────────────────────────────────
