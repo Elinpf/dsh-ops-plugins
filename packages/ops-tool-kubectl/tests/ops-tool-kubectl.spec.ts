@@ -48,6 +48,13 @@ describe('kubectl', () => {
     })
   })
 
+  it('description warns that shell separators are parsed by the local shell', async () => {
+    const h = setup()
+    const desc: string = h.kubectl.description
+    expect(desc).toContain('local shell')
+    expect(desc).toContain('repeat the full kubectl prefix')
+  })
+
   it('normalizes a null exitCode (signal death) to -1', async () => {
     const h = setup({ runImpl: async () => ({ exitCode: null, stdoutText: '', stderrText: 'killed' }) })
     const { value } = await h.runKubectl({ cluster: 'prod', command: 'get pods' })

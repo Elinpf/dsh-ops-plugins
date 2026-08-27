@@ -41,6 +41,16 @@ export const HYPOTHESIS_FORM = '"我怀疑 X, 因为看到了 Y"'
 /** Where the full documentation lives. */
 export const HELP_POINTER = '完整用法与纪律: 调 `trace` action=help。'
 
+/**
+ * Soft hint for add_step: the parent is a milestone that already has
+ * completed steps with findings, so the new step may belong under one of
+ * those steps (drill-down) instead of flat under the milestone. A hint,
+ * never a rejection — flat-hanging is sometimes right.
+ */
+export function milestoneFollowUpHint(doneStepIds: string[]): string {
+  return `提示: 该 milestone 下已有完成的 step (${doneStepIds.join(', ')})。如果本步是跟进某个 step 的发现, 应挂到那个 step 下 (parent_id = 那个 step 的 id), 而不是平铺在 milestone 下。`
+}
+
 // ── Composed surfaces ────────────────────────────────────────────────────────
 
 /** One-liner for the tool registry description. */
@@ -77,7 +87,7 @@ export const HELP_TEXT = [
   '- start / complete / abandon / reopen(id 或 ids) — 状态流转; complete 可带 summary。',
   '- resolve(summary) — 全案收口, 只调一次, 只作用于最终 goal。',
   '- link(id, caused_by) 或 links 数组 — 跨分支因果边。',
-  '- view — 完整树; status_filter 可选。',
+  '- view — 完整树; status_filter 可选; format=tree 输出缩进树总览(只看形状)。',
   '',
   '### 触发节点 — parent_id 的唯一规则',
   `add_step / add_milestone 前问: "${TRIGGER_NODE_QUESTION}"`,

@@ -329,3 +329,128 @@ describe('registration surface', () => {
     await expect(h.run({ action: 'view' })).rejects.toThrow('no tree')
   })
 })
+
+// ── abandon milestone (#6 regression: goal → dead_end) ──────────────────────
+
+describe('abandon milestone (#6)', () => {
+  it('abandon on a milestone (goal status) marks it dead_end; reopen reactivates it', async () => {
+    const { run } = setup()
+    await run({ action: 'create_tree', goal_title: 'G' })
+    await run({ action: 'add_milestone', id: 'm1', parent_id: 'goal', title: 'Ceph full' })
+    // Before the fix this threw: cannot transition "m1" from "goal" to "dead_end"
+    const r = await run({ action: 'abandon', id: 'm1' })
+    expect(r.tree.nodes.find((n) => n.id === 'm1')!.status).toBe('dead_end')
+    const r2 = await run({ action: 'reopen', id: 'm1' })
+    expect(r2.tree.nodes.find((n) => n.id === 'm1')!.status).toBe('in_progress')
+  })
+
+  it('abandon on the root goal is rejected and points at resolve', async () => {
+    const { run } = setup()
+    await run({ action: 'create_tree', goal_title: 'G' })
+    await expect(run({ action: 'abandon', id: 'goal' })).rejects.toThrow('resolve')
+    const v = await run({ action: 'view' })
+    expect(v.tree.nodes[0].status).toBe('goal')
+    expect(v.tree.resolved).toBe(false)
+  })
+
+  it('resolve 收口语义不受影响: works after a milestone was abandoned', async () => {
+    const { run } = setup()
+    await run({ action: 'create_tree', goal_title: 'G' })
+    await run({ action: 'add_milestone', id: 'm1', parent_id: 'goal', title: 'M1' })
+    await run({ action: 'abandon', id: 'm1' })
+    const r = await run({ action: 'resolve', id: 'goal', summary: 'root cause found elsewhere' })
+    expect(r.tree.resolved).toBe(true)
+    expect(r.tree.nodes.find((n) => n.id === 'm1')!.status).toBe('dead_end')
+  })
+})
+
+// ── add_step flat-hang hint (#4) ─────────────────────────────────────────────
+
+describe('add_step flat-hang hint (#4)', () => {
+  async function withCompletedStepUnderMilestone() {
+    const h = setup()
+    await h.run({ action: 'create_tree', goal_title: 'G' })
+    await h.run({ action: 'add_milestone', id: 'm1', parent_id: 'goal', title: 'M1' })
+    await h.run({ action: 'add_step', id: 's1', parent_id: 'm1', title: 'S1' })
+    return h
+  }
+
+  it('hints when the milestone parent already has a completed step with summary — without blocking', async () => {
+    const h = await withCompletedStepUnderMilestone()
+    await h.run({ action: 'complete', id: 's1', summary: 'found X' })
+    const r = await h.run({ action: 'add_step', id: 's2', parent_id: 'm1', title: 'S2' })
+    expect(r.hint).toContain('s1')
+    // Not blocked: the step is created, flat under the milestone
+    expect(r.tree.nodes.find((n) => n.id === 's2')!.parent).toBe('m1')
+    const text = h.render({ action: 'add_step', id: 's2', parent_id: 'm1' }, r)
+    expect(text).toContain('提示')
+    expect(text).toContain('s1')
+  })
+
+  it('stays silent when the completed step has no summary', async () => {
+    const h = await withCompletedStepUnderMilestone()
+    await h.run({ action: 'complete', id: 's1' }) // no summary — no recorded finding
+    const r = await h.run({ action: 'add_step', id: 's2', parent_id: 'm1', title: 'S2' })
+    expect(r.hint).toBeUndefined()
+  })
+
+  it('stays silent when the milestone has no completed steps yet', async () => {
+    const h = await withCompletedStepUnderMilestone()
+    const r = await h.run({ action: 'add_step', id: 's2', parent_id: 'm1', title: 'S2' })
+    expect(r.hint).toBeUndefined()
+  })
+
+  it('stays silent when the parent is the root goal', async () => {
+    const h = setup()
+    await h.run({ action: 'create_tree', goal_title: 'G' })
+    await h.run({ action: 'add_step', id: 's1', parent_id: 'goal', title: 'S1' })
+    await h.run({ action: 'complete', id: 's1', summary: 'found X' })
+    const r = await h.run({ action: 'add_step', id: 's2', parent_id: 'goal', title: 'S2' })
+    expect(r.hint).toBeUndefined()
+  })
+
+  it('does not fire for add_milestone', async () => {
+    const h = await withCompletedStepUnderMilestone()
+    await h.run({ action: 'complete', id: 's1', summary: 'found X' })
+    const r = await h.run({ action: 'add_milestone', id: 'm2', parent_id: 'm1', title: 'M2' })
+    expect(r.hint).toBeUndefined()
+  })
+})
+
+// ── view format=tree (#5) ────────────────────────────────────────────────────
+
+describe('view format=tree (#5)', () => {
+  async function withTree() {
+    const h = setup()
+    await h.run({ action: 'create_tree', goal_title: 'G' })
+    await h.run({ action: 'add_milestone', id: 'm1', parent_id: 'goal', title: 'M1' })
+    await h.run({ action: 'add_step', id: 's1', parent_id: 'm1', title: 'S1' })
+    return h
+  }
+
+  it('renders an indented outline: one line per node, two spaces per depth', async () => {
+    const h = await withTree()
+    const r = await h.run({ action: 'view', format: 'tree' })
+    const text = h.render({ action: 'view', format: 'tree' }, r)
+    expect(text).toBe(['goal: G', '  m1: M1', '    s1: pending S1'].join('\n'))
+  })
+
+  it('default view is unchanged: full render with connectors, detail and summary', async () => {
+    const h = setup()
+    await h.run({ action: 'create_tree', goal_title: 'G' })
+    await h.run({ action: 'add_step', id: 's1', parent_id: 'goal', title: 'S1', detail: 'pod events' })
+    const r = await h.run({ action: 'view' })
+    const def = h.render({ action: 'view' }, r)
+    const explicit = h.render({ action: 'view', format: 'full' }, r)
+    expect(def).toBe(explicit)
+    expect(def).toContain('└──')
+    expect(def).toContain('detail: pod events')
+  })
+
+  it('combines with status_filter', async () => {
+    const h = await withTree()
+    const r = await h.run({ action: 'view', format: 'tree', status_filter: 'pending' })
+    const text = h.render({ action: 'view', format: 'tree' }, r)
+    expect(text).toBe(['goal: G', 's1: pending S1'].join('\n'))
+  })
+})

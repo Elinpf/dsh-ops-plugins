@@ -69,7 +69,7 @@ export function apply(ctx: Context, _config: Record<string, never>): void {
     name: 'kubectl',
     kind: 'k8s',
     targetParam: 'cluster',
-    description: 'Execute a kubectl command on a specified K8s cluster. The plugin automatically injects the correct --kubeconfig credential (shown as a <id@tier:field> reference). Use list_access to see available cluster names.',
+    description: 'Execute a kubectl command on a specified K8s cluster. The plugin automatically injects the correct --kubeconfig credential (shown as a <id@tier:field> reference). Use list_access to see available cluster names. The command runs through a local shell: separators like ; | && are parsed by the shell before kubectl sees them, so to chain multiple kubectl commands repeat the full kubectl prefix (including the --kubeconfig=<id@tier:field> reference) after each separator — or make separate calls.',
     targetParamDescription: 'K8s cluster profile name. Use list_access to see options.',
     commandDescription: 'kubectl subcommand WITHOUT the kubectl prefix. Examples: get pods -n default, describe node node-1',
     buildCommand(fields, command, ref) {

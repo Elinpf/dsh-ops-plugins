@@ -53,8 +53,8 @@ import { activeTree, NODE_STATUSES } from './types.js'
 import { SessionForestStore } from './session-forests.js'
 import { buildReminderContext, createIdleRule, createNestingRule, ReminderLatch } from './reminders.js'
 import type { ReminderContext } from './reminders.js'
-import { HELP_TEXT, STATIC_PROMPT, TOOL_DESCRIPTION, TRIGGER_NODE_RULE } from './doctrine.js'
-import { buildTreeIndex, sortChildren } from './tree-layout.js'
+import { HELP_TEXT, STATIC_PROMPT, TOOL_DESCRIPTION, TRIGGER_NODE_RULE, milestoneFollowUpHint } from './doctrine.js'
+import { buildTreeIndex, depthOf, flattenTree, sortChildren } from './tree-layout.js'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -70,7 +70,10 @@ const Config = z.object({})
 
 // ── State machine (05) ───────────────────────────────────────────────────────
 
-/** Legal status transitions. Key = from-status, value = set of allowed to-statuses. */
+/** Legal status transitions. Key = from-status, value = set of allowed to-statuses.
+ *  Note: goal → dead_end is deliberately absent here — it is legal only for
+ *  milestones (id ≠ 'goal'), and that exception lives in the execute-time
+ *  validation, where the node id is known. */
 const TRANSITIONS: Record<NodeStatus, NodeStatus[]> = {
   goal: ['in_progress', 'done', 'resolved'],
   pending: ['in_progress', 'done', 'dead_end'],
@@ -421,7 +424,7 @@ function renderCompact(value: TraceResult, newNodeId?: string): string {
 
 /**
  * Full render: includes detail, summary, and turns for each node.
- * Used by the `view` action.
+ * Used by the `view` action (default format).
  */
 function renderFull(value: TraceResult): string {
   if (!value || !value.tree || !value.tree.nodes || value.tree.nodes.length === 0) {
@@ -462,6 +465,30 @@ function renderFull(value: TraceResult): string {
   if (root) renderNode(root, '', true)
   if (tree.resolved) lines.push('resolved')
 
+  return lines.join('\n')
+}
+
+/**
+ * Indented-outline render: one line per node, two spaces per depth, no
+ * connectors or detail — the tree shape at a glance. Used by the `view`
+ * action with format=tree. Shares flattenTree/depthOf with the web panel
+ * (src/tree-layout.ts), so both audiences see the same order.
+ */
+function renderIndentedTree(value: TraceResult): string {
+  if (!value || !value.tree || !value.tree.nodes || value.tree.nodes.length === 0) {
+    return 'No tree — call create_tree first.'
+  }
+  const nodes = value.tree.nodes
+  const listed = new Set(nodes.map((n) => n.id))
+  const cache: Record<string, number> = {}
+  const lines = flattenTree(nodes).map((n) => {
+    // Orphans (parent filtered out by status_filter, or missing) render at depth 0.
+    const depth = n.parent !== null && !listed.has(n.parent) ? 0 : depthOf(nodes, n.id, cache)
+    const label = STATUS_LABEL[n.status] || ''
+    const labelStr = label ? `${label} ` : ''
+    return `${'  '.repeat(depth)}${n.id}: ${labelStr}${n.title}`
+  })
+  if (value.tree.resolved) lines.push('resolved')
   return lines.join('\n')
 }
 
@@ -517,8 +544,10 @@ function renderOutput(args: TraceArgs, value: TraceResult): string {
   // help: full usage documentation, no tree needed
   if (action === 'help') return HELP_TEXT
 
-  // view: always full tree
-  if (action === 'view') return renderFull(value)
+  // view: full tree by default; format=tree renders the indented outline
+  if (action === 'view') {
+    return args?.format === 'tree' ? renderIndentedTree(value) : renderFull(value)
+  }
 
   // create_tree: tree is just 1 node, return it
   if (action === 'create_tree') {
@@ -566,6 +595,8 @@ function renderOutput(args: TraceArgs, value: TraceResult): string {
   }
 
   if (stats) lines.push(stats)
+  // Non-blocking advisory hint (e.g. add_step flat-hang under a milestone)
+  if (value.hint) lines.push(value.hint)
   return lines.join('\n')
 }
 
@@ -645,6 +676,8 @@ function apply(ctx: Context, _config: Record<string, never>): void {
 
       // 'goal' is structural, not a status you'd filter by.
       status_filter: { type: 'string', enum: NODE_STATUSES.filter((s) => s !== 'goal'), description: 'Filter view to nodes of one status (view only, optional).' },
+
+      format: { type: 'string', enum: ['full', 'tree'], description: 'view 输出格式 (view only, optional): "full" 完整树含 detail/summary (默认); "tree" 缩进树总览, 只看形状。' },
     },
 
     output: {
@@ -696,6 +729,7 @@ function apply(ctx: Context, _config: Record<string, never>): void {
             },
           },
           new_node: { type: 'string' },
+          hint: { type: 'string' },
         },
       },
       render: (args, value) => [{
@@ -741,8 +775,23 @@ function apply(ctx: Context, _config: Record<string, never>): void {
             throw new Error(`trace: node id "${args.id}" already exists`)
           }
 
+          // Soft hint (never a rejection): flat-hanging a follow-up step
+          // under a milestone loses the drill-down chain. Milestones carry
+          // no kind marker — they are indistinguishable from steps once they
+          // leave the 'goal' status — so this fires on goal-status parents,
+          // which is the common case (milestones stay 'goal' until judged).
+          let hint: string | undefined
+          if (args.action === 'add_step' && parent.id !== 'goal' && parent.status === 'goal') {
+            const doneSteps = tree.nodes.filter((n) =>
+              n.parent === parent.id && n.status === 'done' && n.summary !== null)
+            if (doneSteps.length > 0) {
+              hint = milestoneFollowUpHint(doneSteps.map((n) => n.id))
+            }
+          }
+
           const result = applyAndSummarize()
           result.new_node = args.id
+          if (hint) result.hint = hint
           return result
         }
 
@@ -765,6 +814,14 @@ function apply(ctx: Context, _config: Record<string, never>): void {
             if (!node) throw new Error(`trace: node "${nid}" not found`)
             if (node.status === targetStatus) continue // idempotent — already at target
             if (!canTransition(node.status, targetStatus)) {
+              // Milestones share the root's initial status 'goal' but are
+              // falsifiable hypotheses: abandon (goal → dead_end) is the 证伪
+              // operation and is legal for them. The root goal is not a
+              // hypothesis — closing the whole tree is resolve's job.
+              if (targetStatus === 'dead_end' && node.status === 'goal') {
+                if (node.id !== 'goal') continue // milestone 证伪 — allowed
+                throw new Error(`trace: "goal" 是整棵树的收口目标, 不能 abandon; 全案收口用 resolve(summary)`)
+              }
               throw new Error(`trace: cannot transition "${nid}" from "${node.status}" to "${targetStatus}"`)
             }
           }

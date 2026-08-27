@@ -11,7 +11,7 @@ export const HELP_POINTER = 'Call environment action=help for full usage.'
 
 export const TOOL_DESCRIPTION =
   'Read the environment inventory: which middleware runs on which registered k8s cluster, and best-effort relation edges between apps and middleware. ' +
-  'Actions: overview (all clusters, compact), show (one cluster, details + edges), refresh (re-scan now), help (full usage). ' +
+  'Actions: overview (all clusters, compact), show (one cluster, details + edges; narrow with the optional namespace and name filters instead of paging a large output), refresh (re-scan now), help (full usage). ' +
   'Data comes from ~/.dsh-ops/environment.yaml, refreshed automatically when older than its TTL — reads are cheap, prefer overview over blind kubectl exploration.'
 
 /** The one-line system-prompt section (registered through ops-prompts). */
@@ -36,7 +36,11 @@ deterministic scans — no LLM guessing — and persisted at
 - show — one cluster, full detail. Requires the cluster parameter (a
   cluster name from overview / list_access). Returns middleware instances
   (type/namespace/workload/service entries), the unknown bucket
-  (unrecognized workloads, still listed), and relation edges.
+  (unrecognized workloads, still listed), and relation edges. Optional
+  filters narrow the lists: namespace (exact match) and name (substring,
+  case-insensitive; ANDed together). When filtering, edges are kept only
+  when their workload endpoint survives — for fronts edges (Service →
+  workload) that endpoint is the "to" side.
 - refresh — re-scan every registered k8s cluster now. A cluster that is
   unreachable keeps its previous section, marked stale. Read-only: the
   scan resolves the ro credential tier only.

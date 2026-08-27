@@ -105,7 +105,7 @@ export type {
   RefreshTarget,
 } from './inventory.js'
 
-export { createEnvironmentTool } from './tool.js'
+export { createEnvironmentTool, filterDetail } from './tool.js'
 export type {
   ClusterDetail,
   ClusterSummary,
@@ -114,6 +114,7 @@ export type {
   EnvironmentToolDeps,
   EnvironmentToolResult,
   RefreshResultEntry,
+  ShowFilter,
   UnknownWorkload,
 } from './tool.js'
 

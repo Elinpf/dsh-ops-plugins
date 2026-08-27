@@ -5,8 +5,8 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { createEnvironmentTool } from '../src/tool.js'
-import type { EnvironmentToolDeps } from '../src/tool.js'
+import { createEnvironmentTool, filterDetail } from '../src/tool.js'
+import type { ClusterDetail, EnvironmentToolDeps } from '../src/tool.js'
 import type { EnvironmentInventory, InventorySection } from '../src/inventory.js'
 import { HELP_TEXT } from '../src/doctrine.js'
 
@@ -119,7 +119,7 @@ describe('environment tool', () => {
   it('exposes overview/show/refresh/help with an optional cluster param', () => {
     const { tool } = setup()
     expect(tool.name).toBe('environment')
-    expect(Object.keys(tool.parameters.properties).sort()).toEqual(['action', 'cluster'])
+    expect(Object.keys(tool.parameters.properties).sort()).toEqual(['action', 'cluster', 'name', 'namespace'])
     expect([...tool.parameters.required]).toEqual(['action'])
     expect(tool.parameters.properties.action.enum).toEqual(['overview', 'show', 'refresh', 'help'])
   })
@@ -304,5 +304,115 @@ describe('render', () => {
     expect(showText).toContain('prometheus: monitoring/prometheus')
     expect(showText).toContain('prometheus: up 1 [DOWN 1]')
     expect(showText).toContain('prometheus: up 1')
+  })
+})
+
+// ── show filters ─────────────────────────────────────────────────────────────
+
+/** A two-namespace detail used by the filter tests. */
+function richDetail(): ClusterDetail {
+  return {
+    name: 'pf-test',
+    scannedAt: '2026-08-27T11:30:00.000Z',
+    stale: false,
+    middleware: [
+      { type: 'postgres', namespace: 'baizeops', workload: 'postgres', workloadKind: 'StatefulSet', images: ['postgres:16'], serviceEntries: ['postgres'] },
+      { type: 'prometheus', namespace: 'monitoring', workload: 'prometheus', workloadKind: 'StatefulSet', images: ['prom:v2'], serviceEntries: ['prometheus'] },
+    ],
+    unknown: [
+      { name: 'user-service', namespace: 'baizeops', kind: 'Deployment', images: ['harbor.cnzbai.com/baizeops/user-service:1.4.2'] },
+      { name: 'mystery', namespace: 'monitoring', kind: 'Deployment', images: ['harbor.cnzbai.com/baizeops/mystery:0.1'] },
+    ],
+    edges: [
+      // app in baizeops uses postgres — survives a baizeops filter
+      { kind: 'uses-middleware', from: { kind: 'Deployment', namespace: 'baizeops', name: 'user-service' }, to: { kind: 'StatefulSet', namespace: 'baizeops', name: 'postgres' }, via: 'env:PG_HOST', targetType: 'postgres' },
+      // fronts: from is the Service, the workload endpoint is `to`
+      { kind: 'fronts', from: { kind: 'Service', namespace: 'baizeops', name: 'postgres' }, to: { kind: 'StatefulSet', namespace: 'baizeops', name: 'postgres' }, via: 'selector' },
+      { kind: 'fronts', from: { kind: 'Service', namespace: 'monitoring', name: 'prometheus' }, to: { kind: 'StatefulSet', namespace: 'monitoring', name: 'prometheus' }, via: 'selector' },
+      // cross-namespace edge whose workload end is filtered out by ns=baizeops
+      { kind: 'uses-middleware', from: { kind: 'Deployment', namespace: 'monitoring', name: 'mystery' }, to: { kind: 'StatefulSet', namespace: 'baizeops', name: 'postgres' }, via: 'env:X', targetType: 'postgres' },
+    ],
+    counts: { services: 4, ingresses: 1, workloads: 6 },
+  }
+}
+
+describe('show filters', () => {
+  it('no filters: detail passes through unchanged (same reference)', () => {
+    const detail = richDetail()
+    expect(filterDetail(detail, {})).toBe(detail)
+  })
+
+  it('namespace filter narrows middleware, unknown bucket, and edges', () => {
+    const filtered = filterDetail(richDetail(), { namespace: 'baizeops' })
+    expect(filtered.middleware.map(m => m.workload)).toEqual(['postgres'])
+    expect(filtered.unknown.map(u => u.name)).toEqual(['user-service'])
+    const edgeIds = filtered.edges.map(e => `${e.kind}:${e.from.namespace}/${e.from.name}→${e.to.namespace}/${e.to.name}`)
+    // user-service → postgres kept (from in set); postgres fronts kept (to in set);
+    // prometheus fronts and the monitoring-originated edge dropped.
+    expect(edgeIds).toEqual([
+      'uses-middleware:baizeops/user-service→baizeops/postgres',
+      'fronts:baizeops/postgres→baizeops/postgres',
+    ])
+  })
+
+  it('name filter is a case-insensitive substring match', () => {
+    const filtered = filterDetail(richDetail(), { name: 'POST' })
+    expect(filtered.middleware.map(m => m.workload)).toEqual(['postgres'])
+    expect(filtered.unknown).toEqual([])
+    // Only postgres survives; the uses-middleware edge's from (user-service)
+    // fell out of the set, the postgres fronts edge's `to` stayed in.
+    expect(filtered.edges.map(e => e.kind)).toEqual(['fronts'])
+  })
+
+  it('namespace and name combine as AND', () => {
+    const filtered = filterDetail(richDetail(), { namespace: 'monitoring', name: 'prom' })
+    expect(filtered.middleware.map(m => m.workload)).toEqual(['prometheus'])
+    expect(filtered.unknown).toEqual([])
+    expect(filtered.edges.map(e => e.kind)).toEqual(['fronts'])
+  })
+
+  it('a filter matching nothing yields empty lists, not an error', () => {
+    const filtered = filterDetail(richDetail(), { name: 'no-such-thing' })
+    expect(filtered.middleware).toEqual([])
+    expect(filtered.unknown).toEqual([])
+    expect(filtered.edges).toEqual([])
+  })
+
+  it('the tool applies filters end-to-end and render echoes them', async () => {
+    const { tool } = setup({
+      inventory: inventory({
+        'pf-test': section({
+          middleware: richDetail().middleware,
+          edges: richDetail().edges as any,
+          workloads: [
+            {
+              kind: 'Deployment', namespace: 'baizeops', name: 'user-service',
+              images: ['harbor.cnzbai.com/baizeops/user-service:1.4.2'],
+              labels: {}, podLabels: {}, env: {}, configMapRefs: [], secretRefs: [], type: 'unknown',
+            },
+            {
+              kind: 'Deployment', namespace: 'monitoring', name: 'mystery',
+              images: ['harbor.cnzbai.com/baizeops/mystery:0.1'],
+              labels: {}, podLabels: {}, env: {}, configMapRefs: [], secretRefs: [], type: 'unknown',
+            },
+          ],
+        }),
+      }),
+    })
+    const value = await tool.execute({ action: 'show', cluster: 'pf-test', namespace: 'baizeops' }, exec())
+    expect(value.cluster.middleware.map((m: any) => m.workload)).toEqual(['postgres'])
+    expect(value.cluster.unknown.map((u: any) => u.name)).toEqual(['user-service'])
+    expect(value.cluster.edges).toHaveLength(2)
+    const text = tool.output.render({ action: 'show', cluster: 'pf-test', namespace: 'baizeops' }, value).map((b: any) => b.text).join('\n')
+    expect(text).toContain('filtered by namespace=baizeops')
+  })
+
+  it('unfiltered show output is byte-identical to before (render carries no filter line)', async () => {
+    const { tool } = setup()
+    const value = await tool.execute({ action: 'show', cluster: 'pf-test' }, exec())
+    const text = tool.output.render({ action: 'show', cluster: 'pf-test' }, value).map((b: any) => b.text).join('\n')
+    expect(text).not.toContain('filtered by')
+    expect(value.cluster.middleware).toHaveLength(1)
+    expect(value.cluster.edges).toHaveLength(1)
   })
 })

@@ -178,6 +178,42 @@ function detailOf(name: string, section: InventorySection): ClusterDetail {
   return detail
 }
 
+// ── show filtering ──────────────────────────────────────────────────────────
+
+export interface ShowFilter {
+  namespace?: string
+  name?: string
+}
+
+/**
+ * Apply show's optional filters to a cluster detail. Both filters narrow the
+ * middleware list and the unknown bucket; when a filter is given, edges are
+ * kept only when their WORKLOAD endpoint survives the filter — that endpoint
+ * is `from` for uses-service/uses-middleware/references-secret edges and `to`
+ * for fronts edges (whose from is a Service). An investigation starts from a
+ * workload and follows its outgoing edges, so edges whose workload fell out
+ * of the filtered set are noise.
+ */
+export function filterDetail(detail: ClusterDetail, filter: ShowFilter): ClusterDetail {
+  const ns = filter.namespace
+  const name = filter.name?.toLowerCase()
+  if (ns === undefined && name === undefined) return detail
+  const matches = (namespace: string, workloadName: string): boolean =>
+    (ns === undefined || namespace === ns)
+    && (name === undefined || workloadName.toLowerCase().includes(name))
+  const middleware = detail.middleware.filter(m => matches(m.namespace, m.workload))
+  const unknown = detail.unknown.filter(u => matches(u.namespace, u.name))
+  const kept = new Set([
+    ...middleware.map(m => `${m.namespace}/${m.workload}`),
+    ...unknown.map(u => `${u.namespace}/${u.name}`),
+  ])
+  const edges = detail.edges.filter(e => {
+    const wl = e.kind === 'fronts' ? e.to : e.from
+    return kept.has(`${wl.namespace}/${wl.name}`)
+  })
+  return { ...detail, middleware, unknown, edges }
+}
+
 // ── The tool factory ─────────────────────────────────────────────────────────
 
 export function createEnvironmentTool(
@@ -278,6 +314,8 @@ export function createEnvironmentTool(
         description: 'overview: all clusters, compact. show: one cluster, details + edges (requires cluster). refresh: re-scan now. help: full usage.',
       },
       cluster: { type: 'string', description: 'Cluster name (required for show). Use overview or list_access to see names.' },
+      namespace: { type: 'string', description: 'show only: keep middleware/unknown workloads in this namespace (exact match).' },
+      name: { type: 'string', description: 'show only: keep middleware/unknown workloads whose name contains this substring (case-insensitive). Combined with namespace as AND.' },
     },
     output: {
       schema: {
@@ -416,9 +454,9 @@ export function createEnvironmentTool(
           },
         },
       },
-      render: (_args, value) => [{ type: 'text' as const, text: renderResult(value) }],
+      render: (args, value) => [{ type: 'text' as const, text: renderResult(value, args as { namespace?: string, name?: string }) }],
     },
-    async execute(args: { action: string, cluster?: string }): Promise<EnvironmentToolResult> {
+    async execute(args: { action: string, cluster?: string, namespace?: string, name?: string }): Promise<EnvironmentToolResult> {
       try {
         switch (args.action) {
           case 'help':
@@ -454,7 +492,10 @@ export function createEnvironmentTool(
                 error: `unknown cluster "${args.cluster}" in the inventory` + (known.length > 0 ? `. Known: ${known.join(', ')}` : ' — the inventory is empty'),
               }
             }
-            const result: EnvironmentToolResult = { action: 'show', cluster: detailOf(args.cluster, section) }
+            const result: EnvironmentToolResult = {
+              action: 'show',
+              cluster: filterDetail(detailOf(args.cluster, section), { namespace: args.namespace, name: args.name }),
+            }
             if (note !== undefined) result.note = note
             return result
           }
@@ -488,7 +529,7 @@ function renderMonitoring(m: MonitoringStatus | undefined): string {
   return m.down > 0 ? ` · prometheus: up ${m.up} [DOWN ${m.down}]` : ` · prometheus: up ${m.up}`
 }
 
-function renderResult(value: EnvironmentToolResult): string {
+function renderResult(value: EnvironmentToolResult, args: { namespace?: string, name?: string } = {}): string {
   if (value.help !== undefined) return value.help
   const lines: string[] = []
   if (value.error !== undefined) lines.push(`[error] ${value.error}`)
@@ -510,6 +551,11 @@ function renderResult(value: EnvironmentToolResult): string {
     lines.push(`Cluster ${c.name} — scanned ${c.scannedAt}${c.stale ? ' [STALE]' : ''}`
       + ` (${c.counts.workloads} workloads, ${c.counts.services} services, ${c.counts.ingresses} ingresses)`
       + (c.prometheusService !== undefined ? ` · prometheus: ${c.prometheusService}` : ''))
+    const filterBits = [
+      args.namespace !== undefined ? `namespace=${args.namespace}` : undefined,
+      args.name !== undefined ? `name~=${args.name}` : undefined,
+    ].filter(Boolean)
+    if (filterBits.length > 0) lines.push(`filtered by ${filterBits.join(' AND ')} (lists below are the matching subset)`)
     if (c.lastError !== undefined) lines.push(`last error: ${c.lastError}`)
     lines.push('Middleware:')
     for (const m of c.middleware) {

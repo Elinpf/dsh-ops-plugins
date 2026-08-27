@@ -41,4 +41,8 @@ describe('doctrine surfaces', () => {
     expect(STATIC_PROMPT.split(TRIGGER_NODE_QUESTION)).toHaveLength(2)
     expect(HELP_TEXT.split(TRIGGER_NODE_QUESTION)).toHaveLength(2)
   })
+
+  it('help text documents the view tree format', () => {
+    expect(HELP_TEXT).toContain('format=tree')
+  })
 })
