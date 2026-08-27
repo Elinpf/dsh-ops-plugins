@@ -1,6 +1,6 @@
 ---
 title: 授权面板（/access + 自建审批通道）— 人的主动授权/撤销入口与可调档审批
-status: proposed
+status: implemented
 date: 2026-08-27
 adr: docs/adr/0004-access-panel.md
 ---

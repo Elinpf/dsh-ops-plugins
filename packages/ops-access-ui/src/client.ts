@@ -184,6 +184,89 @@ async function fetchEntry(kind, name, tier) {
 }
 
 
+
+// ── Access panel API functions (mirror the gate's human-side routes) ─────────
+
+/** One live grant row as reported by GET /ops-access/grants. */
+interface PanelGrant {
+  kind: string
+  name: string
+  expiresAt: number
+  reason: string
+  approvedBy: string
+  remainingMinutes: number
+}
+
+/** One parked request_access call awaiting a human decision. */
+interface PanelPendingRequest {
+  id: string
+  session: string
+  kind: string
+  name: string
+  requestedTtlMinutes: number
+  reason: string
+  createdAt: number
+  decidesAt: number
+}
+
+/** Fetch this session's live grants + the configured TTL options. Null on failure. */
+async function fetchPanelGrants(sessionId: string, signal?: AbortSignal): Promise<{ grants: PanelGrant[], ttlOptions: number[] } | null> {
+  try {
+    const res = await fetch('/ops-access/grants?session=' + encodeURIComponent(sessionId), { signal })
+    if (!res.ok) return null
+    return await res.json()
+  } catch {
+    return null
+  }
+}
+
+/** Fetch this session's pending access requests. Null on failure. */
+async function fetchPanelRequests(sessionId: string, signal?: AbortSignal): Promise<{ requests: PanelPendingRequest[] } | null> {
+  try {
+    const res = await fetch('/ops-access/access-requests?session=' + encodeURIComponent(sessionId), { signal })
+    if (!res.ok) return null
+    return await res.json()
+  } catch {
+    return null
+  }
+}
+
+/** Grant a profile to the session from the panel. Returns the API result; never throws. */
+function postPanelGrant(sessionId: string, kind: string, name: string, ttlMinutes: number): Promise<ApiResult> {
+  return apiFetchResult('/ops-access/grants', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ session: sessionId, kind, name, ttlMinutes }),
+  }, 'postPanelGrant')
+}
+
+/** Revoke one grant. Returns the API result; never throws. */
+function postPanelRevoke(sessionId: string, kind: string, name: string): Promise<ApiResult> {
+  return apiFetchResult('/ops-access/grants/revoke', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ session: sessionId, kind, name }),
+  }, 'postPanelRevoke')
+}
+
+/** Revoke every grant of the session. Returns the API result; never throws. */
+function postPanelRevokeAll(sessionId: string): Promise<ApiResult> {
+  return apiFetchResult('/ops-access/grants/revoke-all', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ session: sessionId }),
+  }, 'postPanelRevokeAll')
+}
+
+/** Decide a pending request (approve with a TTL option, or reject). Never throws. */
+function postPanelDecide(id: string, approved: boolean, ttlMinutes?: number): Promise<ApiResult> {
+  return apiFetchResult('/ops-access/access-requests/decide', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(approved ? { id, approved, ttlMinutes } : { id, approved }),
+  }, 'postPanelDecide')
+}
+
 // ── CSS (theme variables, same discipline as trace dock) ────────────────────
 
 const CSS = `
@@ -472,6 +555,54 @@ const CSS = `
   padding-top: 4px;
   border-top: 1px dashed var(--dsw-alias-border-l1, #e5e7eb);
 }
+
+/* ── Access panel (授权面板) ── */
+.ops-access-panel { display: flex; flex-direction: column; gap: 14px; }
+.ops-access-panel-section { display: flex; flex-direction: column; gap: 6px; }
+.ops-access-panel-heading { font-size: 12px; font-weight: 600; opacity: 0.65; }
+.ops-access-panel-empty { font-size: 12px; opacity: 0.5; padding: 4px 0; }
+.ops-access-panel-message {
+  font-size: 12px; padding: 6px 10px; border-radius: 6px; cursor: pointer;
+  background: var(--dsw-specific-tip, #f6f8fa);
+  border: 1px solid var(--dsw-alias-border-l1, #e5e7eb);
+}
+.ops-access-panel-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 10px; border-radius: 8px; gap: 8px;
+}
+.ops-access-panel-row.clickable { cursor: pointer; }
+.ops-access-panel-row.clickable:hover { background: var(--dsw-alias-bg-secondary, #f6f8fa); }
+.ops-access-panel-row-title { font-weight: 500; display: flex; align-items: center; gap: 8px; }
+.ops-access-panel-row-detail { font-size: 12px; opacity: 0.55; }
+.ops-access-panel-request {
+  border: 1px solid var(--dsw-alias-border-l1, #e5e7eb); border-radius: 8px;
+  padding: 8px 10px; display: flex; flex-direction: column; gap: 6px;
+  background: var(--dsw-specific-tip, #f6f8fa);
+}
+.ops-access-panel-reason { font-size: 12px; opacity: 0.75; white-space: pre-wrap; }
+.ops-access-panel-badge {
+  font-size: 11px; font-weight: 400; padding: 1px 6px; border-radius: 4px;
+  background: var(--dsw-alias-bg-secondary, #eaeef2);
+}
+.ops-access-panel-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 2px 10px 4px; }
+.ops-access-panel-ttl-row { display: inline-flex; gap: 4px; }
+.ops-access-panel-btn {
+  border: 1px solid var(--dsw-alias-border-l1, #e5e7eb); border-radius: 6px;
+  background: transparent; color: inherit; font-size: 12px; padding: 3px 10px; cursor: pointer;
+}
+.ops-access-panel-btn:hover { background: var(--dsw-alias-bg-secondary, #f6f8fa); }
+.ops-access-panel-btn.primary { border-color: var(--dsw-alias-primary, #0969da); color: var(--dsw-alias-primary, #0969da); }
+.ops-access-panel-btn.danger { border-color: var(--dsw-alias-danger, #cf222e); color: var(--dsw-alias-danger, #cf222e); }
+.ops-access-panel-btn.ttl.selected { background: var(--dsw-alias-primary, #0969da); border-color: var(--dsw-alias-primary, #0969da); color: #fff; }
+.ops-access-panel-confirm {
+  display: flex; align-items: center; gap: 8px; font-size: 12px;
+  padding: 6px 10px; margin: 2px 0; border-radius: 6px;
+  border: 1px dashed var(--dsw-alias-danger, #cf222e);
+}
+.ops-access-panel .danger-zone .ops-access-panel-row-title { color: var(--dsw-alias-danger, #cf222e); }
+.ops-access-panel-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; margin-right: 6px; vertical-align: 1px; }
+.ops-access-panel-dot.rw { background: var(--dsw-alias-success, #1a7f37); box-shadow: 0 0 4px var(--dsw-alias-success, #1a7f37); }
+.ops-access-panel-dot.deny { background: var(--dsw-alias-danger, #cf222e); }
 `.trim()
 
 let cssInjected = false
@@ -1062,6 +1193,191 @@ function AdminSection(_props: { close?: () => void }): any {
   })
 }
 
+// ── Access panel (授权面板, ADR-0004) ────────────────────────────────────────
+// The content component registered into the ops-panel shell for /access.
+// Three zones: pending requests (approve with an adjustable TTL / reject),
+// this session's live grants (revoke one / revoke all), and the grant flow
+// (pick a profile → pick a TTL → confirm). Grants and requests poll every
+// 3 s while the panel is open; the component unmounts when it closes.
+
+/** The panel content props (structural — the ops-panel shell supplies them). */
+interface AccessPanelProps {
+  sessionId: string
+  close: () => void
+}
+
+/** The live grant covering one candidate profile, if this session holds one. */
+function liveGrantFor(grants: PanelGrant[], kind: string, name: string): PanelGrant | undefined {
+  return grants.find((g) => g.kind === kind && g.name === name)
+}
+
+/** Default approval TTL: the largest option not exceeding the request, else the smallest. */
+function defaultTtlChoice(options: number[], requested: number): number {
+  const sorted = [...options].sort((a, b) => a - b)
+  const within = sorted.filter((o) => o <= requested)
+  return within.length > 0 ? within[within.length - 1] : sorted[0]
+}
+
+function AccessPanel({ sessionId }: AccessPanelProps): any {
+  const [grants, setGrants] = useState<PanelGrant[]>([])
+  const [ttlOptions, setTtlOptions] = useState<number[]>([5, 10, 30])
+  const [requests, setRequests] = useState<PanelPendingRequest[]>([])
+  const [candidates, setCandidates] = useState<AccessMentionCandidate[]>([])
+  const [grantTarget, setGrantTarget] = useState<string | null>(null)
+  const [confirmKey, setConfirmKey] = useState<string | null>(null)
+  const [ttlChoice, setTtlChoice] = useState<Record<string, number>>({})
+  const [message, setMessage] = useState<string | null>(null)
+
+  const refresh = useCallback(async () => {
+    const g = await fetchPanelGrants(sessionId)
+    if (g !== null) {
+      setGrants(g.grants)
+      if (Array.isArray(g.ttlOptions) && g.ttlOptions.length > 0) setTtlOptions(g.ttlOptions)
+    }
+    const r = await fetchPanelRequests(sessionId)
+    if (r !== null) setRequests(r.requests)
+  }, [sessionId])
+
+  useEffect(() => {
+    void refresh()
+    const timer = setInterval(() => { void refresh() }, 3000)
+    return () => clearInterval(timer)
+  }, [refresh])
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/ops-access/list?query=')
+      .then(async (res) => { if (res.ok && !cancelled) setCandidates(await res.json()) })
+      .catch(() => { /* ops preset absent → no candidates */ })
+    return () => { cancelled = true }
+  }, [])
+
+  /** Run one mutating action, show its outcome, and refresh. */
+  async function run(action: () => Promise<ApiResult>, okText: string): Promise<void> {
+    const res = await action()
+    setMessage(res.ok ? okText : (res.error ?? '操作失败'))
+    setConfirmKey(null)
+    setGrantTarget(null)
+    await refresh()
+  }
+
+  /** A two-click confirm strip shared by grant/revoke/revoke-all. */
+  function confirmStrip(key: string, text: string, onConfirm: () => void): any {
+    if (confirmKey !== key) return null
+    return h('div', { className: 'ops-access-panel-confirm' },
+      h('span', null, text),
+      h('button', { className: 'ops-access-panel-btn danger', onClick: onConfirm }, '确认'),
+      h('button', { className: 'ops-access-panel-btn', onClick: () => setConfirmKey(null) }, '取消'),
+    )
+  }
+
+  /** A row of TTL option buttons with the selected one highlighted. */
+  function ttlRow(selected: number, onPick: (ttl: number) => void): any {
+    return h('span', { className: 'ops-access-panel-ttl-row' },
+      ttlOptions.map((ttl) =>
+        h('button', {
+          key: ttl,
+          className: 'ops-access-panel-btn ttl' + (ttl === selected ? ' selected' : ''),
+          onClick: () => onPick(ttl),
+        }, ttl + ' 分钟'),
+      ),
+    )
+  }
+
+  return h('div', { className: 'ops-access-panel' },
+    message !== null && h('div', { className: 'ops-access-panel-message', onClick: () => setMessage(null) }, message),
+
+    // ── Pending requests (approval mode) ──
+    requests.length > 0 && h('div', { className: 'ops-access-panel-section' },
+      h('div', { className: 'ops-access-panel-heading' }, '待审批的申请'),
+      requests.map((req) => {
+        const chosen = ttlChoice[req.id] ?? defaultTtlChoice(ttlOptions, req.requestedTtlMinutes)
+        return h('div', { key: req.id, className: 'ops-access-panel-request' },
+          h('div', { className: 'ops-access-panel-row-title' }, req.kind + '/' + req.name,
+            h('span', { className: 'ops-access-panel-badge' }, '申请 ' + req.requestedTtlMinutes + ' 分钟')),
+          h('div', { className: 'ops-access-panel-reason' }, req.reason),
+          h('div', { className: 'ops-access-panel-actions' },
+            ttlRow(chosen, (ttl) => setTtlChoice({ ...ttlChoice, [req.id]: ttl })),
+            h('button', {
+              className: 'ops-access-panel-btn primary',
+              onClick: () => void run(() => postPanelDecide(req.id, true, chosen), '已批准 ' + req.kind + '/' + req.name + '（' + chosen + ' 分钟）'),
+            }, '批准'),
+            h('button', {
+              className: 'ops-access-panel-btn',
+              onClick: () => void run(() => postPanelDecide(req.id, false), '已拒绝 ' + req.kind + '/' + req.name),
+            }, '拒绝'),
+          ),
+        )
+      }),
+    ),
+
+    // ── Live grants (revoke) ──
+    h('div', { className: 'ops-access-panel-section' },
+      h('div', { className: 'ops-access-panel-heading' }, '本会话活跃授权'),
+      grants.length === 0 && h('div', { className: 'ops-access-panel-empty' }, '无活跃授权'),
+      grants.map((g) => {
+        const key = g.kind + '/' + g.name
+        return h('div', { key, className: 'ops-access-panel-grant' },
+          h('div', {
+            className: 'ops-access-panel-row clickable',
+            onClick: () => setConfirmKey(confirmKey === 'revoke:' + key ? null : 'revoke:' + key),
+          },
+            h('span', { className: 'ops-access-panel-row-title' }, key),
+            h('span', { className: 'ops-access-panel-row-detail' }, '剩 ' + g.remainingMinutes + ' 分钟 · ' + g.approvedBy),
+          ),
+          confirmStrip('revoke:' + key, '收回 ' + key + ' 的提权权限？', () =>
+            void run(() => postPanelRevoke(sessionId, g.kind, g.name), '已收回 ' + key)),
+        )
+      }),
+      grants.length > 1 && h('div', null,
+        h('div', {
+          className: 'ops-access-panel-row clickable danger-zone',
+          onClick: () => setConfirmKey(confirmKey === 'revoke-all' ? null : 'revoke-all'),
+        }, h('span', { className: 'ops-access-panel-row-title' }, '收回本会话全部授权')),
+        confirmStrip('revoke-all', '收回全部 ' + grants.length + ' 项授权？', () =>
+          void run(() => postPanelRevokeAll(sessionId), '已收回全部授权')),
+      ),
+    ),
+
+    // ── Grant flow (pick profile → TTL → confirm) ──
+    h('div', { className: 'ops-access-panel-section' },
+      h('div', { className: 'ops-access-panel-heading' }, '授予提权访问'),
+      candidates.length === 0 && h('div', { className: 'ops-access-panel-empty' }, '无可授权档案'),
+      candidates.map((c) => {
+        const key = c.kind + '/' + c.name
+        const open = grantTarget === key
+        const live = liveGrantFor(grants, c.kind, c.name)
+        return h('div', { key, className: 'ops-access-panel-candidate' },
+          h('div', {
+            className: 'ops-access-panel-row clickable',
+            onClick: () => { setGrantTarget(open ? null : key); setConfirmKey(null) },
+          },
+            h('span', { className: 'ops-access-panel-row-title' }, key),
+            h('span', { className: 'ops-access-panel-row-detail' },
+              // Access-state marker on the right: lit green = this session
+              // holds an rw grant for the profile right now; no dot = plain
+              // ro. (A red 'deny' state is reserved for the future lockdown.)
+              live !== undefined &&
+                h('span', {
+                  className: 'ops-access-panel-dot rw',
+                  title: '本会话已授权 rw · 剩 ' + live.remainingMinutes + ' 分钟',
+                }),
+              live !== undefined ? '已授权 · 剩 ' + live.remainingMinutes + ' 分钟'
+                : (c.rw ? 'rw 就绪' : (c.ro ? '限时使用' : '未配置')),
+              c.environment ? ' · ' + c.environment : ''),
+          ),
+          open && h('div', { className: 'ops-access-panel-actions' },
+            ttlRow(0, (ttl) => setConfirmKey('grant:' + key + ':' + ttl)),
+          ),
+          open && ttlOptions.map((ttl) =>
+            confirmStrip('grant:' + key + ':' + ttl, '授予 ' + key + ' · ' + ttl + ' 分钟？', () =>
+              void run(() => postPanelGrant(sessionId, c.kind, c.name, ttl), '已授予 ' + key + '（' + ttl + ' 分钟）'))),
+        )
+      }),
+    ),
+  )
+}
+
 // ── Plugin apply ─────────────────────────────────────────────────────────────
 
 function apply(ctx: Context): void {
@@ -1126,6 +1442,23 @@ function apply(ctx: Context): void {
       ),
     ))
   }
+
+  // ── Access panel (ops-panel seam) ──────────────────────────────────────────
+  // Deferred inject: registers only when ops-panel is composed; without it the
+  // mention source and admin section are unaffected. The /access command
+  // itself is registered preset-plane by the gate — the panel opens only in
+  // sessions whose preset mounts the gate.
+  ;(ctx as unknown as { inject(deps: string[], cb: (c: unknown) => void): void }).inject(['opsPanels'], (pctx) => {
+    const opsPanels = (pctx as { opsPanels?: { registerPanel(def: Record<string, unknown>): () => void } }).opsPanels
+    if (opsPanels === undefined) return
+    ;(pctx as { effect(fn: () => () => void): void }).effect(() =>
+      opsPanels.registerPanel({
+        command: 'access',
+        title: '访问授权',
+        component: AccessPanel,
+      }),
+    )
+  })
 }
 
 export { apply, inject, name }
@@ -1137,6 +1470,10 @@ export { apply, inject, name }
 // are not consumed by the esbuild bundle (which only uses the trio above).
 // Using a separate named export group makes the boundary explicit.
 /** @internal */
-export { apiFetchList, apiFetchResult, fetchAdminList, fetchKinds, submitEntry, deleteEntry, AdminSection }
+export {
+  apiFetchList, apiFetchResult, fetchAdminList, fetchKinds, submitEntry, deleteEntry, AdminSection,
+  fetchPanelGrants, fetchPanelRequests, postPanelGrant, postPanelRevoke, postPanelRevokeAll, postPanelDecide,
+  AccessPanel, defaultTtlChoice, liveGrantFor,
+}
 /** @internal */
-export type { AdminEntry, AdminTierStatus, KindDescriptor, SubmitEntryBody, ApiResult }
+export type { AdminEntry, AdminTierStatus, KindDescriptor, SubmitEntryBody, ApiResult, PanelGrant, PanelPendingRequest }

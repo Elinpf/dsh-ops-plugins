@@ -1,0 +1,3 @@
+- insert:
+    - id: ops-panel
+      name: '@deepseek-ai/dsh-ops-panel'

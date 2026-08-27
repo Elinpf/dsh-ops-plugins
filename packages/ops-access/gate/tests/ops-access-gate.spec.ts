@@ -2,9 +2,10 @@
  * Unit spec for ops-access-gate: mounts core + gate together and drives the
  * externally observable seam — resolve serves ro vs rw fields depending on
  * the ledger, grants are isolated by session, a missing agent is fail-closed,
- * request_access flows through the (mocked) approval channel, TTL expiry and
- * revoke behave, ssh is gated per-use, and every transition lands in the
- * audit log. The gate never touches credential fields.
+ * request_access parks in the pending-request queue until the decide route
+ * settles it (ADR-0004: the access panel is the approval channel), the panel
+ * routes grant/revoke directly, TTL expiry and notices behave, ssh is gated
+ * per-use, and every transition lands in the audit log.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -17,6 +18,51 @@ const SESSION_B = { id: 'sess-b' }
 /** A grant that expires 30 minutes from now. */
 function futureGrant(session: string, kind: string, name: string): plugin.Grant {
   return { session, kind, name, expiresAt: Date.now() + 30 * 60000, reason: 'test reason', approvedBy: 'user' }
+}
+
+/** Poll the access-requests route until one request appears for the session. */
+async function awaitPending(h: ReturnType<typeof setup>, session: string) {
+  for (let i = 0; i < 100; i++) {
+    const res = await h.callRoute('/ops-access/access-requests', { query: '?session=' + session })
+    if (res.json.requests.length > 0) return res.json.requests[0]
+    await new Promise((r) => setTimeout(r, 5))
+  }
+  throw new Error('no pending request appeared for ' + session)
+}
+
+/** Drive a request_access call to its parked state, then decide it via the route. */
+async function requestAndDecide(
+  h: ReturnType<typeof setup>,
+  args: Record<string, unknown>,
+  exec: Record<string, unknown>,
+  decision: { approved: boolean, ttlMinutes?: number },
+) {
+  const call = h.callRequestAccess(args, exec)
+  const req = await awaitPending(h, (exec.agent as { id: string }).id)
+  const decide = await h.callRoute('/ops-access/access-requests/decide', {
+    method: 'POST',
+    body: { id: req.id, ...decision },
+  })
+  return { result: await call, decide, req }
+}
+
+/** Run every agent/pre-step listener once (core's mention listener AND the
+ * gate's notice drain share the event), capturing messages injected into the
+ * given session's agent. */
+async function drainNotices(h: ReturnType<typeof setup>, sessionId: string) {
+  const matching = h.listeners.filter((l) => l.event === 'agent/pre-step')
+  if (matching.length === 0) throw new Error('no agent/pre-step listener registered')
+  const injected: string[] = []
+  const agent = {
+    id: sessionId,
+    inject: (message: any) => {
+      for (const block of message.content) injected.push(block.text)
+    },
+  }
+  for (const l of matching) {
+    await l.listener({ agent }, async () => ({ kind: 'enter', messages: [] }))
+  }
+  return injected
 }
 
 // ── Export shape ─────────────────────────────────────────────────────────────
@@ -51,9 +97,7 @@ describe('brokering', () => {
   it('grant for a different profile does not elevate the requested one', async () => {
     const { opsAccess, gate, writeRegistry } = setup()
     writeRegistry(REGISTRY
-      + '  staging:\n'
-      + '    ro:\n      endpoint: https://ro-staging.internal\n'
-      + '    rw:\n      endpoint: https://rw-staging.internal\n')
+      + '  staging:' + String.fromCharCode(10) + '    ro:' + String.fromCharCode(10) + '      endpoint: https://ro-staging.internal' + String.fromCharCode(10) + '    rw:' + String.fromCharCode(10) + '      endpoint: https://rw-staging.internal' + String.fromCharCode(10))
     gate.authorize(futureGrant(SESSION_A.id, 'test', 'staging'))
     // prod has no grant → ro; staging has a grant → rw.
     expect((await opsAccess.resolve('test', 'prod', SESSION_A)).fields.endpoint).toBe('https://ro-prod.internal')
@@ -132,17 +176,14 @@ describe('fail-closed', () => {
 describe('rw tier errors', () => {
   it('an authorized resolve with no rw tier errors rather than silently serving ro', async () => {
     const { opsAccess, gate, writeRegistry } = setup()
-    // test/prod has an ro tier but NO rw tier — a grant was approved that
-    // cannot be fulfilled. Resolve must error, not silently degrade to ro.
-    writeRegistry('version: 1\ntest:\n  prod:\n    environment: prod\n    ro:\n      endpoint: https://ro-prod.internal\n')
+    writeRegistry('version: 1' + NL + 'test:' + NL + '  prod:' + NL + '    environment: prod' + NL + '    ro:' + NL + '      endpoint: https://ro-prod.internal' + NL)
     gate.authorize(futureGrant(SESSION_A.id, 'test', 'prod'))
     await expect(opsAccess.resolve('test', 'prod', SESSION_A)).rejects.toThrow(/no rw tier/)
   })
 
   it('the no-rw-tier error does not leak a secret rw value from another profile', async () => {
     const { opsAccess, gate, writeRegistry } = setup()
-    // test/prod has an ro tier only; test/other carries a secret rw value.
-    writeRegistry('version: 1\ntest:\n  prod:\n    environment: prod\n    ro:\n      endpoint: https://ro-prod.internal\n  other:\n    rw:\n      endpoint: https://secret-rw-value.internal\n')
+    writeRegistry('version: 1' + NL + 'test:' + NL + '  prod:' + NL + '    environment: prod' + NL + '    ro:' + NL + '      endpoint: https://ro-prod.internal' + NL + '  other:' + NL + '    rw:' + NL + '      endpoint: https://secret-rw-value.internal' + NL)
     gate.authorize(futureGrant(SESSION_A.id, 'test', 'prod'))
     const err = await opsAccess.resolve('test', 'prod', SESSION_A).catch((e) => e)
     expect(err.message).toContain('no rw tier')
@@ -150,162 +191,235 @@ describe('rw tier errors', () => {
   })
 })
 
-// ── request_access: request flow ─────────────────────────────────────────────
+const NL = String.fromCharCode(10)
+
+// ── request_access: request flow through the pending-request queue ───────────
 
 describe('request_access', () => {
-  it('registers the request_access tool', () => {
-    const { tools } = setup()
+  it('registers the request_access tool and the /access panel command', () => {
+    const { tools, commands } = setup()
     expect(tools.map((t) => t.name)).toContain('request_access')
+    expect(commands.map((c) => c.name)).toContain('access')
   })
 
-  it('approved request → grant written, resolve serves rw, grant audited', async () => {
-    const h = setup({ approvalOutcome: 'allowed-once' })
+  it('approved request → grant written with the human-chosen TTL, resolve serves rw, audited', async () => {
+    const h = setup()
     h.writeRegistry(REGISTRY)
-    const result = await h.callRequestAccess(
+    const { result, decide } = await requestAndDecide(
+      h,
       { action: 'request', profile: 'test/prod', reason: 'restart the broken pod', ttlMinutes: 45 },
       { agent: SESSION_A, callId: 'call-1' },
+      // The human dials the requested 45 min down to a 30-min option.
+      { approved: true, ttlMinutes: 30 },
     )
+    expect(decide.status).toBe(200)
     expect(result.ok).toBe(true)
+    expect(result.message).toContain('30 min')
+    expect(result.message).toContain('adjusted')
     expect(result.message).toContain('45 min')
-    // The human saw the profile, the ttl, and the verbatim reason.
-    expect(h.approvalRequests).toHaveLength(1)
-    expect(h.approvalRequests[0].reason).toContain('test/prod')
-    expect(h.approvalRequests[0].reason).toContain('45 min')
-    expect(h.approvalRequests[0].reason).toContain('restart the broken pod')
     // The grant works: resolve now serves rw.
     expect((await h.opsAccess.resolve('test', 'prod', SESSION_A)).fields.endpoint).toBe('https://rw-prod.internal')
     // …but only for this session.
     expect((await h.opsAccess.resolve('test', 'prod', SESSION_B)).fields.endpoint).toBe('https://ro-prod.internal')
-    const grantLines = h.readAudit().filter((l) => l.event === 'grant')
-    expect(grantLines).toHaveLength(1)
-    expect(grantLines[0]).toMatchObject({ session: 'sess-a', kind: 'test', name: 'prod', reason: 'restart the broken pod', approvedBy: 'user' })
-    expect(typeof grantLines[0].ts).toBe('string')
+    const audit = h.readAudit()
+    const requests = audit.filter((l) => l.event === 'grant-request')
+    expect(requests).toHaveLength(1)
+    expect(requests[0]).toMatchObject({ session: 'sess-a', kind: 'test', name: 'prod', reason: 'restart the broken pod', requestedTtlMinutes: 45 })
+    const decisions = audit.filter((l) => l.event === 'request-decide')
+    expect(decisions).toHaveLength(1)
+    expect(decisions[0]).toMatchObject({ outcome: 'approved', ttlMinutes: 30 })
+    const grants = audit.filter((l) => l.event === 'grant')
+    expect(grants).toHaveLength(1)
+    expect(grants[0]).toMatchObject({ approvedBy: 'user', ttlMinutes: 30, requestedTtlMinutes: 45 })
   })
 
-  it('rejected request → no grant, resolve stays ro', async () => {
-    const h = setup({ approvalOutcome: 'rejected' })
-    h.writeRegistry(REGISTRY)
-    const result = await h.callRequestAccess(
-      { action: 'request', profile: 'test/prod', reason: 'restart the broken pod' },
-      { agent: SESSION_A },
-    )
-    expect(result.ok).toBe(false)
-    expect(result.message).toContain('rejected')
-    expect((await h.opsAccess.resolve('test', 'prod', SESSION_A)).fields.endpoint).toBe('https://ro-prod.internal')
-    expect(h.readAudit().filter((l) => l.event === 'grant')).toHaveLength(0)
-  })
-
-  it('no approval channel → clear error, no grant', async () => {
+  it('rejected request → no grant, resolve stays ro, decision audited', async () => {
     const h = setup()
     h.writeRegistry(REGISTRY)
-    const result = await h.callRequestAccess(
+    const { result } = await requestAndDecide(
+      h,
       { action: 'request', profile: 'test/prod', reason: 'restart the broken pod' },
       { agent: SESSION_A },
+      { approved: false },
     )
     expect(result.ok).toBe(false)
-    expect(result.message).toContain('approval channel')
+    expect(result.message).toContain('rejected by the operator')
+    expect((await h.opsAccess.resolve('test', 'prod', SESSION_A)).fields.endpoint).toBe('https://ro-prod.internal')
+    expect(h.readAudit().filter((l) => l.event === 'grant')).toHaveLength(0)
+    expect(h.readAudit().filter((l) => l.event === 'request-decide')[0]).toMatchObject({ outcome: 'rejected' })
+  })
+
+  it('unanswered request auto-rejects at the configured timeout', async () => {
+    const h = setup({ config: { pendingRequestTimeoutMinutes: 0.002 } })
+    h.writeRegistry(REGISTRY)
+    const call = h.callRequestAccess(
+      { action: 'request', profile: 'test/prod', reason: 'x' },
+      { agent: SESSION_A },
+    )
+    const req = await awaitPending(h, 'sess-a')
+    expect(req.requestedTtlMinutes).toBe(30)
+    const result = await call
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('no operator decision')
+    expect(h.readAudit().filter((l) => l.event === 'request-decide')[0]).toMatchObject({ outcome: 'timeout' })
     expect(h.gate.isAuthorized('sess-a', 'test', 'prod')).toBe(false)
   })
 
-  it('missing agent → fail-closed error', async () => {
-    const h = setup({ approvalOutcome: 'allowed-once' })
-    const result = await h.callRequestAccess({ action: 'request', profile: 'test/prod', reason: 'x' })
+  it('aborted tool call settles the request as cancelled', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    const controller = new AbortController()
+    const call = h.callRequestAccess(
+      { action: 'request', profile: 'test/prod', reason: 'x' },
+      { agent: SESSION_A, signal: controller.signal },
+    )
+    await awaitPending(h, 'sess-a')
+    controller.abort()
+    const result = await call
     expect(result.ok).toBe(false)
-    expect(h.approvalRequests).toHaveLength(0)
+    expect(result.message).toContain('cancelled')
+    expect(h.readAudit().filter((l) => l.event === 'request-decide')[0]).toMatchObject({ outcome: 'cancelled' })
   })
 
-  it('malformed profile string → error, approval never consulted', async () => {
-    const h = setup({ approvalOutcome: 'allowed-once' })
+  it('deciding an unknown request id 404s', async () => {
+    const h = setup()
+    const res = await h.callRoute('/ops-access/access-requests/decide', {
+      method: 'POST',
+      body: { id: 'gr-ghost', approved: true, ttlMinutes: 10 },
+    })
+    expect(res.status).toBe(404)
+  })
+
+  it('approving with a TTL outside the configured options 400s and the request stays parked', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    const call = h.callRequestAccess({ action: 'request', profile: 'test/prod', reason: 'x' }, { agent: SESSION_A })
+    const req = await awaitPending(h, 'sess-a')
+    const bad = await h.callRoute('/ops-access/access-requests/decide', {
+      method: 'POST',
+      body: { id: req.id, approved: true, ttlMinutes: 7 },
+    })
+    expect(bad.status).toBe(400)
+    expect(bad.json.error).toContain('5, 10, 30')
+    // Still parked — a valid decision settles it.
+    const good = await h.callRoute('/ops-access/access-requests/decide', {
+      method: 'POST',
+      body: { id: req.id, approved: true, ttlMinutes: 10 },
+    })
+    expect(good.status).toBe(200)
+    const result = await call
+    expect(result.ok).toBe(true)
+    expect(result.message).toContain('10 min')
+  })
+
+  it('headless deployment (no web server) → fast clear error, nothing parked', async () => {
+    const h = setup({ headless: true })
+    h.writeRegistry(REGISTRY)
+    const result = await h.callRequestAccess(
+      { action: 'request', profile: 'test/prod', reason: 'restart the broken pod' },
+      { agent: SESSION_A },
+    )
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('No approval channel')
+    expect(result.message).toContain('headless')
+    expect(h.gate.isAuthorized('sess-a', 'test', 'prod')).toBe(false)
+    expect(h.readAudit().filter((l) => l.event === 'grant-request')).toHaveLength(0)
+  })
+
+  it('missing agent → fail-closed error', async () => {
+    const h = setup()
+    const result = await h.callRequestAccess({ action: 'request', profile: 'test/prod', reason: 'x' })
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('requires a session context')
+  })
+
+  it('malformed profile string → error, never parked', async () => {
+    const h = setup()
     const result = await h.callRequestAccess({ action: 'request', profile: 'noprofile', reason: 'x' }, { agent: SESSION_A })
     expect(result.ok).toBe(false)
     expect(result.message).toContain('kind/name')
-    expect(h.approvalRequests).toHaveLength(0)
+    expect(h.readAudit().filter((l) => l.event === 'grant-request')).toHaveLength(0)
   })
 
-  it('unknown profile → refused BEFORE the human is asked, pointing at list_access', async () => {
-    const h = setup({ approvalOutcome: 'allowed-once' })
+  it('unknown profile → refused BEFORE parking, pointing at list_access', async () => {
+    const h = setup()
     h.writeRegistry(REGISTRY)
     const result = await h.callRequestAccess({ action: 'request', profile: 'test/ghost', reason: 'x' }, { agent: SESSION_A })
     expect(result.ok).toBe(false)
     expect(result.message).toContain('test/ghost')
     expect(result.message).toContain('list_access')
-    expect(h.approvalRequests).toHaveLength(0)
+    expect(h.readAudit().filter((l) => l.event === 'grant-request')).toHaveLength(0)
   })
 
   it('empty reason → error', async () => {
-    const h = setup({ approvalOutcome: 'allowed-once' })
+    const h = setup()
     const result = await h.callRequestAccess({ action: 'request', profile: 'test/prod', reason: '   ' }, { agent: SESSION_A })
     expect(result.ok).toBe(false)
     expect(result.message).toContain('reason')
   })
 
-  it('ttl is clamped to the configured maximum', async () => {
-    const h = setup({ approvalOutcome: 'allowed-once', config: { maxTtlMinutes: 60 } })
+  it('requested ttl is clamped to the configured maximum before parking', async () => {
+    const h = setup({ config: { maxTtlMinutes: 60 } })
     h.writeRegistry(REGISTRY)
-    const before = Date.now()
-    const result = await h.callRequestAccess(
+    const call = h.callRequestAccess(
       { action: 'request', profile: 'test/prod', reason: 'long maintenance', ttlMinutes: 99999 },
       { agent: SESSION_A },
     )
+    const req = await awaitPending(h, 'sess-a')
+    expect(req.requestedTtlMinutes).toBe(60)
+    await h.callRoute('/ops-access/access-requests/decide', { method: 'POST', body: { id: req.id, approved: true, ttlMinutes: 30 } })
+    const result = await call
     expect(result.ok).toBe(true)
-    expect(result.message).toContain('60 min')
-    const grants = h.gate.list('sess-a')
-    expect(grants).toHaveLength(1)
-    expect(grants[0].expiresAt).toBeGreaterThanOrEqual(before + 60 * 60000)
-    expect(grants[0].expiresAt).toBeLessThan(Date.now() + 61 * 60000)
+    expect(result.message).toContain('30 min')
   })
 
-  it('profile without an rw tier is refused BEFORE the human is asked (no undeliverable grants)', async () => {
-    const h = setup({ approvalOutcome: 'allowed-once' })
-    // test/prod has an ro tier but no rw tier — the grant could never be fulfilled.
-    h.writeRegistry('version: 1\ntest:\n  prod:\n    environment: prod\n    ro:\n      endpoint: https://ro-prod.internal\n  other:\n    rw:\n      endpoint: https://rw-other.internal\n')
+  it('profile without an rw tier is refused BEFORE parking (no undeliverable grants)', async () => {
+    const h = setup()
+    h.writeRegistry('version: 1' + NL + 'test:' + NL + '  prod:' + NL + '    environment: prod' + NL + '    ro:' + NL + '      endpoint: https://ro-prod.internal' + NL + '  other:' + NL + '    rw:' + NL + '      endpoint: https://rw-other.internal' + NL)
     const result = await h.callRequestAccess(
       { action: 'request', profile: 'test/prod', reason: 'restart the broken pod' },
       { agent: SESSION_A },
     )
     expect(result.ok).toBe(false)
     expect(result.message).toContain('no usable rw tier registered')
-    expect(h.approvalRequests).toHaveLength(0)
     expect(h.gate.isAuthorized('sess-a', 'test', 'prod')).toBe(false)
   })
 
-  it('rw entry that exists but fails schema validation is refused BEFORE the human is asked', async () => {
-    const h = setup({ approvalOutcome: 'allowed-once' })
-    // The rw tier exists but endpoint is the wrong type — a grant for it would
-    // approve and then blow up at resolve time. The precheck must catch it.
-    h.writeRegistry('version: 1\ntest:\n  prod:\n    environment: prod\n    ro:\n      endpoint: https://ro-prod.internal\n    rw:\n      endpoint: 5\n')
+  it('rw entry that exists but fails schema validation is refused BEFORE parking', async () => {
+    const h = setup()
+    h.writeRegistry('version: 1' + NL + 'test:' + NL + '  prod:' + NL + '    environment: prod' + NL + '    ro:' + NL + '      endpoint: https://ro-prod.internal' + NL + '    rw:' + NL + '      endpoint: 5' + NL)
     const result = await h.callRequestAccess(
       { action: 'request', profile: 'test/prod', reason: 'restart the broken pod' },
       { agent: SESSION_A },
     )
     expect(result.ok).toBe(false)
     expect(result.message).toContain('no usable rw tier registered')
-    expect(h.approvalRequests).toHaveLength(0)
   })
 
   it('rw-only profile (ro not yet registered) IS requestable — the derivation bootstrap', async () => {
-    const h = setup({ approvalOutcome: 'allowed-once' })
-    // test/prod has ONLY an rw tier: the operator registered rw and the agent
-    // is about to derive+register ro. Refusing the grant would deadlock that.
-    h.writeRegistry('version: 1\ntest:\n  prod:\n    environment: prod\n    rw:\n      endpoint: https://rw-prod.internal\n')
-    const result = await h.callRequestAccess(
+    const h = setup()
+    h.writeRegistry('version: 1' + NL + 'test:' + NL + '  prod:' + NL + '    environment: prod' + NL + '    rw:' + NL + '      endpoint: https://rw-prod.internal' + NL)
+    const { result } = await requestAndDecide(
+      h,
       { action: 'request', profile: 'test/prod', reason: 'derive a read-only credential and register the ro tier' },
       { agent: SESSION_A },
+      { approved: true, ttlMinutes: 30 },
     )
     expect(result.ok).toBe(true)
-    expect(h.approvalRequests).toHaveLength(1)
     expect(h.gate.isAuthorized('sess-a', 'test', 'prod')).toBe(true)
   })
 
   it('approval-required kinds (ssh) are exempt from the rw-tier check — their credential lives in the ro tier', async () => {
-    const h = setup({ approvalOutcome: 'allowed-once' })
+    const h = setup()
     h.writeRegistry(REGISTRY + SSH_REGISTRY)
-    const result = await h.callRequestAccess(
+    const { result } = await requestAndDecide(
+      h,
       { action: 'request', profile: 'ssh/box', reason: 'check disk' },
       { agent: SESSION_A },
+      { approved: true, ttlMinutes: 5 },
     )
     expect(result.ok).toBe(true)
-    expect(h.approvalRequests).toHaveLength(1)
+    expect(h.gate.isAuthorized('sess-a', 'ssh', 'box')).toBe(true)
   })
 })
 
@@ -330,7 +444,7 @@ describe('list and revoke', () => {
     expect(result.message.match(/test\/prod/g)).toHaveLength(1)
   })
 
-  it('revoke drops the grant immediately and audits it', async () => {
+  it('revoke drops the grant immediately and audits it with the agent source', async () => {
     const h = setup()
     h.writeRegistry(REGISTRY)
     h.gate.authorize(futureGrant('sess-a', 'test', 'prod'))
@@ -338,7 +452,9 @@ describe('list and revoke', () => {
     expect(result.ok).toBe(true)
     expect(h.gate.isAuthorized('sess-a', 'test', 'prod')).toBe(false)
     expect((await h.opsAccess.resolve('test', 'prod', SESSION_A)).fields.endpoint).toBe('https://ro-prod.internal')
-    expect(h.readAudit().filter((l) => l.event === 'revoke')).toHaveLength(1)
+    const revokes = h.readAudit().filter((l) => l.event === 'revoke')
+    expect(revokes).toHaveLength(1)
+    expect(revokes[0]).toMatchObject({ source: 'agent' })
   })
 
   it('revoke of a nonexistent grant reports it', async () => {
@@ -346,6 +462,120 @@ describe('list and revoke', () => {
     const result = await h.callRequestAccess({ action: 'revoke', profile: 'test/prod' }, { agent: SESSION_A })
     expect(result.ok).toBe(false)
     expect(result.message).toContain('No active grant')
+  })
+})
+
+// ── Panel routes: proactive grants and revokes ───────────────────────────────
+
+describe('panel routes', () => {
+  it('GET /ops-access/grants lists the session grants with remaining minutes', async () => {
+    const h = setup()
+    h.gate.authorize(futureGrant('sess-a', 'test', 'prod'))
+    const res = await h.callRoute('/ops-access/grants', { query: '?session=sess-a' })
+    expect(res.status).toBe(200)
+    expect(res.json.grants).toHaveLength(1)
+    expect(res.json.grants[0]).toMatchObject({ kind: 'test', name: 'prod', remainingMinutes: 30 })
+    const other = await h.callRoute('/ops-access/grants', { query: '?session=sess-b' })
+    expect(other.json.grants).toHaveLength(0)
+  })
+
+  it('POST /ops-access/grants writes a panel grant, audits it, and queues a notice', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    const res = await h.callRoute('/ops-access/grants', {
+      method: 'POST',
+      body: { session: 'sess-a', kind: 'test', name: 'prod', ttlMinutes: 10 },
+    })
+    expect(res.status).toBe(200)
+    expect(h.gate.isAuthorized('sess-a', 'test', 'prod')).toBe(true)
+    expect((await h.opsAccess.resolve('test', 'prod', SESSION_A)).fields.endpoint).toBe('https://rw-prod.internal')
+    const grants = h.readAudit().filter((l) => l.event === 'grant')
+    expect(grants).toHaveLength(1)
+    expect(grants[0]).toMatchObject({ approvedBy: 'panel', ttlMinutes: 10, reason: 'operator panel grant' })
+    // The agent gets told at the next pre-step.
+    const injected = await drainNotices(h, 'sess-a')
+    expect(injected.join(' ')).toContain('<access-grant>')
+    expect(injected.join(' ')).toContain('test/prod')
+    // Drained once — a second pre-step injects nothing.
+    expect((await drainNotices(h, 'sess-a'))).toHaveLength(0)
+  })
+
+  it('POST /ops-access/grants rejects a TTL outside the configured options', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    const res = await h.callRoute('/ops-access/grants', {
+      method: 'POST',
+      body: { session: 'sess-a', kind: 'test', name: 'prod', ttlMinutes: 12 },
+    })
+    expect(res.status).toBe(400)
+    expect(res.json.error).toContain('5, 10, 30')
+    expect(h.gate.isAuthorized('sess-a', 'test', 'prod')).toBe(false)
+  })
+
+  it('POST /ops-access/grants rejects an undeliverable profile', async () => {
+    const h = setup()
+    h.writeRegistry('version: 1' + NL + 'test:' + NL + '  prod:' + NL + '    ro:' + NL + '      endpoint: https://ro-prod.internal' + NL)
+    const res = await h.callRoute('/ops-access/grants', {
+      method: 'POST',
+      body: { session: 'sess-a', kind: 'test', name: 'prod', ttlMinutes: 10 },
+    })
+    expect(res.status).toBe(400)
+    expect(res.json.error).toContain('no usable rw tier')
+  })
+
+  it('POST /ops-access/grants/revoke drops one grant, audits panel source, notifies', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    h.gate.authorize(futureGrant('sess-a', 'test', 'prod'))
+    const res = await h.callRoute('/ops-access/grants/revoke', {
+      method: 'POST',
+      body: { session: 'sess-a', kind: 'test', name: 'prod' },
+    })
+    expect(res.status).toBe(200)
+    expect(h.gate.isAuthorized('sess-a', 'test', 'prod')).toBe(false)
+    const revokes = h.readAudit().filter((l) => l.event === 'revoke')
+    expect(revokes).toHaveLength(1)
+    expect(revokes[0]).toMatchObject({ source: 'panel', kind: 'test', name: 'prod' })
+    const injected = await drainNotices(h, 'sess-a')
+    expect(injected.join(' ')).toContain('<access-revoked>')
+  })
+
+  it('POST /ops-access/grants/revoke of a nonexistent grant 400s', async () => {
+    const h = setup()
+    const res = await h.callRoute('/ops-access/grants/revoke', {
+      method: 'POST',
+      body: { session: 'sess-a', kind: 'test', name: 'prod' },
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('POST /ops-access/grants/revoke-all clears the session and audits each revoke', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY + SSH_REGISTRY)
+    h.gate.authorize(futureGrant('sess-a', 'test', 'prod'))
+    h.gate.authorize(futureGrant('sess-a', 'ssh', 'box'))
+    h.gate.authorize(futureGrant('sess-b', 'test', 'prod'))
+    const res = await h.callRoute('/ops-access/grants/revoke-all', {
+      method: 'POST',
+      body: { session: 'sess-a' },
+    })
+    expect(res.status).toBe(200)
+    expect(res.json.revoked).toBe(2)
+    expect(h.gate.list('sess-a')).toHaveLength(0)
+    // Session B is untouched.
+    expect(h.gate.list('sess-b')).toHaveLength(1)
+    expect(h.readAudit().filter((l) => l.event === 'revoke')).toHaveLength(2)
+    const injected = await drainNotices(h, 'sess-a')
+    expect(injected.join(' ')).toContain('全部提权授权（2 项）')
+  })
+
+  it('revoke notices survive ledger eviction semantics: revoke takes effect on the NEXT resolve', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    h.gate.authorize(futureGrant('sess-a', 'test', 'prod'))
+    await h.callRoute('/ops-access/grants/revoke', { method: 'POST', body: { session: 'sess-a', kind: 'test', name: 'prod' } })
+    // The broker re-reads the ledger on every resolve — the next call is ro.
+    expect((await h.opsAccess.resolve('test', 'prod', SESSION_A)).fields.endpoint).toBe('https://ro-prod.internal')
   })
 })
 
@@ -383,6 +613,20 @@ describe('approval-required kinds', () => {
     const lines = h.readAudit().filter((l) => l.event === 'gated-issue')
     expect(lines).toHaveLength(1)
     expect(lines[0]).toMatchObject({ session: 'sess-a', kind: 'ssh', name: 'box' })
+  })
+
+  it('a panel grant for ssh is a timed pass to use it at all', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY + SSH_REGISTRY)
+    const res = await h.callRoute('/ops-access/grants', {
+      method: 'POST',
+      body: { session: 'sess-a', kind: 'ssh', name: 'box', ttlMinutes: 5 },
+    })
+    expect(res.status).toBe(200)
+    const profile = await h.opsAccess.resolve('ssh', 'box', SESSION_A)
+    expect(profile.fields.host).toBe('10.0.0.1')
+    const injected = await drainNotices(h, 'sess-a')
+    expect(injected.join(' ')).toContain('限时使用权限')
   })
 })
 

@@ -1,0 +1,4 @@
+title: "@deepseek-ai/dsh-ops-panel"
+description:
+  zh: "运维插件的面板缝 — 会话作用域对话框的公共机制"
+  en: "The panel seam for ops plugins — session-scoped overlay dialogs triggered by slash commands"

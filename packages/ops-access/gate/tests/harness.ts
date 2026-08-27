@@ -54,8 +54,8 @@ ssh:
 
 export interface SetupOptions {
   config?: Partial<Config>
-  /** Outcome the mock approval channel settles on; omit for "no channel". */
-  approvalOutcome?: 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
+  /** Omit the web server to simulate a headless deployment (no approval channel). */
+  headless?: boolean
   /** Mount the gate BEFORE core — exercises the deferred-inject mounting path. */
   gateFirst?: boolean
 }
@@ -69,15 +69,7 @@ export function setup(opts: SetupOptions = {}) {
   const listeners: Array<{ event: string, listener: (...args: any[]) => unknown, options?: unknown }> = []
   const routes: any[] = []
   const tools: any[] = []
-  const approvalRequests: any[] = []
-  const approval = opts.approvalOutcome === undefined
-    ? undefined
-    : {
-        request: async (req: any) => {
-          approvalRequests.push(req)
-          return opts.approvalOutcome
-        },
-      }
+  const commands: any[] = []
   // Deferred inject, mirroring cordis: an inject whose deps are not yet
   // provided pends and fires when they are. This is what makes gate-first
   // mounting work — the broker registration waits for core to provide
@@ -85,10 +77,13 @@ export function setup(opts: SetupOptions = {}) {
   const services = new Map<string, any>()
   const pending: Array<{ deps: string[], cb: (c: any) => void }> = []
   const webServer = { register: (route: any) => { routes.push(route); return () => {} } }
-  services.set('webServer', webServer)
-  const injectionCtx = () => ({
+  if (!opts.headless) services.set('webServer', webServer)
+  services.set('commands', { register: (def: any) => { commands.push(def); return () => {} } })
+  const injectionCtx: any = () => ({
     opsAccess: services.get('opsAccess'),
     webServer,
+    commands: services.get('commands'),
+    get: (key: string) => services.get(key),
     effect: (fn: () => () => void) => { fn() },
   })
   const flush = () => {
@@ -114,11 +109,7 @@ export function setup(opts: SetupOptions = {}) {
       if (deps.every((d) => services.has(d))) cb(injectionCtx())
       else pending.push({ deps, cb })
     },
-    get: (key: string) => {
-      if (key === 'opsAccess') return opsAccess
-      if (key === 'approval') return approval
-      return undefined
-    },
+    get: (key: string) => services.get(key) ?? (key === 'opsAccess' ? opsAccess : undefined),
     effect: (fn: () => () => void) => { fn() },
     tools: { register: (tool: any) => { tools.push(tool); return () => {} } },
   }
@@ -127,6 +118,8 @@ export function setup(opts: SetupOptions = {}) {
     defaultTtlMinutes: 30,
     maxTtlMinutes: 480,
     auditFile,
+    grantTtlOptions: [5, 10, 30],
+    pendingRequestTimeoutMinutes: 5,
     ...opts.config,
   })
   const mountCore = () => coreApply(ctx, { registryFile, credentialsDir: join(dir, 'credentials') })
@@ -147,13 +140,36 @@ export function setup(opts: SetupOptions = {}) {
     return tool.execute(args, exec) as Promise<{ ok: boolean, message: string }>
   }
 
+  /** Find a captured route by path and drive its handler with a fake req/res. */
+  async function callRoute(path: string, opts: { method?: string, query?: string, body?: unknown } = {}) {
+    const route = routes.find((r) => r.path === path)
+    if (!route) throw new Error('route not registered: ' + path + ' (have: ' + routes.map((r) => r.path).join(', ') + ')')
+    const chunks: string[] = []
+    const req: any = {
+      method: opts.method ?? 'GET',
+      url: 'http://localhost' + path + (opts.query ?? ''),
+      on: (event: string, cb: (chunk?: string) => void) => {
+        if (event === 'data' && opts.body !== undefined) cb(JSON.stringify(opts.body))
+        if (event === 'end') cb()
+      },
+    }
+    const res: any = {
+      status: 0,
+      writeHead(status: number) { this.status = status },
+      end(text: string) { chunks.push(text) },
+    }
+    await route.handler(req, res)
+    return { status: res.status as number, json: JSON.parse(chunks.join('')) }
+  }
+
   return {
     opsAccess: opsAccess!,
     gate: opsAccessGate!,
     listeners,
     routes,
     tools,
-    approvalRequests,
+    commands,
+    callRoute,
     callRequestAccess,
     dir,
     registryFile,

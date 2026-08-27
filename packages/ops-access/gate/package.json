@@ -22,6 +22,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-ops-panel": "workspace:^0.1.0",
     "@deepseek-ai/dsh-tools": "^0.0.1-rc.1",
     "@deepseek-ai/schemastery": "^3.18.1"
   },
@@ -31,7 +33,9 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.8",
     "@deepseek-ai/dsh-ops-access": "workspace:*",
+    "@deepseek-ai/dsh-ops-panel": "workspace:*",
     "@deepseek-ai/dsh-tools": "0.0.1-rc.1",
     "@types/node": "^22.0.0",
     "typescript": "^5.4.0",

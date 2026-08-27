@@ -69,9 +69,10 @@ const KIND_DESCRIPTORS: KindDescriptor[] = [
   },
 ]
 
-function setupClient() {
+function setupClient(opts: { opsPanels?: boolean } = {}) {
   const sources: any[] = []
   const sections: any[] = []
+  const panels: any[] = []
   const ctx: any = {
     get: (key: string) => {
       if (key === 'inputTriggers')
@@ -83,10 +84,18 @@ function setupClient() {
         }
       return undefined
     },
+    inject: (deps: string[], cb: (c: any) => void) => {
+      if (deps[0] === 'opsPanels' && opts.opsPanels !== false) {
+        cb({
+          opsPanels: { registerPanel: (def: any) => { panels.push(def); return () => {} } },
+          effect: (fn: () => () => void) => { fn() },
+        })
+      }
+    },
     effect: (fn: () => () => void) => { fn() },
   }
   client.apply(ctx)
-  return { sources, source: sources[0], sections }
+  return { sources, source: sources[0], sections, panels }
 }
 
 // ── Client half: @ source ────────────────────────────────────────────────────
@@ -194,6 +203,8 @@ describe('settings.section registration', () => {
         return undefined
       },
       effect: (fn: () => () => void) => { fn() },
+      // opsPanels never provided here → the deferred inject simply never fires.
+      inject: () => {},
     }
     client.apply(ctx)
     // No @ source registered (inputTriggers absent), but settings.section is
@@ -355,6 +366,105 @@ describe('admin API: deleteEntry', () => {
   })
 })
 
+
+// ── Client half: access panel (ops-panel seam consumer, ADR-0004) ────────────
+
+describe('access panel', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('registers the access panel when opsPanels is composed', () => {
+    const { panels } = setupClient()
+    expect(panels).toHaveLength(1)
+    expect(panels[0]).toMatchObject({ command: 'access', title: '访问授权' })
+    expect(typeof panels[0].component).toBe('function')
+  })
+
+  it('skips panel registration when opsPanels is absent (mention + admin unaffected)', () => {
+    const { panels, sources, sections } = setupClient({ opsPanels: false })
+    expect(panels).toHaveLength(0)
+    expect(sources).toHaveLength(1)
+    expect(sections).toHaveLength(1)
+  })
+
+  it('fetchPanelGrants reads the session grants and ttlOptions', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => ({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        grants: [{ kind: 'k8s', name: 'prod', expiresAt: 1, reason: 'r', approvedBy: 'panel', remainingMinutes: 9 }],
+        ttlOptions: [5, 10, 30],
+      }),
+    })))
+    const out = await client.fetchPanelGrants('sess-1')
+    expect(fetch).toHaveBeenCalledWith('/ops-access/grants?session=sess-1', expect.anything())
+    expect(out?.grants).toHaveLength(1)
+    expect(out?.ttlOptions).toEqual([5, 10, 30])
+  })
+
+  it('fetchPanelGrants/Requests degrade to null on 404 and network failure', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 404 })))
+    expect(await client.fetchPanelGrants('s')).toBeNull()
+    expect(await client.fetchPanelRequests('s')).toBeNull()
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline') }))
+    expect(await client.fetchPanelGrants('s')).toBeNull()
+    expect(await client.fetchPanelRequests('s')).toBeNull()
+  })
+
+  it('postPanelGrant posts session/kind/name/ttlMinutes', async () => {
+    const spy = vi.fn(async () => ({ ok: true, json: async () => ({ ok: true }) }))
+    vi.stubGlobal('fetch', spy)
+    const res = await client.postPanelGrant('sess-1', 'k8s', 'prod', 10)
+    expect(res.ok).toBe(true)
+    expect(spy).toHaveBeenCalledWith('/ops-access/grants', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ session: 'sess-1', kind: 'k8s', name: 'prod', ttlMinutes: 10 }),
+    }))
+  })
+
+  it('postPanelRevoke and postPanelRevokeAll post to their routes', async () => {
+    const spy = vi.fn(async () => ({ ok: true, json: async () => ({ ok: true }) }))
+    vi.stubGlobal('fetch', spy)
+    await client.postPanelRevoke('sess-1', 'k8s', 'prod')
+    await client.postPanelRevokeAll('sess-1')
+    expect(spy).toHaveBeenNthCalledWith(1, '/ops-access/grants/revoke', expect.objectContaining({
+      body: JSON.stringify({ session: 'sess-1', kind: 'k8s', name: 'prod' }),
+    }))
+    expect(spy).toHaveBeenNthCalledWith(2, '/ops-access/grants/revoke-all', expect.objectContaining({
+      body: JSON.stringify({ session: 'sess-1' }),
+    }))
+  })
+
+  it('postPanelDecide includes ttlMinutes only when approving', async () => {
+    const spy = vi.fn(async () => ({ ok: true, json: async () => ({ ok: true }) }))
+    vi.stubGlobal('fetch', spy)
+    await client.postPanelDecide('gr-1', true, 5)
+    await client.postPanelDecide('gr-2', false)
+    expect(spy).toHaveBeenNthCalledWith(1, '/ops-access/access-requests/decide', expect.objectContaining({
+      body: JSON.stringify({ id: 'gr-1', approved: true, ttlMinutes: 5 }),
+    }))
+    expect(spy).toHaveBeenNthCalledWith(2, '/ops-access/access-requests/decide', expect.objectContaining({
+      body: JSON.stringify({ id: 'gr-2', approved: false }),
+    }))
+  })
+
+  it('liveGrantFor finds the session grant covering a candidate', () => {
+    const grants = [
+      { kind: 'k8s', name: 'prod', expiresAt: 1, reason: 'r', approvedBy: 'panel', remainingMinutes: 9 },
+    ]
+    expect(client.liveGrantFor(grants, 'k8s', 'prod')).toBe(grants[0])
+    expect(client.liveGrantFor(grants, 'k8s', 'staging')).toBeUndefined()
+    expect(client.liveGrantFor(grants, 'ceph', 'prod')).toBeUndefined()
+    expect(client.liveGrantFor([], 'k8s', 'prod')).toBeUndefined()
+  })
+
+  it('defaultTtlChoice picks the largest option not exceeding the request', () => {
+    expect(client.defaultTtlChoice([5, 10, 30], 30)).toBe(30)
+    expect(client.defaultTtlChoice([5, 10, 30], 45)).toBe(30)
+    expect(client.defaultTtlChoice([5, 10, 30], 7)).toBe(5)
+    expect(client.defaultTtlChoice([5, 10, 30], 1)).toBe(5)
+  })
+})
+
 // ── Client half: degradation summary ────────────────────────────────────────
 
 describe('degradation: 404 and network failure never throw', () => {
@@ -366,6 +476,12 @@ describe('degradation: 404 and network failure never throw', () => {
     expect(await client.fetchKinds()).toEqual([])
     expect((await client.submitEntry({ kind: 'k', name: 'n', tier: 'ro', fields: {} })).ok).toBe(false)
     expect((await client.deleteEntry('k', 'n', 'ro')).ok).toBe(false)
+    expect(await client.fetchPanelGrants('s')).toBeNull()
+    expect(await client.fetchPanelRequests('s')).toBeNull()
+    expect((await client.postPanelGrant('s', 'k', 'n', 10)).ok).toBe(false)
+    expect((await client.postPanelRevoke('s', 'k', 'n')).ok).toBe(false)
+    expect((await client.postPanelRevokeAll('s')).ok).toBe(false)
+    expect((await client.postPanelDecide('x', true, 10)).ok).toBe(false)
   })
 
   it('all API functions return gracefully on network failure', async () => {
@@ -374,5 +490,11 @@ describe('degradation: 404 and network failure never throw', () => {
     expect(await client.fetchKinds()).toEqual([])
     expect((await client.submitEntry({ kind: 'k', name: 'n', tier: 'ro', fields: {} })).ok).toBe(false)
     expect((await client.deleteEntry('k', 'n', 'ro')).ok).toBe(false)
+    expect(await client.fetchPanelGrants('s')).toBeNull()
+    expect(await client.fetchPanelRequests('s')).toBeNull()
+    expect((await client.postPanelGrant('s', 'k', 'n', 10)).ok).toBe(false)
+    expect((await client.postPanelRevoke('s', 'k', 'n')).ok).toBe(false)
+    expect((await client.postPanelRevokeAll('s')).ok).toBe(false)
+    expect((await client.postPanelDecide('x', true, 10)).ok).toBe(false)
   })
 })
