@@ -17,6 +17,10 @@
 
 **调查树面板** 插件（host 平面薄壳）。做两件事：注册共享的 `trace` 会话投影（定义唯一事实源在 ops-tool-trace 的 `traceProjection`），和携带 web 面板代码（`src/client.ts`）让浏览器发现。**不注册任何工具、不碰提示词**。必须在 host 平面——web 端靠扫描 host 组合条目发现面板代码，拿掉它面板就消失。这也是 trace 拆成两个包的原因：工具要按 preset 隔离，面板必须全局。
 
+### ops-panel
+
+**面板缝**（ADR-0004 设计已定，实现见 spec 0003，未落地）。会话作用域对话框的公共机制，独立插件包、以 cordis 服务形态提供（client 半 `ctx.opsPanels`，key 复数 = registry）：`registerPanel({ command, title, available?, component })` 注册一个面板，框架持有单一 `command/executed` 监听按命令名分发 + overlay 外壳（标题栏/Escape/背景关闭/每会话开关状态）。node 半只有无状态 helper `registerPanelCommand`（注册空 handler 的 host 命令，让 `/名字` 进斜杠菜单）。**服务而非纯库**——纯库会被各消费方 bundle 各打包一份，注册表/监听/外壳互撞（双模块实例教训）。先例是 dsh 的 ui-commands（`ctx.commandUi`），本缝是它的"完整对话框"档。消费方只剩四件身份：命令名、面板标题、内容组件、可用性过滤器。第一个消费方是授权面板。
+
 ### ops-prompts
 
 **提示词通道** 插件。提供两个注册口：
@@ -73,11 +77,15 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 
 ### 审计门 (Access Gate) — 已实现
 
-按会话代发凭证的授权层。**决策与理由见 `docs/adr/0001-access-gate.md`，构建内容见 `docs/specs/0001-access-gate.md`**——这里只定义词汇：
+按会话代发凭证的授权层。**决策与理由见 `docs/adr/0001-access-gate.md`（授权面板部分见 `docs/adr/0004-access-panel.md`），构建内容见 `docs/specs/0001-access-gate.md`（面板见 `docs/specs/0003-access-panel.md`)**——这里只定义词汇：
 
 - **凭证代发 (credential brokering)** — 门不改基础设施权限，只决定某 session 的工具调用拿到 ro 还是 rw 凭证
 - **两档账号 (ro/rw)** — 每环境静态预置只读/可写两套账号；ro/rw 是注册表条目内的 tier 子字段（单一注册表文件，默认 `~/.dsh-ops/access.yaml`，同现读现校验纪律；ADR-0003 由双文件合并而来），ro 档默认可用、rw 档需授权。门注册的 broker 是**纯决策函数**（`(kind, name, agent) => 'ro' | 'rw' | 拒绝`），不碰凭证内容。ssh 不分档，每次使用需授权
-- **授权 (grant)** — `{ session, profile, tier, 到期时间, 批准人, 理由 }`。agent 调 `request_access` 显式申请，人一次性批准；TTL 到期自动回落，可手动撤销，重启即清空
+- **授权 (grant)** — `{ session, profile, tier, 到期时间, 批准人, 理由 }`。agent 调 `request_access` 显式申请，人一次性批准；TTL 到期自动回落，可手动撤销，重启即清空。审批通道由 ADR-0004 从 dsh 原生 approval 换成自建待决请求通道（原生四态结果不能携带人修改后的 TTL）
+- **授权面板 (access panel)**（ADR-0004 设计已定，实现见 spec 0003）— 人的授权操作唯一入口：会话作用域的自建对话框，敲 `/access`（host 命令）触发，client 半经 `command/executed` 本地事件打开。两个模式：空闲时是主动授权（选档案 → 选 TTL 档位 → 确认）/撤销面板；有待决请求时是审批台（可调档位后批准/拒绝）。不做固定设置页——固定页要先选目标会话，与 session 分键模型心智错位
+- **待决请求 (pending request)**（同上）— agent 提权申请在 gate 进程内的驻留形态：入队后工具 Promise 挂起，人经面板 HTTP 路由裁决（批准可拨 TTL 档位）解出；默认 5 分钟无人裁决自动拒，exec.signal 中止按 cancelled 解出。headless（无 webServer）不入队、立即报错给带外指引
+- **面板授权 (panel grant)**（同上）— 人主动发起的授权，与申请批准的 grant **同构同寿命**（session 分键、TTL 有界、重启清空），只是跳过"agent 开口"。TTL 只能选档位（默认 5/10/30 分钟，Config 可配），主动授权与审批共用同一份档位
+- **对称通知**（同上）— 命令面不进模型历史，面板的授权/撤销动作由路由往目标 session 追加 model-visible 消息（`<access-grant>`/`<access-revoked>`），agent 立刻感知权限变化。撤销语义：**下一次解析生效，不掐断进行中命令**；面板可一键收回本会话全部授权
 - **授权账本 (grant ledger)** — 进程内授权表，按 `exec.agent.id`（= session id）分键；`exec.agent` 缺失时由 broker 裁决：两档 kind 回落 ro，ssh 类直接拒绝（ssh 凭证本质是 rw——没有真只读 shell——无会话可键权就不发）。apply（启动与 HMR 重载）即清空账本
 - **审计日志** — 授权（批准/到期/撤销）、rw 代发、账本重置（`ledger-reset`，启动与 HMR 各落一行）逐条落 JSONL 文件（默认 `~/.dsh-ops/audit.log`），不进 session 事件流
 

@@ -28,7 +28,7 @@ ops-access 目前把凭证档案平权地发给所有工具调用，agent 拿着
 
 ### 5. 账本按 `exec.agent.id` 分键，undefined 时 fail-closed
 
-dsh 源码验证（tag dsh-v0.1.0-rc.8）：`tools/pre-execute` payload 的 `exec.agent.id === session.id`（`packages/core/agent/src/index.ts:475` 注册表强制）；preset 平面插件是全进程共享实例（`packages/preset/agent-presets` standing mount），闭包不能当账本；`exec.agent` 可选，插件自发调用时缺失，必须 fail-closed。审批交互用 dsh 原生通道，不自造。
+dsh 源码验证（tag dsh-v0.1.0-rc.8）：`tools/pre-execute` payload 的 `exec.agent.id === session.id`（`packages/core/agent/src/index.ts:475` 注册表强制）；preset 平面插件是全进程共享实例（`packages/preset/agent-presets` standing mount），闭包不能当账本；`exec.agent` 可选，插件自发调用时缺失，必须 fail-closed。审批交互用 dsh 原生通道，不自造。（**审批通道已由 ADR-0004 取代为自建待决请求通道**——原生四态结果无法携带人修改后的 TTL；账本按 agent 分键与 fail-closed 裁决不受影响）
 
 申请入口采用**显式 `request_access` 工具**（agent 陈述方案、人一次批准、入账），代发点在 resolve（按 agent 上下文换发 rw）。初稿曾设想"pre-execute 逐调用 ask"——那本质仍是逐命令打断，与决策 4 的变更单模式相悖，spec 定稿时修正。
 
