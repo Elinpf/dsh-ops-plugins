@@ -25,6 +25,20 @@ export const Config = z.object({})
 
 // ── Plugin apply ─────────────────────────────────────────────────────────────
 
+/**
+ * Known ceph-CLI stderr noise inside containers with no default keyring under
+ * /etc/ceph. Credentials always arrive via the injected --keyring, so these
+ * warnings are pure noise; the patterns match the two known message shapes
+ * exactly (tolerating the librados timestamp/entity prefix and the variable
+ * path list) — every other stderr line passes through verbatim.
+ */
+const STDERR_NOISE: RegExp[] = [
+  // "unable to find a keyring on /etc/ceph/ceph.client.X.keyring,...: (2) No such file or directory"
+  /unable to find a keyring on .*: \(-?\d+\) No such file or directory\s*$/,
+  // "no keyring found at /etc/ceph/ceph.client.X.keyring, disabling cephx"
+  /no keyring found at .*disabling cephx\s*$/,
+]
+
 export function apply(ctx: Context): void {
   registerProfiledShellTool(ctx, {
     name: 'ceph',
@@ -33,6 +47,7 @@ export function apply(ctx: Context): void {
     description: 'Execute a ceph command on a specified Ceph cluster. The plugin automatically injects the correct --conf and --keyring credentials (shown as <id@tier:field> references). Use list_access to see available cluster names.',
     targetParamDescription: 'Ceph cluster profile name. Use list_access to see options.',
     commandDescription: 'ceph subcommand WITHOUT the ceph prefix. Examples: health detail, osd tree, df',
+    stderrNoise: STDERR_NOISE,
     buildCommand(fields, command, ref) {
       const { name } = fields as { name?: string }
       // --name matters: a non-admin keyring without it still authenticates as

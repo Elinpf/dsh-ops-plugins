@@ -41,7 +41,7 @@ describe('ops-trace-ui', () => {
     // home, so key/schema/fold/stateVersion can never drift between packages.
     expect(registeredProjections[0]).toBe(traceProjection)
     expect(registeredProjections[0].key).toBe('trace')
-    expect(registeredProjections[0].stateVersion).toBe(3)
+    expect(registeredProjections[0].stateVersion).toBe(traceProjection.stateVersion)
   })
 
   it('the registered fold reconstructs a tree from tool/call events', () => {

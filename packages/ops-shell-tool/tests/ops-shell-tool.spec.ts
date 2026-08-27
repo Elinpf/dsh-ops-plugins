@@ -34,6 +34,7 @@ function setup(opts: {
   resolveImpl?: (kind: string, name: string, agent?: { id: string }) => Promise<AccessProfile>
   runImpl?: (spec: any) => Promise<ShellRunOutcome>
   withOpsAccess?: boolean
+  spec?: Partial<ProfiledShellToolSpec>
 } = {}) {
   const tools: any[] = []
   const effectCleanups: Array<() => void> = []
@@ -65,7 +66,7 @@ function setup(opts: {
     tools: { register: (t: any) => { tools.push(t); return () => {} } },
   }
 
-  registerProfiledShellTool(ctx, SPEC)
+  registerProfiledShellTool(ctx, { ...SPEC, ...opts.spec })
   const tool = tools[0]
   const exec = (agent?: { id: string }) => ({ signal: new AbortController().signal, agent })
   return { tools, tool, shellRequests, calls, effectCleanups, exec }
@@ -214,6 +215,55 @@ describe('credential reference tokens', () => {
     expect(value.error).toContain('field "sockPath" is not a non-empty string')
     expect(value.exitCode).toBe(-1)
     expect(h.calls.shellRun).toBe(0)
+  })
+})
+
+describe('stderrNoise filtering', () => {
+  const NOISE = [/^noise:/]
+
+  it('drops stderr lines matching a declared noise pattern, keeps the rest', async () => {
+    const h = setup({
+      spec: { stderrNoise: NOISE },
+      runImpl: async () => ({
+        exitCode: 0,
+        stdoutText: 'ok\n',
+        stderrText: 'noise: chatter\nreal warning\nnoise: more chatter\n',
+      }),
+    })
+    const value = await h.tool.execute({ target: 'prod', command: 'status' }, h.exec())
+    expect(value.stderr).toBe('real warning\n')
+    expect(value.stdout).toBe('ok\n')
+  })
+
+  it('all-noise stderr becomes empty; the trailing newline is not a line', async () => {
+    const h = setup({
+      spec: { stderrNoise: NOISE },
+      runImpl: async () => ({ exitCode: 0, stdoutText: '', stderrText: 'noise: a\nnoise: b\n' }),
+    })
+    const value = await h.tool.execute({ target: 'prod', command: 'status' }, h.exec())
+    expect(value.stderr).toBe('')
+  })
+
+  it('no patterns declared: stderr passes through verbatim', async () => {
+    const h = setup({
+      runImpl: async () => ({ exitCode: 0, stdoutText: '', stderrText: 'noise: a\nreal\n' }),
+    })
+    const value = await h.tool.execute({ target: 'prod', command: 'status' }, h.exec())
+    expect(value.stderr).toBe('noise: a\nreal\n')
+  })
+
+  it('filtering happens after credential scrubbing (tokens stay intact)', async () => {
+    const h = setup({
+      spec: { stderrNoise: NOISE },
+      runImpl: async () => ({
+        exitCode: 1,
+        stdoutText: '',
+        stderrText: 'noise: about /run/widget.sock\ndial /run/widget.sock: failed\n',
+      }),
+    })
+    const value = await h.tool.execute({ target: 'prod', command: 'status' }, h.exec())
+    expect(value.stderr).toBe('dial <prod@ro:sockPath>: failed\n')
+    expect(JSON.stringify(value)).not.toContain('/run/widget.sock')
   })
 })
 

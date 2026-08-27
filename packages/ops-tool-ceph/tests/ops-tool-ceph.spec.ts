@@ -79,6 +79,44 @@ describe('ceph', () => {
     expect(h.calls.shellRun).toBe(0)
   })
 
+  it('filters known keyring noise lines from stderr, keeps real warnings', async () => {
+    const noise = [
+      '2026-08-20T10:00:00.123+0000 7f9c1a2b3640 -1 auth: unable to find a keyring on /etc/ceph/ceph.client.dsh.keyring,/etc/ceph/ceph.keyring,/etc/ceph/keyring,/etc/ceph/keyring.bin: (2) No such file or directory',
+      '2026-08-20T10:00:00.124+0000 7f9c1a2b3640 -1 auth: no keyring found at /etc/ceph/ceph.client.dsh.keyring, disabling cephx',
+    ].join('\n')
+    const h = setup({
+      runImpl: async () => ({
+        exitCode: 0,
+        stdoutText: 'HEALTH_OK\n',
+        stderrText: `${noise}\npool scbench creating\n`,
+      }),
+    })
+    const { value } = await h.runCeph({ cluster: 'prod', command: 'health' })
+    expect(value.stderr).toBe('pool scbench creating\n')
+    expect(value.stdout).toBe('HEALTH_OK\n')
+  })
+
+  it('stderr that is only keyring noise becomes empty', async () => {
+    const h = setup({
+      runImpl: async () => ({
+        exitCode: 0,
+        stdoutText: 'HEALTH_OK\n',
+        stderrText: 'no keyring found at /etc/ceph/ceph.keyring, disabling cephx\n',
+      }),
+    })
+    const { value } = await h.runCeph({ cluster: 'prod', command: 'health' })
+    expect(value.stderr).toBe('')
+  })
+
+  it('non-matching stderr (including other "keyring" mentions) passes through verbatim', async () => {
+    const stderrText = 'Error EINVAL: keyring file is empty\nunable to find a keyring on unexpected shape\n'
+    const h = setup({
+      runImpl: async () => ({ exitCode: 1, stdoutText: '', stderrText }),
+    })
+    const { value } = await h.runCeph({ cluster: 'prod', command: 'health' })
+    expect(value.stderr).toBe(stderrText)
+  })
+
   it('render is a pure function of (args, value)', async () => {
     const h = setup()
     const { value } = await h.runCeph({ cluster: 'prod', command: 'health' })

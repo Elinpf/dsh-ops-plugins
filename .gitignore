@@ -3,3 +3,5 @@ lib/
 *.tsbuildinfo
 .pnpm-store/
 node-compile-cache/
+.scratch/
+.kube/

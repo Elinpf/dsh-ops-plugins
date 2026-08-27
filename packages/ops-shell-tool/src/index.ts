@@ -19,7 +19,9 @@
  * never `/root/.dsh-ops/credentials/...`.
  *
  * A consumer package keeps only its identity: tool name, the kind it
- * resolves, and how to assemble the command from profile fields.
+ * resolves, how to assemble the command from profile fields, and optionally
+ * `stderrNoise` — regexes for known-noise stderr lines (e.g. ceph's
+ * missing-default-keyring chatter) the factory drops after scrubbing.
  *
  * @module @deepseek-ai/dsh-ops-shell-tool
  */
@@ -66,6 +68,15 @@ export interface ProfiledShellToolSpec {
    * captured output. Inline only non-secret values (flags, user@host, names).
    */
   buildCommand: (fields: Record<string, unknown>, command: string, ref: CredentialRef) => string
+  /**
+   * Known-noise stderr line patterns: any captured stderr line matching one
+   * of these regexes is dropped from the result. For warnings the CLI prints
+   * on every call that carry no information (e.g. ceph's missing-default-
+   * keyring lines when credentials arrive via --keyring). Keep them exact —
+   * every other stderr line passes through verbatim. Applied after
+   * credential scrubbing. Use plain (non-global) regexes.
+   */
+  stderrNoise?: RegExp[]
 }
 
 /**
@@ -138,6 +149,16 @@ function createCredentialTokens(profileName: string, tier: string, fields: Recor
       return out
     },
   }
+}
+
+/**
+ * Drop stderr lines matching any consumer-declared noise pattern. Line-based:
+ * a trailing newline survives filtering (the final empty segment is not a
+ * line), and stdout is never touched.
+ */
+function dropNoiseLines(text: string, patterns: RegExp[] | undefined): string {
+  if (!patterns?.length || !text) return text
+  return text.split('\n').filter((line) => !patterns.some((p) => p.test(line))).join('\n')
 }
 
 /** The shared output contract: schema + render, both pure. */
@@ -220,11 +241,12 @@ export function registerProfiledShellTool(ctx: Context, spec: ProfiledShellToolS
         const result = await ctx.shell.run(resolved)
         // exitCode is null when the process died from a signal — normalize to
         // -1. stdout/stderr are scrubbed value → token: CLIs echo credential
-        // paths in errors, and the event log must never see them.
+        // paths in errors, and the event log must never see them. stderr then
+        // loses the consumer-declared noise lines (e.g. ceph keyring chatter).
         return {
           exitCode: result.exitCode ?? -1,
           stdout: tokens.scrub(result.stdout.text),
-          stderr: tokens.scrub(result.stderr.text),
+          stderr: dropNoiseLines(tokens.scrub(result.stderr.text), spec.stderrNoise),
           command: fullCommand,
         }
       } catch (e) {

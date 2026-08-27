@@ -43,7 +43,7 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 
 ### ops-shell-tool
 
-**命令工具工厂**（`packages/ops-shell-tool`，纯库不是插件）。所有消费方共享的那套机器的唯一事实源：标准结果形状 `{ exitCode, stdout, stderr, command, error? }`、output schema、render、execute 模板（`ctx.get('opsAccess')` 现解析 → buildCommand 拼命令 → `ctx.shell` 执行，30s 超时，信号死亡 exitCode 归一为 -1，错误原样透传）。消费方只剩身份四件：工具名、解析的 kind、档案名参数名、`buildCommand`。
+**命令工具工厂**（`packages/ops-shell-tool`，纯库不是插件）。所有消费方共享的那套机器的唯一事实源：标准结果形状 `{ exitCode, stdout, stderr, command, error? }`、output schema、render、execute 模板（`ctx.get('opsAccess')` 现解析 → buildCommand 拼命令 → `ctx.shell` 执行，30s 超时，信号死亡 exitCode 归一为 -1，错误原样透传）。消费方只剩身份四件：工具名、解析的 kind、档案名参数名、`buildCommand`，外加可选的 `stderrNoise`——已知噪音 stderr 行的正则表（如 ceph 容器内缺默认 keyring 的告警），工厂在凭证擦除之后按行过滤，只丢精确匹配的行，其余 stderr 原样保留。
 
 **凭证引用 token（credential reference）**是路径不出日志的统一机制，只在工厂实现一次：buildCommand 用 `ref('字段名')` 标记文件类字段，得到展示 token `<id@tier:field>`（如 `<pf-test-cluster@rw:kubeconfigPath>`）；工厂在执行前把 token 换成 shell 安全引用的真实路径，并把展示命令、stdout、stderr 里所有真实路径的出现一律擦回 token（CLI 报错也会回显 --kubeconfig 路径，只改命令字符串堵不住）。模型和事件日志只看到 token，永远看不到 `/root/.dsh-ops/credentials/...`。
 
@@ -101,6 +101,36 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 - **kind 描述符 (KindDescriptor)** — `{ kind, jsonSchema, fieldsDoc?, fileFields? }`，通过 zod v4 的 `z.toJSONSchema()` 序列化 provider 的 zod schema 为标准 JSON Schema，前端据此动态渲染表单字段；fileFields 字段渲染为内容粘贴文本框
 - **派生注册 (derived registration)** — agent 持 rw 凭证在基础设施上自助创建只读账号（命名约定：k8s ServiceAccount `<id>-ro`、ceph `client.<id>-ro`），再调 **`register_access`** 工具把派生凭证写入 ro 档。不设授权门槛：ro 档是 agent 默认工作面，人可随时在管理 UI 注册/覆盖；rw 档永远只能人注册（工具只写 ro，kind/id 缺失时整条新建）。每次注册随工具调用进 session 事件流，可重建。各 kind 的派生配方是 provider 的 `derivationDoc`（prose 而非代码——命令随基础设施版本漂移，由 agent 用判断力执行），经 `list_access help: true` 按需拉取。文件类字段内容与 UI 粘贴共用同一落盘机器（`writeContentFiles`，0600，根目录可配 `credentialsDir`，默认 `~/.dsh-ops/credentials`）。配套可发现性：rw-only 条目在 @ 菜单、list_access、mention 注入三处都可见并标注「可派生」；`request_access` 对两档 kind 只要求 rw 档可解析（ro 缺失正是派生引导场景，若卡 ro 检查会死锁）；ro 缺失且 rw 存在时 resolve 的报错直接指向 register_access
 
+## 环境清单 (Environment Inventory)
+
+### 环境清单 (environment inventory)
+
+只读的环境地图，构建内容见 `docs/specs/0004-environment-inventory.md`。遍历 ops-access 注册的 k8s 集群，从 k8s API 盘出「集群 → 命名空间 → 中间件实例/应用 → 尽力而为的关联边 + Prometheus 监控状态」，落盘为 `~/.dsh-ops/environment.yaml`（自动生成、勿手改）。agent 通过 preset 平面的 `environment` 工具消费（overview / show / refresh），系统提示词只放一句引导。
+
+### 盘点 (scan)
+
+清单的生成过程。**纯确定性代码**（list + 分类表归类 + 写文件），零 LLM 参与——同一集群扫两次结果必须一致，这是清单能当地图用的前提。LLM 只消费清单做推理。
+
+### 新鲜度纪律 (TTL + stale)
+
+清单段带盘点时间戳，TTL（默认 1 小时）过期自动重扫，agent 可用 `refresh` 显式重扫；会话启动不阻塞、读缓存。集群连不上时**保留旧数据并标记 stale**，整块缺失或报错都是事故。
+
+### 识别分类表与 unknown 桶
+
+中间件识别靠镜像名/chart 名/label 的分类表：常见中间件内置代码，用户规则文件（`~/.dsh-ops/` 下）可追加覆盖。识别不出的工作负载进 **unknown 桶**——照常列出名称与镜像，不从视野消失。
+
+### 关联边 (relation edge)
+
+「谁连谁」的边。**尽力而为**：粗粒度（应用 ↔ 集群 ↔ 中间件）必须准；细粒度靠解析 ConfigMap 与明文 env 的值连边（如 `*.svc.cluster.local` 模式）。**Secret 只记引用名、绝不读值**——凭证材料不进清单、日志、模型上下文，与凭证体系同一条底线。更深的下钻留给排查时的 kubectl 工具现场做。
+
+### 监控状态印证 (Prometheus corroboration)
+
+盘点时尝试发现集群内 Prometheus service，经 `kubectl port-forward` 读 targets API，把 up/down 附到清单条目上，与 k8s 数据互相印证。找不到就跳过，是增强项不是硬依赖。agent 主动加监控点位是后续方向，不在本期。
+
+### 异常标注 (anomaly)
+
+清单段的规则检测异常（`src/anomalies.ts`，纯 k8s 通用语义零 LLM）：`cross-namespace-ref`（工作负载引用别的命名空间的 Service，info 级）和 `service-no-backend`（Service 有 selector 但 Endpoints 零就绪地址，warning 级——endpoints 是权威答案，不从 fronts 边反推）。overview 单列一节，show 就地标注。规则代码禁止出现任何环境特定名字，通用性由合成陌生环境夹具（tests/fixtures/shop-cluster）证明。
+
 ## 调查树 (Investigation Tree)
 
 ### 树 (Tree) 与 森林 (Forest)
@@ -142,10 +172,10 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 
 ### 状态流转的语义分工
 
-- **complete（带 summary）= 证实**：记录发现了什么
+- **complete / resolve（带 summary）= 证实、正面关闭**：记录结论。两者等价——resolve 是领域语言直觉（"resolve 一个假设"），complete 保留为别名；打在任意非 goal 节点上都只关闭该节点
 - **abandon = 证伪**：死路留在树上
 - **start / reopen**：进入 / 回到进行中
-- **resolve = 全案收口**：只作用于最终 goal，只调一次。假设的证实/证伪走 complete/abandon，**不用 resolve**
+- **resolve 打在 goal 上 = 全案收口**：只调一次，标记最终目标达成，树转入历史。**硬门槛**：所有非根节点必须先定论（done/dead_end），否则拒绝并列出未定论节点，引导先 complete/abandon；`force: true` 是「调查中途放弃」的显式逃生口（维持 WARN 放行）。约束只放在 goal 收口这一处——step complete 时不做任何「提示收口 milestone」的逻辑，避免早收口压力抑制下钻。只有这一发会置树级 `resolved` 标志（活跃树判定的唯一依据）
 
 ### detail 与 summary 的分工
 

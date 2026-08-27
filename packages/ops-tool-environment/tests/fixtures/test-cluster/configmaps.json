@@ -1,0 +1,23 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "metadata": { "name": "acme-config", "namespace": "acme" },
+      "data": {
+        "PG_HOST": "postgres.acme.svc.cluster.local",
+        "PG_PORT": "5432",
+        "REPORT_DB": "jdbc:postgresql://postgres.acme.svc.cluster.local:5432/report",
+        "LOG_LEVEL": "info"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "metadata": { "name": "kube-root-ca.crt", "namespace": "acme" },
+      "data": { "ca.crt": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n" }
+    }
+  ]
+}

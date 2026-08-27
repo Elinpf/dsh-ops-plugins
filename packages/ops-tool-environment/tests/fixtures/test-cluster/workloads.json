@@ -1,0 +1,203 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "user-service",
+        "namespace": "acme",
+        "labels": {}
+      },
+      "spec": {
+        "template": {
+          "metadata": {
+            "labels": { "app": "user-service" }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "user-service",
+                "image": "registry.example.com/acme/user-service:1.4.2",
+                "env": [
+                  { "name": "REDIS_ADDR", "value": "redis.acme.svc.cluster.local:6379" },
+                  { "name": "POD_IP", "valueFrom": { "fieldRef": { "fieldPath": "status.podIP" } } }
+                ],
+                "envFrom": [
+                  { "configMapRef": { "name": "acme-config" } },
+                  { "secretRef": { "name": "acme-secret" } }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "gateway",
+        "namespace": "acme"
+      },
+      "spec": {
+        "template": {
+          "metadata": {
+            "labels": { "app": "gateway" }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "gateway",
+                "image": "registry.example.com/acme/gateway:2.0.0",
+                "env": [
+                  { "name": "REPORT_DB", "valueFrom": { "configMapKeyRef": { "name": "acme-config", "key": "REPORT_DB" } } },
+                  { "name": "DB_PASSWORD", "valueFrom": { "secretKeyRef": { "name": "acme-secret", "key": "DB_PASSWORD" } } }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "name": "postgres",
+        "namespace": "acme",
+        "labels": { "app": "postgres" }
+      },
+      "spec": {
+        "serviceName": "postgres",
+        "template": {
+          "metadata": {
+            "labels": { "app": "postgres" }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "postgres",
+                "image": "registry.example.com/middleware/postgres:16.2",
+                "envFrom": [
+                  { "secretRef": { "name": "postgres-auth" } }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "name": "redis",
+        "namespace": "acme",
+        "labels": { "app": "redis" }
+      },
+      "spec": {
+        "serviceName": "redis",
+        "template": {
+          "metadata": {
+            "labels": { "app": "redis" }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "redis",
+                "image": "registry.example.com/middleware/redis:7.2"
+              },
+              {
+                "name": "exporter",
+                "image": "registry.example.com/middleware/redis-exporter:1.55"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "name": "prometheus",
+        "namespace": "monitoring",
+        "labels": {
+          "app.kubernetes.io/name": "prometheus",
+          "app.kubernetes.io/instance": "kube-prometheus",
+          "helm.sh/chart": "prometheus-25.8.0",
+          "app.kubernetes.io/managed-by": "Helm"
+        }
+      },
+      "spec": {
+        "serviceName": "prometheus",
+        "template": {
+          "metadata": {
+            "labels": {
+              "app.kubernetes.io/name": "prometheus",
+              "app.kubernetes.io/instance": "kube-prometheus"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "prometheus",
+                "image": "registry.example.com/middleware/prometheus:v2.53.0"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "coredns",
+        "namespace": "kube-system",
+        "labels": { "k8s-app": "kube-dns" }
+      },
+      "spec": {
+        "template": {
+          "metadata": {
+            "labels": { "k8s-app": "kube-dns" }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "coredns",
+                "image": "registry.k8s.io/coredns/coredns:v1.11.1"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "DaemonSet",
+      "metadata": {
+        "name": "node-exporter",
+        "namespace": "monitoring",
+        "labels": { "app.kubernetes.io/name": "node-exporter" }
+      },
+      "spec": {
+        "template": {
+          "metadata": {
+            "labels": { "app.kubernetes.io/name": "node-exporter" }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "node-exporter",
+                "image": "registry.example.com/middleware/node-exporter:v1.8.1"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

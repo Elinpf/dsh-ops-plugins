@@ -112,6 +112,9 @@ export interface TraceResult {
   }
   /** ID of the newly created node (add_step/add_milestone only). */
   new_node?: string
+  /** Non-blocking advisory hint (add_step only): the chosen parent looks
+   *  like a flat-hang mistake. Never a rejection — see doctrine.ts. */
+  hint?: string
 }
 
 /**
@@ -138,4 +141,11 @@ export interface TraceArgs {
   caused_by?: string
   links?: LinkPair[]
   status_filter?: NodeStatus
+  /** view output format: 'full' (default, with detail/summary) or 'tree'
+   *  (indented outline, shape only). */
+  format?: 'full' | 'tree'
+  /** Escape hatch for resolve on the goal: force tree closure while nodes
+   *  are still undecided (result carries a WARN). For abandoning an
+   *  investigation mid-way. Effective only when resolve targets the goal. */
+  force?: boolean
 }

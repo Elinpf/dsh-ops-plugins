@@ -92,3 +92,9 @@ ops 模式下，agent 默认拿着 `access.yaml` 里登记的全部凭证的全�
 
 - **ro/rw 分档只是存放位置，无机制核验凭证的真实权限**——一个 admin 凭证躺进 ro 档就是默认全权限，门对此不可见。候选方向：provider 可选实现能力探针（k8s 用 `auth can-i` 自检，ceph/ssh 未必可行），或登记时人工声明 + 展示。下次架构走查若重提，先读这条。
 - **凭证管理没有 webui**——目前全部靠手编 YAML。候选方向：登记文件的浏览/校验界面（@ 菜单的候选路由 `/ops-access/list` 已是现成数据源），审批面板二期再谈。
+
+## 基础设施侧待办（2026-08-27 实战排查暴露，需改集群/账号权限，未定）
+
+- **k8s ro 档补 `pods/portforward` create**——否则环境清单的 Prometheus 印证（port-forward 读 targets）在 ro 路径上静默缺席。
+- **k8s ro 档补 PV(persistentvolumes）读取**——view ClusterRole 读不了 cluster-scope 的 PV,CSI 排查需要 volumeHandle/driver 信息。
+- **ceph ro 档补 `class-read`**——`rbd lock list` / `rbd info` 在 CSI 卷锁排查中需要。
