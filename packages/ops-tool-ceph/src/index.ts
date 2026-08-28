@@ -3,8 +3,12 @@
  *
  * The `ceph` tool: resolves a `ceph` profile through the ops-access seam and
  * runs the command via ctx.shell, injecting the profile's --conf and
- * --keyring paths. All shared machinery (result shape, output schema,
- * render, execute template) lives in @deepseek-ai/dsh-ops-shell-tool.
+ * --keyring paths. The command's first word picks the binary from the
+ * allowlist [ceph, rbd, rados] — rbd/rados are SEPARATE binaries, not ceph
+ * subcommands (`ceph rbd ls` is a mon-side 'no valid command found', which
+ * once sent an agent chasing a phantom permissions problem, 2026-08-27).
+ * All shared machinery (result shape, output schema, render, execute
+ * template) lives in @deepseek-ai/dsh-ops-shell-tool.
  *
  * @module @deepseek-ai/dsh-ops-tool-ceph
  */
@@ -39,14 +43,21 @@ const STDERR_NOISE: RegExp[] = [
   /no keyring found at .*disabling cephx\s*$/,
 ]
 
+const CEPH_BINARIES = ['ceph', 'rbd', 'rados'] as const
+
+// ceph-ecosystem binaries this tool does NOT wrap — they run locally on a
+// host, not against the mon. Named so a confused call fails with a clear
+// boundary instead of the mon's misleading 'no valid command found'.
+const NOT_WRAPPED = ['mount', 'umount', 'mount.ceph', 'ceph-fuse', 'ceph-volume', 'rclone', 'rbd-nbd', 'rbd-mirror'] as const
+
 export function apply(ctx: Context): void {
   registerProfiledShellTool(ctx, {
     name: 'ceph',
     kind: 'ceph',
     targetParam: 'cluster',
-    description: 'Execute a ceph command on a specified Ceph cluster. The plugin automatically injects the correct --conf and --keyring credentials (shown as <id@tier:field> references). Use list_access to see available cluster names.',
+    description: 'Execute a ceph, rbd or rados command on a specified Ceph cluster. The plugin automatically injects the correct --conf and --keyring credentials (shown as <id@tier:field> references). Use list_access to see available cluster names.',
     targetParamDescription: 'Ceph cluster profile name. Use list_access to see options.',
-    commandDescription: 'ceph subcommand WITHOUT the ceph prefix. Examples: health detail, osd tree, df',
+    commandDescription: 'A ceph, rbd or rados command. Bare ceph subcommands work as-is (health detail, osd tree, df). rbd and rados are SEPARATE binaries — include the binary name as the first word (rbd ls -p rbd-pool, rados df); they share the injected --conf/--keyring/--name. Discover pool names with "osd pool ls". Under an ro credential, write verbs (and some reads like rbd ls without class-read caps) fail at the mon/osd with a real permission error — that is the enforcement layer working, not a tool bug.',
     stderrNoise: STDERR_NOISE,
     buildCommand(fields, command, ref) {
       const { name } = fields as { name?: string }
@@ -54,7 +65,18 @@ export function apply(ctx: Context): void {
       // client.admin and fails with RADOS permission denied. The cephx entity
       // name is not secret — it stays inline; only the file paths get tokens.
       const nameArg = name ? ` --name ${name}` : ''
-      return `ceph --conf=${ref('conf')} --keyring=${ref('keyring')}${nameArg} ${command}`
+      const trimmed = command.trim()
+      const first = trimmed.split(/\s+/, 1)[0] ?? ''
+      if ((NOT_WRAPPED as readonly string[]).includes(first)) {
+        throw new Error('the ceph tool wraps ceph/rbd/rados against the cluster only — \'' + first + '\' runs locally on a host; use the ssh tool for that')
+      }
+      // rbd and rados are SEPARATE binaries, not ceph subcommands — select by
+      // first word (an explicit 'ceph' prefix is stripped too); a bare word
+      // is a ceph subcommand and stays. Read-only-ness is enforced by the
+      // credential's caps at the mon/osd, never by the binary name.
+      const binary = (CEPH_BINARIES as readonly string[]).includes(first) ? first : 'ceph'
+      const rest = first === binary ? trimmed.slice(first.length).trimStart() : trimmed
+      return `${binary} --conf=${ref('conf')} --keyring=${ref('keyring')}${nameArg} ${rest}`
     },
   })
 }
