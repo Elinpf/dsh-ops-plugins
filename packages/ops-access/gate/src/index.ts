@@ -34,7 +34,7 @@
  * @module @deepseek-ai/dsh-ops-access-gate
  */
 
-import { appendFileSync, mkdirSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
@@ -65,6 +65,8 @@ export interface Config {
   grantTtlOptions: number[]
   /** Minutes a pending request awaits a human decision before auto-rejecting. */
   pendingRequestTimeoutMinutes: number
+  /** Lockdown (deny) state file path; a leading ~ expands to $HOME. Unlike grants, lockdowns SURVIVE restarts — an incident freeze that silently lifts on restart is no freeze. */
+  deniedFile: string
 }
 
 export const Config: z<Config> = z.object({
@@ -74,6 +76,7 @@ export const Config: z<Config> = z.object({
   auditFile: z.string().default('~/.dsh-ops/audit.log'),
   grantTtlOptions: z.array(z.number()).default([5, 10, 30]),
   pendingRequestTimeoutMinutes: z.number().default(5),
+  deniedFile: z.string().default('~/.dsh-ops/denied.json'),
 })
 
 // ── Grant + service contract ─────────────────────────────────────────────────
@@ -105,6 +108,22 @@ export interface ActiveGrant {
   readonly approvedBy: string
 }
 
+/**
+ * One operator lockdown (ticket 12, the broker's fourth state): the
+ * profile is refused ENTIRELY — even ro — until lifted. Scenarios:
+ * leaked credential, maintenance window, incident freeze. Lockdowns are
+ * process-wide (not session-scoped) and persisted to deniedFile, so a
+ * restart does not silently lift a freeze.
+ */
+export interface DeniedEntry {
+  readonly kind: string
+  readonly name: string
+  /** Epoch ms of the lockdown. */
+  readonly deniedAt: number
+  readonly reason: string
+  readonly deniedBy: string
+}
+
 /** The gate handle exposed via ctx.get('opsAccessGate'). */
 export interface OpsAccessGate {
   /** Record a grant. Re-authorizing the same (session, kind, name) replaces the entry. */
@@ -115,6 +134,20 @@ export interface OpsAccessGate {
   revoke(session: string, kind: string, name: string): boolean
   /** This session's live (unexpired) grants. */
   list(session: string): ActiveGrant[]
+  /**
+   * Lock a profile outright: even ro resolution is refused until lifted.
+   * Also revokes every live grant for it across ALL sessions (a leaked
+   * credential's elevation must die now) and returns the affected
+   * session ids so the caller can notify them. Re-denying replaces the
+   * entry (fresh reason/timestamp).
+   */
+  deny(kind: string, name: string, reason: string, deniedBy: string): string[]
+  /** Lift a lockdown. Returns false when the profile was not locked. */
+  undeny(kind: string, name: string): boolean
+  /** Whether the profile is operator-locked (the broker's first check). */
+  isDenied(kind: string, name: string): boolean
+  /** All active lockdowns, for the access panel. */
+  listDenied(): DeniedEntry[]
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -212,7 +245,7 @@ type PendingQueue = ReturnType<typeof makePendingQueue>
 // ── Audit log ────────────────────────────────────────────────────────────────
 
 interface AuditEvent {
-  event: 'grant' | 'grant-extend' | 'expire' | 'revoke' | 'rw-issue' | 'gated-issue' | 'ledger-reset' | 'grant-request' | 'request-decide'
+  event: 'grant' | 'grant-extend' | 'expire' | 'revoke' | 'rw-issue' | 'gated-issue' | 'ledger-reset' | 'grant-request' | 'request-decide' | 'deny' | 'undeny' | 'deny-block'
   /** Absent on ledger-reset, which is process-scoped, not session-scoped. */
   session?: string
   kind?: string
@@ -249,6 +282,34 @@ function makeAudit(file: string): (e: AuditEvent) => void {
   }
 }
 
+/** Load persisted lockdowns. A missing or corrupt file yields an empty set — the audit log records what happened. */
+export function loadDenied(file: string): DeniedEntry[] {
+  let raw: { entries?: unknown }
+  try {
+    raw = JSON.parse(readFileSync(file, 'utf8')) as { entries?: unknown }
+  } catch {
+    return []
+  }
+  if (!Array.isArray(raw.entries)) return []
+  return raw.entries.filter((e): e is DeniedEntry =>
+    typeof e === 'object' && e !== null
+    && typeof (e as DeniedEntry).kind === 'string'
+    && typeof (e as DeniedEntry).name === 'string'
+    && typeof (e as DeniedEntry).deniedAt === 'number'
+    && typeof (e as DeniedEntry).reason === 'string'
+    && typeof (e as DeniedEntry).deniedBy === 'string')
+}
+
+/** Persist lockdowns synchronously (same crash-ordering discipline as the audit log). A failure shouts, never throws. */
+export function saveDenied(file: string, entries: DeniedEntry[]): void {
+  try {
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, JSON.stringify({ version: 1, entries }, null, 2) + '\n', 'utf8')
+  } catch (err) {
+    console.error('ops-access-gate: failed to persist lockdowns to ' + file + ' (the in-memory state still holds):', err)
+  }
+}
+
 // ── Ledger ───────────────────────────────────────────────────────────────────
 
 /**
@@ -264,7 +325,16 @@ function grantKey(kind: string, name: string): string {
   return kind + ' ' + name
 }
 
-function makeGate(ledger: Ledger, audit: (e: AuditEvent) => void, now: () => number): OpsAccessGate {
+/** Persistence hook for the lockdown set: initial entries plus a change callback (apply wires it to deniedFile). */
+interface DeniedStore {
+  initial?: DeniedEntry[]
+  onChange?: (entries: DeniedEntry[]) => void
+}
+
+function makeGate(ledger: Ledger, audit: (e: AuditEvent) => void, now: () => number, deniedStore: DeniedStore = {}): OpsAccessGate {
+  const denied = new Map<string, DeniedEntry>()
+  for (const d of deniedStore.initial ?? []) denied.set(grantKey(d.kind, d.name), d)
+  function persistDenied(): void { deniedStore.onChange?.([...denied.values()]) }
   /** Fetch a grant, evicting + audit-logging it when lapsed. */
   function live(session: string, kind: string, name: string): Grant | undefined {
     const grant = ledger.get(session)?.get(grantKey(kind, name))
@@ -296,6 +366,33 @@ function makeGate(ledger: Ledger, audit: (e: AuditEvent) => void, now: () => num
         out.push({ kind: grant.kind, name: grant.name, expiresAt: grant.expiresAt, reason: grant.reason, approvedBy: grant.approvedBy })
       }
       return out
+    },
+    deny(kind: string, name: string, reason: string, deniedBy: string): string[] {
+      denied.set(grantKey(kind, name), { kind, name, deniedAt: now(), reason, deniedBy })
+      persistDenied()
+      audit({ event: 'deny', kind, name, reason, approvedBy: deniedBy })
+      // A lockdown kills live elevation everywhere, not just future
+      // resolves — revoke every session's grant for this profile.
+      const affected: string[] = []
+      for (const [session, set] of ledger) {
+        if (set.delete(grantKey(kind, name))) {
+          affected.push(session)
+          audit({ event: 'revoke', session, kind, name, source: 'deny' })
+        }
+      }
+      return affected
+    },
+    undeny(kind: string, name: string): boolean {
+      if (!denied.delete(grantKey(kind, name))) return false
+      persistDenied()
+      audit({ event: 'undeny', kind, name })
+      return true
+    },
+    isDenied(kind: string, name: string): boolean {
+      return denied.has(grantKey(kind, name))
+    },
+    listDenied(): DeniedEntry[] {
+      return [...denied.values()].sort((a, b) => a.deniedAt - b.deniedAt)
     },
   }
 }
@@ -349,7 +446,12 @@ function parseProfile(raw: unknown): { kind: string, profileName: string } | und
 export function apply(ctx: Context, config: Config): void {
   const audit = makeAudit(expandHome(config.auditFile))
   const ledger: Ledger = new Map()
-  const gate = makeGate(ledger, audit, () => Date.now())
+  // Lockdowns persist (ticket 12): an incident freeze must survive a restart.
+  const deniedFile = expandHome(config.deniedFile)
+  const gate = makeGate(ledger, audit, () => Date.now(), {
+    initial: loadDenied(deniedFile),
+    onChange: (entries) => saveDenied(deniedFile, entries),
+  })
   ctx.provide('opsAccessGate', gate)
 
   /** Per-session model-visible notices from panel actions, drained at pre-step. */
@@ -391,6 +493,12 @@ export function apply(ctx: Context, config: Config): void {
   // kinds deny outright — their credential is effectively rw (there is no
   // read-only shell), so an untracked caller must not get it at all.
   const broker: AccessBroker = (kind, profileName, agent) => {
+    // Deny (ticket 12) outranks every other state: a locked profile refuses
+    // even ro, for session and internal callers alike.
+    if (gate.isDenied(kind, profileName)) {
+      audit({ event: 'deny-block', ...(agent ? { session: agent.id } : {}), kind, name: profileName })
+      return { deny: kind + '/' + profileName + ' is locked by the operator — even read-only access is refused until the lockdown is lifted' }
+    }
     if (!agent) {
       if (config.approvalRequiredKinds.includes(kind)) {
         return { deny: kind + ' requires an approved grant, and grants need a session — internal calls without one cannot use it. Call it from a session and request timed access via the ' + REQUEST_ACCESS + ' tool' }
@@ -472,7 +580,7 @@ export function apply(ctx: Context, config: Config): void {
               remainingMinutes: Math.max(0, Math.round((g.expiresAt - Date.now()) / 60000)),
             }))
             // The TTL choices ride along so the panel never hardcodes them.
-            sendJson(res, 200, { ok: true, grants, ttlOptions: config.grantTtlOptions })
+            sendJson(res, 200, { ok: true, grants, ttlOptions: config.grantTtlOptions, denied: gate.listDenied() })
             return
           }
           if (req.method !== 'POST') { sendJsonError(res, 405, new Error('method not allowed')); return }
@@ -484,6 +592,7 @@ export function apply(ctx: Context, config: Config): void {
           }
           const ttl = ttlOptionError(body.ttlMinutes)
           if (ttl === null) { sendJsonError(res, 400, new Error(ttlOptionsMessage)); return }
+          if (gate.isDenied(kind, name)) { sendJsonError(res, 400, new Error(kind + '/' + name + ' is locked (deny) — lift the lockdown first')); return }
           const undeliverable = await checkDeliverable(kind, name)
           if (undeliverable !== null) { sendJsonError(res, 400, new Error(undeliverable)); return }
           const reason = typeof body.reason === 'string' && body.reason.trim() !== '' ? body.reason.trim() : 'operator panel grant'
@@ -554,6 +663,53 @@ export function apply(ctx: Context, config: Config): void {
             '<access-grant>运维延长了本会话 ' + kind + '/' + name + ' 的授权，新到期时间 '
             + new Date(expiresAt).toISOString() + '（' + ttl + ' 分钟）</access-grant>')
           sendJson(res, 200, { ok: true, expiresAt })
+        } catch (err) {
+          sendJsonError(res, 500, err)
+        }
+      },
+    }))
+
+    // POST /ops-access/deny — lock a profile outright {kind, name, reason?}:
+    // even ro is refused, and its live grants die in every session.
+    wctx.effect(() => ws.webServer.register({
+      kind: 'exact',
+      path: '/ops-access/deny',
+      handler: async (req: { method: string, on: unknown }, res: Parameters<typeof sendJson>[0]) => {
+        try {
+          if (req.method !== 'POST') { sendJsonError(res, 405, new Error('method not allowed')); return }
+          const body = JSON.parse(await readRequestBody(req as never)) as Record<string, unknown>
+          const { kind, name } = body
+          if (typeof kind !== 'string' || kind === '' || typeof name !== 'string' || name === '') {
+            sendJsonError(res, 400, new Error('kind and name (non-empty strings) are required'))
+            return
+          }
+          const reason = typeof body.reason === 'string' && body.reason.trim() !== '' ? body.reason.trim() : 'operator lockdown'
+          const affected = gate.deny(kind, name, reason, 'panel')
+          for (const session of affected) {
+            queueNotice(session, '<access-revoked>运维封禁了 ' + kind + '/' + name + '（' + reason + '）：本会话的相关授权已收回，该档案连只读访问也已锁定</access-revoked>')
+          }
+          sendJson(res, 200, { ok: true, revokedSessions: affected.length })
+        } catch (err) {
+          sendJsonError(res, 500, err)
+        }
+      },
+    }))
+
+    // POST /ops-access/undeny — lift a lockdown {kind, name}.
+    wctx.effect(() => ws.webServer.register({
+      kind: 'exact',
+      path: '/ops-access/undeny',
+      handler: async (req: { method: string, on: unknown }, res: Parameters<typeof sendJson>[0]) => {
+        try {
+          if (req.method !== 'POST') { sendJsonError(res, 405, new Error('method not allowed')); return }
+          const body = JSON.parse(await readRequestBody(req as never)) as Record<string, unknown>
+          const { kind, name } = body
+          if (typeof kind !== 'string' || kind === '' || typeof name !== 'string' || name === '') {
+            sendJsonError(res, 400, new Error('kind and name (non-empty strings) are required'))
+            return
+          }
+          if (!gate.undeny(kind, name)) { sendJsonError(res, 400, new Error(kind + '/' + name + ' is not locked')); return }
+          sendJson(res, 200, { ok: true })
         } catch (err) {
           sendJsonError(res, 500, err)
         }
@@ -720,6 +876,10 @@ export function apply(ctx: Context, config: Config): void {
       }
 
       // action === 'request'
+      // A locked profile can never be granted — fail fast instead of parking.
+      if (gate.isDenied(kind, profileName)) {
+        return { ok: false, message: kind + '/' + profileName + ' is locked by the operator (deny) — no access can be granted until the lockdown is lifted. The request was not sent.' }
+      }
       const reason = typeof args.reason === 'string' ? args.reason.trim() : ''
       if (reason === '') {
         return { ok: false, message: 'request requires a non-empty reason — it is shown to the human approver' }

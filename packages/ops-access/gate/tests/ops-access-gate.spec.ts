@@ -8,6 +8,7 @@
  * per-use, and every transition lands in the audit log.
  */
 
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import * as plugin from '../src/index.ts'
 import { setup, REGISTRY, SSH_REGISTRY } from './harness.ts'
@@ -719,5 +720,80 @@ describe('deferred mounting', () => {
     h.gate.authorize(futureGrant('sess-a', 'test', 'prod'))
     expect((await h.opsAccess.resolve('test', 'prod', SESSION_A)).fields.endpoint).toBe('https://rw-prod.internal')
     expect(h.tools.map((t) => t.name)).toContain('request_access')
+  })
+})
+
+// ── Deny lockdown (ticket 12) ────────────────────────────────────────────────
+
+describe('deny lockdown', () => {
+  it('a locked profile refuses even ro — for session and internal callers alike', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    h.gate.deny('test', 'prod', '凭证疑似泄露', 'panel')
+    await expect(h.opsAccess.resolve('test', 'prod', SESSION_A)).rejects.toThrow(/locked by the operator/)
+    await expect(h.opsAccess.resolve('test', 'prod')).rejects.toThrow(/locked by the operator/)
+    expect(h.readAudit().some((l) => l.event === 'deny' && l.name === 'prod')).toBe(true)
+    expect(h.readAudit().filter((l) => l.event === 'deny-block')).toHaveLength(2)
+  })
+
+  it("deny revokes the profile's live grants in EVERY session", async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    h.gate.authorize({ session: SESSION_A.id, kind: 'test', name: 'prod', expiresAt: Date.now() + 600000, reason: 'r', approvedBy: 'panel' })
+    h.gate.authorize({ session: SESSION_B.id, kind: 'test', name: 'prod', expiresAt: Date.now() + 600000, reason: 'r', approvedBy: 'panel' })
+    const affected = h.gate.deny('test', 'prod', 'incident freeze', 'panel')
+    expect(affected.sort()).toEqual([SESSION_A.id, SESSION_B.id])
+    expect(h.gate.isAuthorized(SESSION_A.id, 'test', 'prod')).toBe(false)
+    expect(h.gate.isAuthorized(SESSION_B.id, 'test', 'prod')).toBe(false)
+    expect(h.readAudit().filter((l) => l.event === 'revoke' && l.source === 'deny')).toHaveLength(2)
+  })
+
+  it('undeny lifts the lockdown; lifting an unlocked profile is a no-op false', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    h.gate.deny('test', 'prod', 'maintenance', 'panel')
+    expect(h.gate.undeny('test', 'prod')).toBe(true)
+    expect((await h.opsAccess.resolve('test', 'prod', SESSION_A)).fields.endpoint).toBe('https://ro-prod.internal')
+    expect(h.gate.undeny('test', 'prod')).toBe(false)
+    expect(h.readAudit().some((l) => l.event === 'undeny' && l.name === 'prod')).toBe(true)
+  })
+
+  it('lockdowns persist to deniedFile and survive a reload (loadDenied)', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    h.gate.deny('test', 'prod', 'leak', 'panel')
+    const reloaded = plugin.loadDenied(join(h.dir, 'denied.json'))
+    expect(reloaded).toHaveLength(1)
+    expect(reloaded[0]).toMatchObject({ kind: 'test', name: 'prod', reason: 'leak', deniedBy: 'panel' })
+    expect(plugin.loadDenied(join(h.dir, 'nonexistent.json'))).toEqual([])
+  })
+
+  it('request_access on a locked profile fails fast without parking', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    h.gate.deny('test', 'prod', 'lock', 'panel')
+    const res = await h.callRequestAccess({ action: 'request', profile: 'test/prod', reason: 'need it' }, { agent: SESSION_A })
+    expect(res.ok).toBe(false)
+    expect(res.message).toContain('locked by the operator')
+    expect(h.readAudit().filter((l) => l.event === 'grant-request')).toHaveLength(0)
+  })
+
+  it('routes: deny/undeny round-trip, grants GET carries the list, grants POST refuses locked profiles', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    const denied = await h.callRoute('/ops-access/deny', { method: 'POST', body: { kind: 'test', name: 'prod', reason: '维护窗口' } })
+    expect(denied.status).toBe(200)
+    const listed = await h.callRoute('/ops-access/grants', { query: '?session=' + SESSION_A.id })
+    expect(listed.json.denied).toHaveLength(1)
+    expect(listed.json.denied[0].reason).toBe('维护窗口')
+    const grant = await h.callRoute('/ops-access/grants', { method: 'POST', body: { session: SESSION_A.id, kind: 'test', name: 'prod', ttlMinutes: 30 } })
+    expect(grant.status).toBe(400)
+    expect(grant.json.error).toContain('locked')
+    const lifted = await h.callRoute('/ops-access/undeny', { method: 'POST', body: { kind: 'test', name: 'prod' } })
+    expect(lifted.status).toBe(200)
+    const again = await h.callRoute('/ops-access/undeny', { method: 'POST', body: { kind: 'test', name: 'prod' } })
+    expect(again.status).toBe(400)
+    const bad = await h.callRoute('/ops-access/deny', { method: 'POST', body: { kind: '' } })
+    expect(bad.status).toBe(400)
   })
 })

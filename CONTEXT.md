@@ -102,6 +102,8 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 - **kind 描述符 (KindDescriptor)** — `{ kind, jsonSchema, fieldsDoc?, fileFields? }`，通过 zod v4 的 `z.toJSONSchema()` 序列化 provider 的 zod schema 为标准 JSON Schema，前端据此动态渲染表单字段；fileFields 字段渲染为内容粘贴文本框
 - **派生注册 (derived registration)** — agent 持 rw 凭证在基础设施上自助创建只读账号（命名约定：k8s ServiceAccount `<id>-ro`、ceph `client.<id>-ro`），再调 **`register_access`** 工具把派生凭证写入 ro 档。不设授权门槛：ro 档是 agent 默认工作面，人可随时在管理 UI 注册/覆盖；rw 档永远只能人注册（工具只写 ro，kind/id 缺失时整条新建）。每次注册随工具调用进 session 事件流，可重建。各 kind 的派生配方是 provider 的 `derivationDoc`（prose 而非代码——命令随基础设施版本漂移，由 agent 用判断力执行），经 `list_access help: true` 按需拉取。文件类字段内容与 UI 粘贴共用同一落盘机器（`writeContentFiles`，0600，根目录可配 `credentialsDir`，默认 `~/.dsh-ops/credentials`）。配套可发现性：rw-only 条目在 @ 菜单、list_access、mention 注入三处都可见并标注「可派生」；`request_access` 对两档 kind 只要求 rw 档可解析（ro 缺失正是派生引导场景，若卡 ro 检查会死锁）；ro 缺失且 rw 存在时 resolve 的报错直接指向 register_access
 
+- **封禁 (deny 第四态)**（票 12）— 运维对某 profile 的显式锁：broker 裁决的第一道检查，连 ro 档也拒发（场景：凭证泄露、维护期、事故冻结）。与授权的三处本质区别：进程级而非会话级、**持久化**到 `~/.dsh-ops/denied.json`（重启不悄悄解冻）、封禁瞬间连带收回所有会话的该档案授权并通知。面板档案行红点 + 封禁/解封两段确认；审计事件 `deny`/`undeny`/`deny-block`；被封档案上的 request_access 直接快速失败（不挂起）。
+
 ## 环境清单 (Environment Inventory)
 
 ### 环境清单 (environment inventory)

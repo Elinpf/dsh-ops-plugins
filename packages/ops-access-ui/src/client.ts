@@ -211,15 +211,43 @@ interface PanelPendingRequest {
   decidesAt: number
 }
 
-/** Fetch this session's live grants + the configured TTL options. Null on failure. */
-async function fetchPanelGrants(sessionId: string, signal?: AbortSignal): Promise<{ grants: PanelGrant[], ttlOptions: number[] } | null> {
+/** One operator lockdown row as reported by GET /ops-access/grants (ticket 12). */
+interface PanelDenied {
+  kind: string
+  name: string
+  deniedAt: number
+  reason: string
+  deniedBy: string
+}
+
+/** Fetch this session's live grants + the configured TTL options + the lockdown list. Null on failure. */
+async function fetchPanelGrants(sessionId: string, signal?: AbortSignal): Promise<{ grants: PanelGrant[], ttlOptions: number[], denied: PanelDenied[] } | null> {
   try {
     const res = await fetch('/ops-access/grants?session=' + encodeURIComponent(sessionId), { signal })
     if (!res.ok) return null
-    return await res.json()
+    const data = await res.json() as { grants?: PanelGrant[], ttlOptions?: number[], denied?: PanelDenied[] }
+    return { grants: data.grants ?? [], ttlOptions: data.ttlOptions ?? [], denied: Array.isArray(data.denied) ? data.denied : [] }
   } catch {
     return null
   }
+}
+
+/** Lock a profile outright (deny): even ro is refused; its live grants die everywhere. Never throws. */
+function postPanelDeny(kind: string, name: string): Promise<ApiResult> {
+  return apiFetchResult('/ops-access/deny', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ kind, name }),
+  }, 'postPanelDeny')
+}
+
+/** Lift a lockdown. Never throws. */
+function postPanelUndeny(kind: string, name: string): Promise<ApiResult> {
+  return apiFetchResult('/ops-access/undeny', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ kind, name }),
+  }, 'postPanelUndeny')
 }
 
 /** Fetch this session's pending access requests. Null on failure. */
@@ -1300,6 +1328,7 @@ function defaultTtlChoice(options: number[], requested: number): number {
 
 function AccessPanel({ sessionId }: AccessPanelProps): any {
   const [grants, setGrants] = useState<PanelGrant[]>([])
+  const [denied, setDenied] = useState<PanelDenied[]>([])
   const [ttlOptions, setTtlOptions] = useState<number[]>([5, 10, 30])
   const [requests, setRequests] = useState<PanelPendingRequest[]>([])
   const [candidates, setCandidates] = useState<AccessMentionCandidate[]>([])
@@ -1312,6 +1341,7 @@ function AccessPanel({ sessionId }: AccessPanelProps): any {
     const g = await fetchPanelGrants(sessionId)
     if (g !== null) {
       setGrants(g.grants)
+      setDenied(g.denied)
       if (Array.isArray(g.ttlOptions) && g.ttlOptions.length > 0) setTtlOptions(g.ttlOptions)
     }
     const r = await fetchPanelRequests(sessionId)
@@ -1440,6 +1470,7 @@ function AccessPanel({ sessionId }: AccessPanelProps): any {
         const key = c.kind + '/' + c.name
         const open = grantTarget === key
         const live = liveGrantFor(grants, c.kind, c.name)
+        const locked = denied.find((d) => d.kind === c.kind && d.name === c.name)
         return h('div', { key, className: 'ops-access-panel-candidate' },
           h('div', {
             className: 'ops-access-panel-row clickable',
@@ -1450,21 +1481,34 @@ function AccessPanel({ sessionId }: AccessPanelProps): any {
               // Access-state marker on the right: lit green = this session
               // holds an rw grant for the profile right now; no dot = plain
               // ro. (A red 'deny' state is reserved for the future lockdown.)
-              live !== undefined &&
-                h('span', {
-                  className: 'ops-access-panel-dot rw',
-                  title: '本会话已授权 rw · 剩 ' + live.remainingMinutes + ' 分钟',
-                }),
-              live !== undefined ? '已授权 · 剩 ' + live.remainingMinutes + ' 分钟'
+              locked !== undefined
+                ? h('span', { className: 'ops-access-panel-dot deny', title: '已封禁 · ' + locked.reason })
+                : (live !== undefined &&
+                  h('span', {
+                    className: 'ops-access-panel-dot rw',
+                    title: '本会话已授权 rw · 剩 ' + live.remainingMinutes + ' 分钟',
+                  })),
+              locked !== undefined ? '已封禁 · ' + locked.reason
+                : live !== undefined ? '已授权 · 剩 ' + live.remainingMinutes + ' 分钟'
                 : (c.rw ? 'rw 就绪' : (c.ro ? '限时使用' : '未配置')),
               c.environment ? ' · ' + c.environment : ''),
           ),
           open && h('div', { className: 'ops-access-panel-actions' },
-            ttlRow(0, (ttl) => setConfirmKey('grant:' + key + ':' + ttl)),
+            locked !== undefined
+              ? h('button', { className: 'ops-access-panel-btn', onClick: () => setConfirmKey('undeny:' + key) }, '解封…')
+              : ttlRow(0, (ttl) => setConfirmKey('grant:' + key + ':' + ttl)),
+            locked === undefined && h('button', {
+              className: 'ops-access-panel-btn',
+              onClick: () => setConfirmKey('deny:' + key),
+            }, '封禁…'),
           ),
-          open && ttlOptions.map((ttl) =>
+          open && locked === undefined && ttlOptions.map((ttl) =>
             confirmStrip('grant:' + key + ':' + ttl, '授予 ' + key + ' · ' + ttl + ' 分钟？', () =>
               void run(() => postPanelGrant(sessionId, c.kind, c.name, ttl), '已授予 ' + key + '（' + ttl + ' 分钟）'))),
+          confirmStrip('deny:' + key, '封禁 ' + key + '？连只读访问也会锁定，其所有会话的授权立即收回', () =>
+            void run(() => postPanelDeny(c.kind, c.name), '已封禁 ' + key + '（连只读也锁定）')),
+          confirmStrip('undeny:' + key, '解封 ' + key + '？恢复正常的 ro/rw 授权流程', () =>
+            void run(() => postPanelUndeny(c.kind, c.name), '已解封 ' + key)),
         )
       }),
     ),
@@ -1588,8 +1632,8 @@ export { apply, inject, name }
 /** @internal */
 export {
   apiFetchList, apiFetchResult, fetchAdminList, fetchKinds, submitEntry, deleteEntry, AdminSection,
-  fetchPanelGrants, fetchPanelRequests, postPanelGrant, postPanelExtend, postPanelRevoke, postPanelRevokeAll, postPanelDecide,
+  fetchPanelGrants, fetchPanelRequests, postPanelGrant, postPanelExtend, postPanelRevoke, postPanelRevokeAll, postPanelDecide, postPanelDeny, postPanelUndeny,
   AccessPanel, AccessBadge, pendingAccessCount, defaultTtlChoice, liveGrantFor,
 }
 /** @internal */
-export type { AdminEntry, AdminTierStatus, KindDescriptor, SubmitEntryBody, ApiResult, PanelGrant, PanelPendingRequest }
+export type { AdminEntry, AdminTierStatus, KindDescriptor, SubmitEntryBody, ApiResult, PanelGrant, PanelPendingRequest, PanelDenied }
