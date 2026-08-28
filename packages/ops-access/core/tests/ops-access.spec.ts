@@ -1278,6 +1278,35 @@ describe('register_access tool', () => {
     expect(existsSync(join(credentialsDir, 'files'))).toBe(false)
   })
 
+  it('normalizes the trailing newline when the provider opts in, validating the normalized bytes', async () => {
+    const { handle, callRegisterAccess, credentialsDir } = setup()
+    const seen: string[] = []
+    handle.register({
+      ...fileProvider,
+      normalizeTrailingNewline: true,
+      validateContent: (_field, content) => { seen.push(content); return null },
+    })
+    const res = await callRegisterAccess({ profile: 'files/prod', fields: { kubeconfig: 'apiVersion: v1\n\n' } })
+    expect(res.ok).toBe(true)
+    const file = join(credentialsDir, 'files', 'prod', 'ro', 'kubeconfig')
+    expect(readFileSync(file, 'utf8')).toBe('apiVersion: v1\n')
+    // the validator saw exactly the bytes that landed on disk
+    expect(seen).toEqual(['apiVersion: v1\n'])
+  })
+
+  it('supports an async validateContent (deep-parse hooks like ssh-keygen)', async () => {
+    const { handle, callRegisterAccess } = setup()
+    handle.register({
+      ...fileProvider,
+      validateContent: async (_field, content) => content.includes('async-corrupt') ? 'deep parse failed' : null,
+    })
+    const bad = await callRegisterAccess({ profile: 'files/prod', fields: { kubeconfig: 'async-corrupt' } })
+    expect(bad.ok).toBe(false)
+    expect(bad.message).toMatch(/invalid content for files\/prod ro kubeconfig: deep parse failed/)
+    const good = await callRegisterAccess({ profile: 'files/prod2', fields: { kubeconfig: 'fine' } })
+    expect(good.ok).toBe(true)
+  })
+
   it('rejects a path-hostile id BEFORE writing any credential file', async () => {
     const { handle, callRegisterAccess, credentialsDir } = setup()
     handle.register(fileProvider)

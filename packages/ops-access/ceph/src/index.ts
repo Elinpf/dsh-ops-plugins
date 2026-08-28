@@ -44,16 +44,15 @@ export const provider: AccessProvider = {
     if (name !== undefined) fields.name = name
     return fields
   },
-  // Save-time guard against corrupt pastes. ceph's buffer parser rejects
-  // input without a trailing newline and requires key lines indented under
-  // their [section] — both are classic copy-paste losses, so they are caught
-  // here instead of surfacing as "cannot parse buffer: Malformed input" at
-  // connection time. Structural only — no connectivity checks.
+  // A missing trailing newline used to be rejected here (ceph's buffer
+  // parser rejects it); core now normalizes it away at write time
+  // (normalizeTrailingNewline). What remains is structure: key lines
+  // indented under their [section], strict base64 — caught here instead of
+  // surfacing as "cannot parse buffer: Malformed input" at connection time.
+  // Structural only — no connectivity checks.
+  normalizeTrailingNewline: true,
   validateContent(field, content) {
     if (field !== 'conf' && field !== 'keyring') return null
-    if (!content.endsWith('\n')) {
-      return 'content must end with a newline — ceph rejects buffers without one (often lost when pasting)'
-    }
     if (field === 'conf') {
       if (!/^\[global\][\t ]*$/m.test(content)) return 'no [global] section — paste the full ceph.conf'
       if (!/^[\t ]*mon_host[\t ]*=/m.test(content)) return 'no mon_host set — paste the full ceph.conf'

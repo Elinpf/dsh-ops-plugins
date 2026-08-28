@@ -38,7 +38,7 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 
 - **定义包 ops-access/core**（npm 名 `@deepseek-ai/dsh-ops-access`，不变）— 拥有 `ctx.opsAccess` 服务和登记文件，定义词汇类型
 - **提供方 ops-access/{k8s,ceph,ssh}** — 每种凭证类型一个：该类型的 zod schema、字段加工（如 `~` 展开）、可选的 `validateContent` 保存时内容校验。apply 里只调定义包的 `registerAccessProvider(ctx, provider)` 帮手注册——不要手写 `ctx.inject(['opsAccess'], ...)`（静态 inject 兄弟行服务会让 loader 死锁，帮手内含这段防护）
-- **保存时内容校验 (validateContent)** — provider 可选钩子，文件类字段的粘贴内容**落盘前**做结构性校验（k8s：合法 YAML 且有 clusters/contexts/users，且 `current-context` 必须指向已定义的 context——ops 工具不带 `--context`，缺失或失效的 current-context 会让每次调用都炸；ceph：行尾换行 + [global]/mon_host + keyring 的 key 行缩进且 base64 ≥16 字节；ssh：含 PRIVATE KEY 块）。两条写入路径（admin UI、register_access）共用，校验失败 400/ok:false 且零文件 IO——粘贴丢格式（如 ceph keyring 的 TAB 缩进）在保存时就报明确错误，而不是使用时爆 cannot parse buffer
+- **保存时内容校验 (validateContent)** — provider 可选钩子，文件类字段的粘贴内容**落盘前**做结构性校验（k8s：合法 YAML 且有 clusters/contexts/users，且 `current-context` 必须指向已定义的 context——ops 工具不带 `--context`，缺失或失效的 current-context 会让每次调用都炸；ceph：[global]/mon_host + keyring 的 key 行缩进且 base64 ≥16 字节；ssh：**盔甲检查 + 真实解析**——`ssh-keygen -y -P ''` 跑通才放行（与 ssh 连接时同一个解析器），加密私钥报 BatchMode 不可用的明确错误）。钩子可以是**异步**的（ssh 要跑子进程）；provider 可声明 **`normalizeTrailingNewline`**（ssh/ceph 启用）在**校验前**把内容归一化为恰好一个结尾换行——PEM 的 END 行必须换行终止，粘贴/模型转述常丢这一字节（2026-08-27：ssh 密钥落盘缺尾换行 → 使用时 error in libcrypto，密钥数学关系完全自洽仍失败）。两条写入路径（admin UI、register_access）共用，校验失败 400/ok:false 且零文件 IO——粘贴丢格式（如 ceph keyring 的 TAB 缩进）在保存时就报明确错误，而不是使用时爆 cannot parse buffer
 - **消费方 ops-tool-{kubectl,ceph,ssh}** — 模型工具，按名字解析凭证后拼命令。留在 `packages/` 顶层：它们是工具层，不是凭证层
 
 ### ops-shell-tool

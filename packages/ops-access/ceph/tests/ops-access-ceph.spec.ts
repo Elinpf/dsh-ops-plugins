@@ -116,9 +116,10 @@ describe('validateContent', () => {
     expect(plugin.provider.validateContent?.('keyring', VALID_KEYRING)).toBeNull()
   })
 
-  it('rejects content without a trailing newline (ceph buffer parser rejects it)', () => {
-    expect(plugin.provider.validateContent?.('conf', VALID_CONF.trimEnd())).toMatch(/end with a newline/)
-    expect(plugin.provider.validateContent?.('keyring', VALID_KEYRING.trimEnd())).toMatch(/end with a newline/)
+  it('no longer rejects a missing trailing newline — core normalizes it at write time', () => {
+    expect(plugin.provider.normalizeTrailingNewline).toBe(true)
+    expect(plugin.provider.validateContent?.('conf', VALID_CONF.trimEnd())).toBeNull()
+    expect(plugin.provider.validateContent?.('keyring', VALID_KEYRING.trimEnd())).toBeNull()
   })
 
   it('rejects a keyring whose key line lost its indentation (paste corruption)', () => {

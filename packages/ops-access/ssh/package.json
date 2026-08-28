@@ -31,6 +31,7 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
+    "@types/node": "^22.0.0",
     "@deepseek-ai/dsh-ops-access": "workspace:*",
     "typescript": "^5.4.0",
     "vitest": "^4.1.11"
