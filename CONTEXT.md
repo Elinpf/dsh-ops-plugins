@@ -19,7 +19,7 @@
 
 ### ops-panel
 
-**面板缝**（ADR-0004 / spec 0003，已落地：packages/ops-panel）。会话作用域对话框的公共机制，独立插件包、以 cordis 服务形态提供（client 半 `ctx.opsPanels`，key 复数 = registry）：`registerPanel({ command, title, available?, component })` 注册一个面板，框架持有单一 `command/executed` 监听按命令名分发 + overlay 外壳（标题栏/Escape/背景关闭/每会话开关状态）。node 半只有无状态 helper `registerPanelCommand`（注册空 handler 的 host 命令，让 `/名字` 进斜杠菜单）。**服务而非纯库**——纯库会被各消费方 bundle 各打包一份，注册表/监听/外壳互撞（双模块实例教训）。先例是 dsh 的 ui-commands（`ctx.commandUi`），本缝是它的"完整对话框"档。消费方只剩四件身份：命令名、面板标题、内容组件、可用性过滤器。命令触发之外另有命令式 `open(sessionId, command)`/`close(sessionId)`（ADR-0004 §9），供待办信号拉起面板——第一个消费方是授权面板的待决申请角标（输入区 dock 红点计数，从会话快照 runningCalls 派生在飞的 request_access 数，零轮询；点击开审批台）。
+**面板缝**（ADR-0004 / spec 0003，已落地：packages/ops-panel）。会话作用域对话框的公共机制，独立插件包、以 cordis 服务形态提供（client 半 `ctx.opsPanels`，key 复数 = registry）：`registerPanel({ command, title, available?, component })` 注册一个面板，框架持有单一 `command/executed` 监听按命令名分发 + overlay 外壳（标题栏/Escape/背景关闭/每会话开关状态）。node 半只有无状态 helper `registerPanelCommand`（注册空 handler 的 host 命令，让 `/名字` 进斜杠菜单）。**服务而非纯库**——纯库会被各消费方 bundle 各打包一份，注册表/监听/外壳互撞（双模块实例教训）。先例是 dsh 的 ui-commands（`ctx.commandUi`），本缝是它的"完整对话框"档。消费方只剩四件身份：命令名、面板标题、内容组件、可用性过滤器。命令触发之外另有命令式 `open(sessionId, command)`/`close(sessionId)`（ADR-0004 §9），供待办信号拉起面板——第一个消费方是授权面板的待决申请角标（输入区 dock 红点计数，从会话快照 runningCalls 派生在飞的 request_access 数，零轮询；点击开审批台）。**第二消费方（票 13）是授权总览 `/access-all`**：跨会话查看所有在飞 rw 授权/待决申请/封禁列表（数据源 gate 新只读路由 `GET /ops-access/grants/all` + `OpsAccessGate.listAll()`），按授权收回、按会话收回全部、多会话时一键全局收回（复用既有 per-session 路由，未新增写路径）；注册 API 原样够用，ADR-0004 决策 8 的反向检查点通过。
 
 ### ops-prompts
 

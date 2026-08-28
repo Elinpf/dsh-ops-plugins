@@ -797,3 +797,36 @@ describe('deny lockdown', () => {
     expect(bad.status).toBe(400)
   })
 })
+
+// ── Cross-session overview (ticket 13) ───────────────────────────────────────
+
+describe('cross-session overview', () => {
+  it('listAll reports every session' + String.fromCharCode(39) + 's live grants with the session key, skipping lapsed ones', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    h.gate.authorize({ session: SESSION_A.id, kind: 'test', name: 'prod', expiresAt: Date.now() + 600000, reason: 'a', approvedBy: 'panel' })
+    h.gate.authorize({ session: SESSION_B.id, kind: 'test', name: 'prod', expiresAt: Date.now() + 600000, reason: 'b', approvedBy: 'panel' })
+    h.gate.authorize({ session: SESSION_B.id, kind: 'test', name: 'staging', expiresAt: Date.now() - 1000, reason: 'old', approvedBy: 'panel' })
+    const all = h.gate.listAll()
+    expect(all).toHaveLength(2)
+    expect(all.map((g) => g.session).sort()).toEqual([SESSION_A.id, SESSION_B.id])
+  })
+
+  it('GET /ops-access/grants/all carries grants, parked requests, and lockdowns', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    h.gate.authorize({ session: SESSION_A.id, kind: 'test', name: 'prod', expiresAt: Date.now() + 600000, reason: 'a', approvedBy: 'panel' })
+    h.gate.deny('test', 'other', 'freeze', 'panel')
+    const res = await h.callRoute('/ops-access/grants/all')
+    expect(res.status).toBe(200)
+    expect(res.json.grants).toHaveLength(1)
+    expect(res.json.grants[0].session).toBe(SESSION_A.id)
+    expect(res.json.denied[0].name).toBe('other')
+    expect(Array.isArray(res.json.requests)).toBe(true)
+  })
+
+  it('the /access-all panel command is registered alongside /access', () => {
+    const h = setup()
+    expect(h.commands.map((c: { name: string }) => c.name)).toEqual(['access', 'access-all'])
+  })
+})

@@ -134,6 +134,8 @@ export interface OpsAccessGate {
   revoke(session: string, kind: string, name: string): boolean
   /** This session's live (unexpired) grants. */
   list(session: string): ActiveGrant[]
+  /** Every session's live grants, for the cross-session overview (ticket 13). */
+  listAll(): Array<ActiveGrant & { session: string }>
   /**
    * Lock a profile outright: even ro resolution is refused until lifted.
    * Also revokes every live grant for it across ALL sessions (a leaked
@@ -359,6 +361,16 @@ function makeGate(ledger: Ledger, audit: (e: AuditEvent) => void, now: () => num
     revoke(session: string, kind: string, name: string): boolean {
       return ledger.get(session)?.delete(grantKey(kind, name)) ?? false
     },
+    listAll(): Array<ActiveGrant & { session: string }> {
+      const out: Array<ActiveGrant & { session: string }> = []
+      for (const [session, set] of ledger) {
+        for (const grant of set.values()) {
+          if (live(session, grant.kind, grant.name) === undefined) continue
+          out.push({ session, kind: grant.kind, name: grant.name, expiresAt: grant.expiresAt, reason: grant.reason, approvedBy: grant.approvedBy })
+        }
+      }
+      return out
+    },
     list(session: string): ActiveGrant[] {
       const out: ActiveGrant[] = []
       for (const grant of ledger.get(session)?.values() ?? []) {
@@ -529,6 +541,7 @@ export function apply(ctx: Context, config: Config): void {
   // (headless) simply never get the command instead of failing to load.
   ctx.inject(['commands'], (commandCtx: Context) => {
     registerPanelCommand(commandCtx, { name: 'access', description: '打开授权面板 — 授予 / 调整 / 收回本会话的提权访问' })
+    registerPanelCommand(commandCtx, { name: 'access-all', description: '打开授权总览 — 跨会话查看与收回提权授权（含待决申请与封禁列表）' })
   })
 
   // ── Human-side routes (the access panel's backend) ─────────────────────────
@@ -663,6 +676,25 @@ export function apply(ctx: Context, config: Config): void {
             '<access-grant>运维延长了本会话 ' + kind + '/' + name + ' 的授权，新到期时间 '
             + new Date(expiresAt).toISOString() + '（' + ttl + ' 分钟）</access-grant>')
           sendJson(res, 200, { ok: true, expiresAt })
+        } catch (err) {
+          sendJsonError(res, 500, err)
+        }
+      },
+    }))
+
+    // GET /ops-access/grants/all — every session's live grants + parked requests + lockdowns (ticket 13's overview).
+    // Read-only; revocation reuses the existing per-session routes.
+    wctx.effect(() => ws.webServer.register({
+      kind: 'exact',
+      path: '/ops-access/grants/all',
+      handler: async (req: { method: string }, res: Parameters<typeof sendJson>[0]) => {
+        try {
+          if (req.method !== 'GET') { sendJsonError(res, 405, new Error('method not allowed')); return }
+          const grants = gate.listAll().map((g) => ({
+            ...g,
+            remainingMinutes: Math.max(0, Math.round((g.expiresAt - Date.now()) / 60000)),
+          }))
+          sendJson(res, 200, { ok: true, grants, requests: pending.list(), denied: gate.listDenied() })
         } catch (err) {
           sendJsonError(res, 500, err)
         }
