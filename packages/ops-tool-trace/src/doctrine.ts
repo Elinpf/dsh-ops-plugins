@@ -56,7 +56,8 @@ export const HELP_POINTER = '完整用法与纪律: 调 `trace` action=help。'
  * Soft hint for add_step: the parent is a milestone that already has
  * completed steps with findings, so the new step may belong under one of
  * those steps (drill-down) instead of flat under the milestone. A hint,
- * never a rejection — flat-hanging is sometimes right.
+ * never a rejection — flat-hanging is sometimes right. Fires ONCE per tree
+ * (latched in the tool); the pre-step nesting reminder is the backstop.
  */
 export function milestoneFollowUpHint(doneStepIds: string[]): string {
   return `提示: 该 milestone 下已有完成的 step (${doneStepIds.join(', ')})。如果本步是跟进某个 step 的发现, 应挂到那个 step 下 (parent_id = 那个 step 的 id), 而不是平铺在 milestone 下。`

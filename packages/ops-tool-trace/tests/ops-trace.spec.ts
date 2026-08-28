@@ -482,6 +482,32 @@ describe('add_step flat-hang hint (#4)', () => {
     expect(r.hint).toBeUndefined()
   })
 
+  it('fires only once per tree — the second flat-hang stays silent (nesting reminder is the backstop)', async () => {
+    const h = await withCompletedStepUnderMilestone()
+    await h.run({ action: 'complete', id: 's1', summary: 'found X' })
+    const r1 = await h.run({ action: 'add_step', id: 's2', parent_id: 'm1', title: 'S2' })
+    expect(r1.hint).toContain('s1')
+    const r2 = await h.run({ action: 'add_step', id: 's3', parent_id: 'm1', title: 'S3' })
+    expect(r2.hint).toBeUndefined()
+  })
+
+  it('a NEW tree in the same session earns its own single hint', async () => {
+    const h = await withCompletedStepUnderMilestone()
+    await h.run({ action: 'complete', id: 's1', summary: 'found X' })
+    await h.run({ action: 'add_step', id: 's2', parent_id: 'm1', title: 'S2' }) // fires + latches tree 0
+    await h.run({ action: 'complete', id: 's2' })
+    await h.run({ action: 'resolve', id: 'm1', summary: 'm1 judged' })
+    await h.run({ action: 'resolve', id: 'goal', summary: 'done' })
+    await h.run({ action: 'create_tree', goal_title: 'G2' })
+    await h.run({ action: 'add_milestone', id: 'n1', parent_id: 'goal', title: 'N1' })
+    await h.run({ action: 'add_step', id: 't1', parent_id: 'n1', title: 'T1' })
+    await h.run({ action: 'complete', id: 't1', summary: 'found Y' })
+    const r = await h.run({ action: 'add_step', id: 't2', parent_id: 'n1', title: 'T2' })
+    expect(r.hint).toContain('t1')
+    const r2 = await h.run({ action: 'add_step', id: 't3', parent_id: 'n1', title: 'T3' })
+    expect(r2.hint).toBeUndefined()
+  })
+
   it('does not fire for add_milestone', async () => {
     const h = await withCompletedStepUnderMilestone()
     await h.run({ action: 'complete', id: 's1', summary: 'found X' })
