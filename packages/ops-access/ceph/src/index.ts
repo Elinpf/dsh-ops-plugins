@@ -12,6 +12,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
+import { execFile } from 'node:child_process'
 import type { AccessProvider } from '@deepseek-ai/dsh-ops-access'
 import { expandHome, registerAccessProvider } from '@deepseek-ai/dsh-ops-access'
 
@@ -51,6 +52,8 @@ export const provider: AccessProvider = {
   // surfacing as "cannot parse buffer: Malformed input" at connection time.
   // Structural only — no connectivity checks.
   normalizeTrailingNewline: true,
+  // Ticket 10: re-read the entity's caps at save time and compare with the tier.
+  probe: probeCeph,
   validateContent(field, content) {
     if (field !== 'conf' && field !== 'keyring') return null
     if (field === 'conf') {
@@ -74,6 +77,58 @@ export const provider: AccessProvider = {
   },
 }
 
+
+// ── Capability probe (ticket 10) ─────────────────────────────────────────────
+
+/** Parse `caps <daemon> = "<value>"` lines from `ceph auth get` output. */
+export function parseCaps(output: string): Record<string, string> {
+  const caps: Record<string, string> = {}
+  for (const line of output.split('\n')) {
+    const m = line.match(/^\s*caps (\w+) = "(.*)"\s*$/)
+    if (m) caps[m[1]] = m[2]
+  }
+  return caps
+}
+
+/** A cap value grants write when its tokens include w, rw, or *. */
+function capIsWritable(value: string): boolean {
+  const tokens = value.split(/\s+/)
+  return tokens.includes('w') || tokens.includes('rw') || tokens.includes('*')
+}
+
+/**
+ * Pure caps-vs-tier assessment (unit-tested directly). ro verifies when
+ * every daemon cap is read-only ('allow r', optionally with class-read —
+ * librbd object-class reads, ticket 14); rw verifies when at least one cap
+ * grants write.
+ */
+export function assessCephCaps(caps: Record<string, string>, tier: 'ro' | 'rw'): { status: 'verified' | 'mismatch', detail?: string } {
+  const summary = Object.entries(caps).map(([d, v]) => d + '="' + v + '"').join(' ')
+  if (Object.keys(caps).length === 0) return { status: 'mismatch', detail: 'auth get returned no caps lines' }
+  if (tier === 'ro') {
+    const writable = Object.entries(caps).filter(([, v]) => capIsWritable(v)).map(([d]) => d)
+    if (writable.length === 0) return { status: 'verified' }
+    return { status: 'mismatch', detail: 'claims ro but caps grant write on ' + writable.join('/') + ' — ' + summary }
+  }
+  if (Object.values(caps).some(capIsWritable)) return { status: 'verified' }
+  return { status: 'mismatch', detail: 'claims rw but no cap grants write — ' + summary }
+}
+
+async function probeCeph(fields: Record<string, unknown>, tier: 'ro' | 'rw') {
+  const name = typeof fields.name === 'string' ? fields.name : 'client.admin'
+  const conf = String(fields.conf ?? '')
+  const keyring = String(fields.keyring ?? '')
+  const output = await new Promise<string | null>((resolve) => {
+    execFile('ceph', ['--conf', conf, '--keyring', keyring, '--name', name, 'auth', 'get', name],
+      { timeout: 10000 },
+      // stderr stays unsurfaced: ceph error messages can carry file paths.
+      (err, stdout) => resolve(err ? null : stdout))
+  })
+  if (output === null) {
+    return { status: 'unverifiable' as const, detail: 'ceph auth get could not run (cluster unreachable or ceph CLI missing)' }
+  }
+  return assessCephCaps(parseCaps(output), tier)
+}
 // ── Plugin apply ─────────────────────────────────────────────────────────────
 
 export function apply(ctx: Context, _config: Record<string, never>): void {

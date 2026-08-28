@@ -69,6 +69,8 @@ interface AdminEntry {
 interface AdminTierStatus {
   ok: boolean
   error?: string
+  /** Capability-probe outcome recorded at save time (ticket 10). */
+  probe?: { status: 'verified' | 'mismatch' | 'unverifiable', detail?: string, probedAt: string }
 }
 
 /** One registered credential kind: its JSON Schema and optional field docs. */
@@ -665,6 +667,10 @@ const CSS = `
   color: var(--dsw-alias-text-primary, #1f2328);
 }
 .ops-access-badge:hover { background: var(--dsw-alias-bg-secondary, #f6f8fa); }
+.ops-access-admin-probe { font-size: 11px; padding: 0 6px; border-radius: 4px; margin-left: 6px; }
+.ops-access-admin-probe.verified { background: var(--dsw-alias-success, #1a7f37); color: #fff; }
+.ops-access-admin-probe.mismatch { background: var(--dsw-alias-danger, #cf222e); color: #fff; }
+.ops-access-admin-probe.unverifiable { background: var(--dsw-alias-bg-secondary, #eaeef2); opacity: 0.8; }
 .ops-access-badge-dot {
   width: 8px; height: 8px; border-radius: 50%; flex: none;
   background: var(--dsw-alias-danger, #cf222e);
@@ -768,8 +774,15 @@ function extractSchemaFields(jsonSchema: Record<string, unknown>): SchemaField[]
 
 function TierBadge({ status }: { status: AdminTierStatus }): any {
   if (status.ok) {
+    const probe = status.probe
+    const chip = probe === undefined ? null
+      : h('span', {
+        className: 'ops-access-admin-probe ' + probe.status,
+        title: (probe.detail !== undefined ? probe.detail + ' · ' : '') + 'probed ' + probe.probedAt,
+      }, probe.status === 'verified' ? '已核验' : probe.status === 'mismatch' ? '核验失败' : '无法核验')
     return h('span', { className: 'ops-access-admin-tier-cell ops-access-admin-tier-ok' },
       h(CheckIcon),
+      chip,
     )
   }
   const title = status.error ?? 'not registered'

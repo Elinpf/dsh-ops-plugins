@@ -124,6 +124,20 @@ export interface AccessProvider {
    * in libcrypto at first use over exactly one missing newline).
    */
   normalizeTrailingNewline?: boolean
+  /**
+   * Capability probe (ticket 10): verify the credential's REAL
+   * permissions against the claimed tier. Core runs it at save time,
+   * after validation (credential files are on disk by then), and stores
+   * the result as a `probe` key beside the tier in the registry —
+   * surfaced by listAll / list_access / the admin UI. Receives the
+   * schema-validated, provider-processed fields. A probe must be
+   * READ-ONLY against the infrastructure (k8s runs a can-i matrix;
+   * ceph re-reads `auth get` caps). Providers that cannot probe (ssh —
+   * there is no read-only shell to test) omit the hook; their tiers
+   * stay unprobed. Probe failures degrade to 'unverifiable' — they
+   * never reject the write.
+   */
+  probe?: (fields: Record<string, unknown>, tier: 'ro' | 'rw') => Promise<{ status: ProbeState['status'], detail?: string }>
 }
 
 /** A resolved access profile: envelope fields plus the provider-processed type-specific fields. */
@@ -158,10 +172,40 @@ export interface EntryEnvelope {
   environment?: string
 }
 
+/**
+ * Capability-probe outcome for one tier (ticket 10): whether the stored
+ * credential's REAL permissions match its claimed tier, measured at save
+ * time. 'verified' = claims match reality; 'mismatch' = reality
+ * contradicts the tier (an admin credential sitting in the ro slot is
+ * the classic case); 'unverifiable' = the probe could not run (binary
+ * missing, cluster unreachable) — never a write rejection.
+ */
+export interface ProbeState {
+  status: 'verified' | 'mismatch' | 'unverifiable'
+  detail?: string
+  /** ISO timestamp of the probe run. */
+  probedAt: string
+}
+
+/** Read a persisted probe result off a raw tier object (durable boundary — sanitize). */
+function probeOf(tierRaw: unknown): ProbeState | undefined {
+  if (!isPlainObject(tierRaw)) return undefined
+  const p = (tierRaw as Record<string, unknown>).probe
+  if (!isPlainObject(p)) return undefined
+  const probe = p as Record<string, unknown>
+  if (probe.status !== 'verified' && probe.status !== 'mismatch' && probe.status !== 'unverifiable') return undefined
+  if (typeof probe.probedAt !== 'string') return undefined
+  const out: ProbeState = { status: probe.status, probedAt: probe.probedAt }
+  if (typeof probe.detail === 'string') out.detail = probe.detail
+  return out
+}
+
 /** Validation status of one entry in one tier — `error` carries the zod reason, never field values. */
 export interface AdminTierStatus {
   ok: boolean
   error?: string
+  /** Capability-probe outcome recorded at save time, when the provider probes. */
+  probe?: ProbeState
 }
 
 /** One entry in the merged admin view: envelope + per-tier validation status, never fields. */
@@ -236,7 +280,7 @@ export interface OpsAccess {
    * structural failures: unknown kind, missing file, unparseable file, or
    * missing entry.
    */
-  canResolve(kind: string, name: string, tier: 'ro' | 'rw'): Promise<{ ok: boolean, error?: string }>
+  canResolve(kind: string, name: string, tier: 'ro' | 'rw'): Promise<AdminTierStatus>
   /**
    * Resolve one profile by kind and name. Throws on unknown kind, unknown
    * name, or invalid entry. When a broker is registered it is consulted on
@@ -612,7 +656,7 @@ export function apply(ctx: Context, config: Config): void {
       return dispose
     },
 
-    async canResolve(kind: string, profileName: string, tier: 'ro' | 'rw'): Promise<{ ok: boolean, error?: string }> {
+    async canResolve(kind: string, profileName: string, tier: 'ro' | 'rw'): Promise<AdminTierStatus> {
       const provider = providers.get(kind)
       if (!provider) return { ok: false }
       // Load + locate the entry in its own try/catch: a missing or unparseable
@@ -726,6 +770,7 @@ export function apply(ctx: Context, config: Config): void {
         '      ro:                                      # ro tier fields (agent-readable default)',
         '        <kind-specific fields, see below>',
         '      rw:                                      # rw tier fields (grant-gated)',
+        '        probe: {...}                            # auto-managed capability check (ticket 10): status/detail/probedAt, written at save time — do not edit',
         '',
         'Registered kinds and their entry fields:',
       ]
@@ -781,7 +826,19 @@ export function apply(ctx: Context, config: Config): void {
       // touch the file. buildProfile throws with zod issue paths + messages,
       // never raw field values. (The in-memory merged entry is what we
       // validate, matching the spec's read→merge→validate→write sequence.)
-      buildProfile(provider, kind, profileName, tier, tierData, registryFile, entry)
+      const writtenProfile = buildProfile(provider, kind, profileName, tier, tierData, registryFile, entry)
+      // Capability probe (ticket 10): verify claims against reality at save
+      // time — the credential files are already on disk (the caller writes
+      // them first). A probe failure degrades to 'unverifiable', never a
+      // write rejection.
+      if (provider.probe) {
+        const probed = await provider.probe(writtenProfile.fields, tier)
+          .catch((err: unknown) => ({
+            status: 'unverifiable' as const,
+            detail: err instanceof Error ? err.message.split('\n')[0] : String(err),
+          }))
+        tierData.probe = { ...probed, probedAt: new Date().toISOString() }
+      }
       await saveRegistry(registryFile, registry)
     },
 
@@ -828,6 +885,11 @@ export function apply(ctx: Context, config: Config): void {
           const envelope = buildEnvelope([entry as Record<string, unknown>])
           const roStatus = await handle.canResolve(kind, name, 'ro')
           const rwStatus = await handle.canResolve(kind, name, 'rw')
+          const rawEntry = entry as Record<string, unknown>
+          const roProbe = probeOf(rawEntry.ro)
+          if (roProbe !== undefined) roStatus.probe = roProbe
+          const rwProbe = probeOf(rawEntry.rw)
+          if (rwProbe !== undefined) rwStatus.probe = rwProbe
           result.push({ kind, name, envelope, tiers: { ro: roStatus, rw: rwStatus } })
         }
       }

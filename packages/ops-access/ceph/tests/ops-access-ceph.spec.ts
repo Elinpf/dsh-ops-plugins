@@ -1,3 +1,4 @@
+import { assessCephCaps, parseCaps, provider } from '../src/index.ts'
 /**
  * Unit spec for ops-access-ceph: schema accept/reject, `~` expansion in
  * process, and registration/disposal through a mock opsAccess context.
@@ -144,4 +145,41 @@ describe('validateContent', () => {
   it('ignores non-file fields', () => {
     expect(plugin.provider.validateContent?.('name', 'anything')).toBeNull()
   })
+})
+
+// ── capability probe (ticket 10) ─────────────────────────────────────────────
+
+describe('capability probe', () => {
+  const AUTH_GET = [
+    'exported keyring for client.demo-ro',
+    'caps mds = "allow r"',
+    'caps mgr = "allow r"',
+    'caps mon = "allow r"',
+    'caps osd = "allow r class-read"',
+  ].join('\n')
+
+  it('parseCaps reads the caps lines of ceph auth get output', () => {
+    expect(parseCaps(AUTH_GET)).toEqual({ mds: 'allow r', mgr: 'allow r', mon: 'allow r', osd: 'allow r class-read' })
+  })
+  it('ro verifies on all-read caps, class-read included', () => {
+    expect(assessCephCaps(parseCaps(AUTH_GET), 'ro')).toEqual({ status: 'verified' })
+  })
+  it('ro mismatches when any cap grants write, with the caps in the detail', () => {
+    const r = assessCephCaps({ mon: 'allow r', osd: 'allow rw' }, 'ro')
+    expect(r.status).toBe('mismatch')
+    expect(r.detail).toContain('osd')
+    expect(r.detail).toContain('allow rw')
+  })
+  it('rw verifies on a writable cap; mismatches when nothing can write', () => {
+    expect(assessCephCaps({ mon: 'allow r', osd: 'allow rw' }, 'rw')).toEqual({ status: 'verified' })
+    expect(assessCephCaps({ mon: 'allow *' }, 'rw')).toEqual({ status: 'verified' })
+    const r = assessCephCaps(parseCaps(AUTH_GET), 'rw')
+    expect(r.status).toBe('mismatch')
+    expect(r.detail).toContain('no cap grants write')
+  })
+  it('the real probe degrades to unverifiable when ceph auth get cannot run', async () => {
+    const res = await provider.probe!({ conf: '/nonexistent/ceph.conf', keyring: '/nonexistent/keyring', name: 'client.demo-ro' }, 'ro')
+    expect(res.status).toBe('unverifiable')
+    expect(JSON.stringify(res)).not.toContain('/nonexistent')
+  }, 20000)
 })

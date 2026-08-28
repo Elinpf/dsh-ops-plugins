@@ -1493,3 +1493,46 @@ test:
   })
 })
 
+
+// ── capability probe (ticket 10) ─────────────────────────────────────────────
+
+describe('capability probe', () => {
+  it('stores the probe outcome beside the tier at save time; listAll surfaces it', async () => {
+    const probing: AccessProvider = { ...testProvider, probe: async () => ({ status: 'verified' }) }
+    const { handle, write } = setup()
+    handle.register(probing)
+    write(VALID_REGISTRY)
+    await handle.writeEntry('test', 'alpha', 'ro', { endpoint: 'https://alpha.internal' })
+    const entries = await handle.listAll()
+    const alpha = entries.find((e) => e.name === 'alpha')
+    expect(alpha?.tiers.ro.probe?.status).toBe('verified')
+    expect(typeof alpha?.tiers.ro.probe?.probedAt).toBe('string')
+    const profile = await handle.resolve('test', 'alpha')
+    expect(profile.fields.endpoint).toBe('https://alpha.internal')
+    expect(profile.fields.probe).toBeUndefined()
+  })
+
+  it('a throwing probe degrades to unverifiable and never rejects the write', async () => {
+    const probing: AccessProvider = { ...testProvider, probe: async () => { throw new Error('boom\nsecond line') } }
+    const { handle, write } = setup()
+    handle.register(probing)
+    write(VALID_REGISTRY)
+    await handle.writeEntry('test', 'alpha', 'ro', { endpoint: 'https://alpha.internal' })
+    const entries = await handle.listAll()
+    const alpha = entries.find((e) => e.name === 'alpha')
+    expect(alpha?.tiers.ro.probe?.status).toBe('unverifiable')
+    expect(alpha?.tiers.ro.probe?.detail).toBe('boom')
+  })
+
+  it('probe-less providers stay unprobed; a garbage persisted probe is dropped at the boundary', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(VALID_REGISTRY)
+    await handle.writeEntry('test', 'alpha', 'ro', { endpoint: 'https://alpha.internal' })
+    let entries = await handle.listAll()
+    expect(entries.find((e) => e.name === 'alpha')?.tiers.ro.probe).toBeUndefined()
+    write(VALID_REGISTRY.replace('endpoint: https://alpha.internal', 'endpoint: https://alpha.internal\n        probe: { status: bogus }'))
+    entries = await handle.listAll()
+    expect(entries.find((e) => e.name === 'alpha')?.tiers.ro.probe).toBeUndefined()
+  })
+})

@@ -128,6 +128,24 @@ describe('list_access', () => {
     { kind: 'k8s', name: 'pf-test', envelope: { name: '个人测试集群', environment: 'test' }, tiers: { ro: { ok: false }, rw: { ok: true } } },
   ]
 
+  it('annotates per-tier probe outcomes (verified / failed / unprobed)', async () => {
+    const probed: AdminEntry[] = [
+      { kind: 'k8s', name: 'prod', envelope: {}, tiers: {
+        ro: { ok: true, probe: { status: 'verified', probedAt: '2026-08-28T10:00:00Z' } },
+        rw: { ok: true, probe: { status: 'mismatch', detail: 'claims rw but can-i says: get pods=yes, create deployments=no', probedAt: '2026-08-28T10:00:00Z' } },
+      } },
+      { kind: 'ceph', name: 'ceph-main', envelope: {}, tiers: { ro: { ok: true }, rw: { ok: false } } },
+    ]
+    const h = setup({ listAllImpl: async () => probed })
+    const value = await h.runListAccess()
+    const k8s = value.groups.find((g: any) => g.kind === 'k8s')
+    expect(k8s.profiles[0].probe).toContain('ro 已核验')
+    expect(k8s.profiles[0].probe).toContain('rw 核验失败')
+    const ceph = value.groups.find((g: any) => g.kind === 'ceph')
+    expect(ceph.profiles[0].probe).toBe('ro 声明未核验')
+    const text = h.renderListAccess(value)
+    expect(text).toContain('[probe: ro 已核验 / rw 核验失败')
+  })
   it('groups entries by kind and never leaks fields', async () => {
     const h = setup({ listAllImpl: async () => entries })
     const value = await h.runListAccess()
@@ -136,9 +154,9 @@ describe('list_access', () => {
     expect(value.groups.map((g: any) => g.kind)).toEqual(['ceph', 'k8s'])
     const k8s = value.groups.find((g: any) => g.kind === 'k8s')
     expect(k8s.profiles).toEqual([
-      { name: 'prod', description: '生产集群', environment: 'prod', ro: true, rw: false },
-      { name: 'staging', environment: 'staging', ro: true, rw: false },
-      { name: 'pf-test', displayName: '个人测试集群', environment: 'test', ro: false, rw: true },
+      { name: 'prod', description: '生产集群', environment: 'prod', ro: true, rw: false, probe: 'ro 声明未核验' },
+      { name: 'staging', environment: 'staging', ro: true, rw: false, probe: 'ro 声明未核验' },
+      { name: 'pf-test', displayName: '个人测试集群', environment: 'test', ro: false, rw: true, probe: 'rw 声明未核验' },
     ])
 
     // No fields key or value anywhere in the structured output.
