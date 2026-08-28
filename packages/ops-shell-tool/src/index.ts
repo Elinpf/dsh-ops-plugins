@@ -94,8 +94,12 @@ function errorMessage(e: unknown): string {
   return String((e as Error | null)?.message || e)
 }
 
-/** Single-quote a value for safe shell embedding (the substitute for a ref token). */
-function shellQuote(value: string): string {
+/**
+ * Single-quote a value for safe shell embedding. Used for ref-token
+ * substitutes, and exported for consumers that must pass a whole remote
+ * command as ONE argument (ops-tool-ssh).
+ */
+export function shellQuote(value: string): string {
   return "'" + value.split("'").join("'\\''") + "'"
 }
 

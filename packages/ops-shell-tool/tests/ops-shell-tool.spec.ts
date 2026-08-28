@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { registerProfiledShellTool } from '../src/index.ts'
+import { registerProfiledShellTool, shellQuote } from '../src/index.ts'
 import type { ProfiledShellToolSpec } from '../src/index.ts'
 import type { AccessProfile } from '@deepseek-ai/dsh-ops-access'
 
@@ -313,6 +313,14 @@ describe('stderrNoise filtering', () => {
     const value = await h.tool.execute({ target: 'prod', command: 'status' }, h.exec())
     expect(value.stderr).toBe('dial <prod@ro:sockPath>: failed\n')
     expect(JSON.stringify(value)).not.toContain('/run/widget.sock')
+  })
+})
+
+describe('shellQuote', () => {
+  it('wraps in single quotes with POSIX escaping for embedded quotes', () => {
+    expect(shellQuote('plain')).toBe('\'plain\'')
+    expect(shellQuote('a\'b')).toBe('\'a\'\\\'\'b\'')
+    expect(shellQuote('')).toBe('\'\'')
   })
 })
 

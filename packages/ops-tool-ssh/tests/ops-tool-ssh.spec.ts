@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import * as mod from '../src/index.ts'
+import { shellQuote } from '@deepseek-ai/dsh-ops-shell-tool'
 import { setup, DEFAULT_PROFILE } from './harness.ts'
 import type { AccessProfile } from '@deepseek-ai/dsh-ops-access'
 
@@ -21,7 +22,7 @@ describe('ssh', () => {
     expect(h.calls.shellRun).toBe(1)
     expect(value.command).toBe(
       'ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new'
-      + ' -i <node-1@ro:key> -p 2222 ops@10.0.0.11 systemctl status ceph-osd@3',
+      + ' -i <node-1@ro:key> -p 2222 ops@10.0.0.11 \'systemctl status ceph-osd@3\'',
     )
     expect(value.exitCode).toBe(0)
     expect(value.stdout).toBe('active\n')
@@ -46,8 +47,36 @@ describe('ssh', () => {
     const h = setup({ profile: minimal })
     const { value } = await h.runSsh({ host: 'jump', command: 'hostname' })
     expect(value.command).toBe(
-      'ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new root@192.168.1.2 hostname',
+      'ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new root@192.168.1.2 \'hostname\'',
     )
+  })
+
+  it('compound commands run REMOTE: the whole string is one quoted argument', async () => {
+    const h = setup()
+    const cmd = 'mv a b && mv b c && echo done'
+    const { value } = await h.runSsh({ host: 'node-1', command: cmd })
+    // display: readable, quoted as a single remote argument
+    expect(value.command.endsWith('ops@10.0.0.11 \'mv a b && mv b c && echo done\'')).toBe(true)
+    // executable: the quoted remote argument survives credential substitution
+    const run = h.shellRequests[0].command
+    expect(run.endsWith('\'' + cmd + '\'')).toBe(true)
+    // no unquoted metacharacter after the host part — nothing for the local shell to split
+    expect(run.split('ops@10.0.0.11 ')[1]).toBe('\'' + cmd + '\'')
+  })
+
+  it('embedded single quotes escape POSIX-style and stay remote', async () => {
+    const h = setup()
+    const cmd = 'grep \'active\' /var/log/x'
+    const { value } = await h.runSsh({ host: 'node-1', command: cmd })
+    expect(value.command.endsWith(shellQuote(cmd))).toBe(true)
+    expect(h.shellRequests[0].command.endsWith(shellQuote(cmd))).toBe(true)
+  })
+
+  it('$() and redirects stay inside the quotes (expanded on the remote host)', async () => {
+    const h = setup()
+    const cmd = 'echo $(hostname) > /tmp/h'
+    const { value } = await h.runSsh({ host: 'node-1', command: cmd })
+    expect(value.command.endsWith('\'' + cmd + '\'')).toBe(true)
   })
 
   it('normalizes a null exitCode (signal death) to -1', async () => {

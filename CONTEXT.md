@@ -43,7 +43,7 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 
 ### ops-shell-tool
 
-**命令工具工厂**（`packages/ops-shell-tool`，纯库不是插件）。所有消费方共享的那套机器的唯一事实源：标准结果形状 `{ exitCode, stdout, stderr, command, error? }`、output schema、render、execute 模板（`ctx.get('opsAccess')` 现解析 → buildCommand 拼命令 → `ctx.shell` 执行，30s 超时，信号死亡 exitCode 归一为 -1 **并在 error 字段注明首因，永不裸 -1**（超时杀：含秒数、「操作可能已部分生效」警告、远端显式超时建议；调用方中止：aborted 文案；其他信号杀：透传信号名，SIGKILL 指向 OOM/策略/人为终止——裸 -1 曾让模型把挂死端点误诊为「管道不稳定」，2026-08-27 实战），错误原样透传）。消费方只剩身份四件：工具名、解析的 kind、档案名参数名、`buildCommand`，外加可选的 `stderrNoise`——已知噪音 stderr 行的正则表（如 ceph 容器内缺默认 keyring 的告警），工厂在凭证擦除之后按行过滤，只丢精确匹配的行，其余 stderr 原样保留。
+**命令工具工厂**（`packages/ops-shell-tool`，纯库不是插件）。所有消费方共享的那套机器的唯一事实源：标准结果形状 `{ exitCode, stdout, stderr, command, error? }`、output schema、render、execute 模板（`ctx.get('opsAccess')` 现解析 → buildCommand 拼命令 → `ctx.shell` 执行，30s 超时，信号死亡 exitCode 归一为 -1 **并在 error 字段注明首因，永不裸 -1**（超时杀：含秒数、「操作可能已部分生效」警告、远端显式超时建议；调用方中止：aborted 文案；其他信号杀：透传信号名，SIGKILL 指向 OOM/策略/人为终止——裸 -1 曾让模型把挂死端点误诊为「管道不稳定」，2026-08-27 实战），错误原样透传）。消费方只剩身份四件：工具名、解析的 kind、档案名参数名、`buildCommand`，外加可选的 `stderrNoise`——已知噪音 stderr 行的正则表（如 ceph 容器内缺默认 keyring 的告警），工厂在凭证擦除之后按行过滤，只丢精确匹配的行，其余 stderr 原样保留。`shellQuote` 是导出助手：**ssh 消费方把整条远端命令引成单一参数**（`&&`/`|`/`;`/`$()` 全在远端 shell 解释，本地零切割——2026-08-27 近失事件：未引用时 `&&` 后段会以 root 在本地执行，manifest 恢复链差点断在本地）；kubectl 维持原样拼接（本地管道过滤有用），描述里明示「一次调用 = 一条子命令，`;`/`&&`/`$()` 不继承前缀」。
 
 **凭证引用 token（credential reference）**是路径不出日志的统一机制，只在工厂实现一次：buildCommand 用 `ref('字段名')` 标记文件类字段，得到展示 token `<id@tier:field>`（如 `<pf-test-cluster@rw:kubeconfigPath>`）；工厂在执行前把 token 换成 shell 安全引用的真实路径，并把展示命令、stdout、stderr 里所有真实路径的出现一律擦回 token（CLI 报错也会回显 --kubeconfig 路径，只改命令字符串堵不住）。模型和事件日志只看到 token，永远看不到 `/root/.dsh-ops/credentials/...`。
 
