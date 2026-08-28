@@ -46,6 +46,9 @@ importers:
       '@deepseek-ai/dsh-ops-access':
         specifier: workspace:*
         version: link:../core
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
       typescript:
         specifier: ^5.4.0
         version: 5.9.3
@@ -151,6 +154,9 @@ importers:
       '@deepseek-ai/dsh-ops-access':
         specifier: workspace:*
         version: link:../core
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
       typescript:
         specifier: ^5.4.0
         version: 5.9.3
