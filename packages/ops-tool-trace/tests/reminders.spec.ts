@@ -79,6 +79,52 @@ describe('ReminderLatch', () => {
     expect(latch.shouldFire('a', 1)).toBe(true)
     expect(latch.shouldFire('b', 1)).toBe(true)
   })
+
+  it('accepts a gap function of the fire count and doubles the required gap', () => {
+    const latch = new ReminderLatch((fires) => 5 * 2 ** (fires - 1), 50)
+    expect(latch.shouldFire('s', 10)).toBe(true)
+    // after 1 fire: gap 5
+    expect(latch.shouldFire('s', 14)).toBe(false)
+    expect(latch.shouldFire('s', 15)).toBe(true)
+    // after 2 fires: gap 10
+    expect(latch.shouldFire('s', 24)).toBe(false)
+    expect(latch.shouldFire('s', 25)).toBe(true)
+    // after 3 fires: gap 20, then 40
+    expect(latch.shouldFire('s', 44)).toBe(false)
+    expect(latch.shouldFire('s', 45)).toBe(true)
+    expect(latch.shouldFire('s', 84)).toBe(false)
+    expect(latch.shouldFire('s', 85)).toBe(true)
+  })
+
+  it('still caps at maxFires with a gap function', () => {
+    const latch = new ReminderLatch((fires) => 5 * 2 ** (fires - 1), 3)
+    expect(latch.shouldFire('s', 0)).toBe(true)
+    expect(latch.shouldFire('s', 5)).toBe(true)
+    expect(latch.shouldFire('s', 15)).toBe(true)
+    expect(latch.shouldFire('s', 1000)).toBe(false)
+  })
+
+  it('supports a gap ceiling through the function form', () => {
+    const latch = new ReminderLatch((fires) => Math.min(5 * 2 ** (fires - 1), 40), 1000)
+    expect(latch.shouldFire('s', 10)).toBe(true)
+    expect(latch.shouldFire('s', 15)).toBe(true) // +5
+    expect(latch.shouldFire('s', 25)).toBe(true) // +10
+    expect(latch.shouldFire('s', 45)).toBe(true) // +20
+    expect(latch.shouldFire('s', 85)).toBe(true) // +40, not +80
+    expect(latch.shouldFire('s', 124)).toBe(false)
+    expect(latch.shouldFire('s', 125)).toBe(true) // +40 floor forever
+  })
+
+  it('forgets fire history on reset (firedAt / reset)', () => {
+    const latch = new ReminderLatch((fires) => 5 * 2 ** (fires - 1), 50)
+    expect(latch.shouldFire('s', 10)).toBe(true)
+    expect(latch.shouldFire('s', 15)).toBe(true)
+    expect(latch.firedAt('s')).toBe(15)
+    latch.reset('s')
+    expect(latch.firedAt('s')).toBeUndefined()
+    // fresh first fire: immediate, no gap owed
+    expect(latch.shouldFire('s', 16)).toBe(true)
+  })
 })
 
 // ── trace:idle rule ──────────────────────────────────────────────────────────
@@ -108,6 +154,52 @@ describe('idle rule', () => {
       results.push(r(ctxWith({ tree: flatTree(1), currentStep: s, lastTraceStep: 1 })))
     }
     expect(results.filter((x) => x !== null)).toHaveLength(5)
+  })
+})
+
+// Production wiring (index.ts): the gap doubles after each fire with a
+// 40-step ceiling, and the rule resets the backoff when the agent answers a
+// reminder — long investigations keep a low-frequency nudge forever.
+describe('idle rule with the production backoff latch', () => {
+  const backoffRule = () => createIdleRule(new ReminderLatch((fires) => Math.min(5 * 2 ** (fires - 1), 40), 1000))
+
+  it('fires at +5, +5, +10, +20, +40, +40 — early cadence unchanged, then a low-frequency floor', () => {
+    const r = backoffRule()
+    const fires = []
+    for (let s = 6; s <= 200; s++) {
+      if (r(ctxWith({ tree: flatTree(1), currentStep: s, lastTraceStep: 1 })) !== null) fires.push(s)
+    }
+    expect(fires).toEqual([6, 11, 21, 41, 81, 121, 161])
+  })
+
+  it('never goes permanently silent in a long session (the 2026-08-27 live-trial regression)', () => {
+    const r = backoffRule()
+    let fires = 0
+    for (let s = 6; s <= 20000; s++) {
+      if (r(ctxWith({ tree: flatTree(1), currentStep: s, lastTraceStep: 1 })) !== null) fires++
+    }
+    // the old fixed cap of 5 went silent for good; ceiling + high cap keeps a 40-step floor
+    expect(fires).toBeGreaterThan(50)
+  })
+
+  it('resets the backoff when the agent answers a reminder (trace update at/after the fire)', () => {
+    const r = backoffRule()
+    const tree = flatTree(1)
+    expect(r(ctxWith({ tree, currentStep: 6, lastTraceStep: 1 }))).toContain('REMINDER')
+    // answered within the firing step; the next quiet stretch starts over at +5
+    expect(r(ctxWith({ tree, currentStep: 8, lastTraceStep: 6 }))).toBeNull()
+    expect(r(ctxWith({ tree, currentStep: 11, lastTraceStep: 6 }))).toContain('REMINDER')
+    // answered again; still +5, not the grown gap
+    expect(r(ctxWith({ tree, currentStep: 16, lastTraceStep: 11 }))).toContain('REMINDER')
+  })
+
+  it('keeps the grown gap while reminders go unanswered', () => {
+    const r = backoffRule()
+    const tree = flatTree(1)
+    expect(r(ctxWith({ tree, currentStep: 6, lastTraceStep: 1 }))).toContain('REMINDER')
+    expect(r(ctxWith({ tree, currentStep: 11, lastTraceStep: 1 }))).toContain('REMINDER')
+    expect(r(ctxWith({ tree, currentStep: 16, lastTraceStep: 1 }))).toBeNull()
+    expect(r(ctxWith({ tree, currentStep: 21, lastTraceStep: 1 }))).toContain('REMINDER')
   })
 })
 

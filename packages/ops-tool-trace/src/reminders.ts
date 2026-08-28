@@ -76,22 +76,42 @@ export function buildReminderContext(agent: unknown, store: SessionForestStore):
 
 /**
  * One latch abstraction for all reminder rules: fire when `version` has
- * advanced at least `minGap` since the last fire, at most `maxFires` times
- * per session. Because the version is an input (computed from the context,
- * never reset by replaying history), re-evaluating the same state is always
- * idempotent.
+ * advanced at least the required gap since the last fire, at most
+ * `maxFires` times per session. Because the version is an input (computed
+ * from the context, never reset by replaying history), re-evaluating the
+ * same state is always idempotent.
+ *
+ * `minGap` may be a function of the number of previous fires, so a rule can
+ * back off instead of going permanently silent (the 2026-08-27 live trial: a
+ * fixed cap of 5 went quiet after step ~2070, then 36 trace-less steps
+ * without a nudge). The idle rule doubles its gap after each fire with a
+ * 40-step ceiling, and resets the backoff when the agent answers a reminder
+ * (see createIdleRule). Anti-spam is about frequency, not a total budget.
  */
 export class ReminderLatch {
   private readonly last = new Map<string, { version: number, fires: number }>()
 
   constructor(
-    private readonly minGap: number,
+    private readonly minGap: number | ((fires: number) => number),
     private readonly maxFires: number,
   ) {}
 
+  /** The version of one session's last fire, for compliance checks. */
+  firedAt(sessionId: string): number | undefined {
+    return this.last.get(sessionId)?.version
+  }
+
+  /** Forget one session's fire history. */
+  reset(sessionId: string): void {
+    this.last.delete(sessionId)
+  }
+
   shouldFire(sessionId: string, version: number): boolean {
     const prev = this.last.get(sessionId)
-    if (prev && (version - prev.version < this.minGap || prev.fires >= this.maxFires)) return false
+    if (prev) {
+      const gap = typeof this.minGap === 'function' ? this.minGap(prev.fires) : this.minGap
+      if (version - prev.version < gap || prev.fires >= this.maxFires) return false
+    }
     this.last.set(sessionId, { version, fires: (prev?.fires ?? 0) + 1 })
     return true
   }
@@ -106,6 +126,13 @@ export function createIdleRule(latch: ReminderLatch): (ctx: ReminderContext) => 
     const tree = ctx.tree
     if (!tree || tree.resolved) return null
     if (ctx.lastTraceStep === 0) return null
+    // Compliance reset: a trace update at/after the last fire means the agent
+    // answered the reminder — the next quiet stretch starts over at the
+    // shortest gap instead of inheriting the grown one. Good behavior must
+    // not be punished with longer gaps. Pure in ctx: replaying the same
+    // state re-derives the same reset decision.
+    const firedAt = latch.firedAt(ctx.sessionId)
+    if (firedAt !== undefined && ctx.lastTraceStep >= firedAt) latch.reset(ctx.sessionId)
     const gap = ctx.currentStep - ctx.lastTraceStep
     if (gap < 5) return null
     if (!latch.shouldFire(ctx.sessionId, ctx.currentStep)) return null

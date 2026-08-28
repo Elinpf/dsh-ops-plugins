@@ -990,7 +990,14 @@ function apply(ctx: Context, _config: Record<string, never>): void {
   //
   // Reminder rules are pure functions of a derived ReminderContext; the latches
   // live here because they belong to the registration, not the rule.
-  const idleRule = createIdleRule(new ReminderLatch(5, 5))
+  // Idle backoff: the refire gap doubles after each fire with a 40-step
+  // ceiling (5, 10, 20, 40, 40, ...) — short sessions behave exactly as
+  // before (first two fires unchanged), long investigations keep a
+  // low-frequency nudge forever. createIdleRule resets the backoff when the
+  // agent answers a reminder, so each quiet stretch starts over at 5. The
+  // fire cap is a formality against runaway state, not the anti-spam
+  // mechanism — the ceiling is.
+  const idleRule = createIdleRule(new ReminderLatch((fires) => Math.min(5 * 2 ** (fires - 1), 40), 1000))
   const nestingRule = createNestingRule(new ReminderLatch(1, 5))
   const runRule = (rule: (ctx: ReminderContext) => string | null) => (agent: unknown): string | null => {
     const ctx = buildReminderContext(agent, store)
