@@ -549,6 +549,54 @@ describe('panel routes', () => {
     expect(res.status).toBe(400)
   })
 
+  it('POST /ops-access/grants/extend renews an active grant from now, audits grant-extend, notifies', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    h.gate.authorize(futureGrant('sess-a', 'test', 'prod')) // expires in 30 min
+    const before = Date.now()
+    const res = await h.callRoute('/ops-access/grants/extend', {
+      method: 'POST',
+      body: { session: 'sess-a', kind: 'test', name: 'prod', ttlMinutes: 30 },
+    })
+    expect(res.status).toBe(200)
+    // renewed from NOW + 30min — never accumulated on top of the old expiry
+    expect(res.json.expiresAt).toBeGreaterThanOrEqual(before + 30 * 60000)
+    expect(res.json.expiresAt).toBeLessThan(Date.now() + 31 * 60000)
+    expect(h.gate.list('sess-a')[0].expiresAt).toBe(res.json.expiresAt)
+    // original reason/approvedBy are preserved
+    expect(h.gate.list('sess-a')[0]).toMatchObject({ reason: 'test reason', approvedBy: 'user' })
+    const extends_ = h.readAudit().filter((l) => l.event === 'grant-extend')
+    expect(extends_).toHaveLength(1)
+    expect(extends_[0]).toMatchObject({ kind: 'test', name: 'prod', ttlMinutes: 30 })
+    expect(typeof extends_[0].previousExpiresAt).toBe('number')
+    const injected = await drainNotices(h, 'sess-a')
+    expect(injected.join(' ')).toContain('<access-grant>')
+    expect(injected.join(' ')).toContain('延长')
+  })
+
+  it('POST /ops-access/grants/extend rejects a nonexistent grant (expired grants are filtered from list, same path)', async () => {
+    const h = setup()
+    const res = await h.callRoute('/ops-access/grants/extend', {
+      method: 'POST',
+      body: { session: 'sess-a', kind: 'test', name: 'prod', ttlMinutes: 30 },
+    })
+    expect(res.status).toBe(400)
+    expect(res.json.error).toContain('no active grant')
+    expect(h.readAudit().filter((l) => l.event === 'grant-extend')).toHaveLength(0)
+  })
+
+  it('POST /ops-access/grants/extend rejects a TTL outside the configured options', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    h.gate.authorize(futureGrant('sess-a', 'test', 'prod'))
+    const res = await h.callRoute('/ops-access/grants/extend', {
+      method: 'POST',
+      body: { session: 'sess-a', kind: 'test', name: 'prod', ttlMinutes: 45 },
+    })
+    expect(res.status).toBe(400)
+    expect(res.json.error).toContain('5, 10, 30')
+  })
+
   it('POST /ops-access/grants/revoke-all clears the session and audits each revoke', async () => {
     const h = setup()
     h.writeRegistry(REGISTRY + SSH_REGISTRY)

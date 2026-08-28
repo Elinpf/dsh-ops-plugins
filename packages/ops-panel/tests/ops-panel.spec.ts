@@ -6,8 +6,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { registerPanelCommand } from '../src/index.ts'
-import { createPanelCore } from '../src/client.ts'
-import type { PanelDefinition } from '../src/types.ts'
+import { createPanelCore, apply as applyClient } from '../src/client.ts'
+import type { OpsPanels, PanelDefinition } from '../src/types.ts'
 
 // ── registerPanelCommand ─────────────────────────────────────────────────────
 
@@ -140,5 +140,38 @@ describe('PanelCore', () => {
     expect(core.getSnapshot().size).toBe(0)
     core.handleCommandExecuted('s1', 'access')
     expect(core.getSnapshot().get('s1')).toBe('access')
+  })
+})
+
+// ── OpsPanels service face (apply wiring) ───────────────────────────────────
+
+describe('opsPanels service face', () => {
+  /** Boot client apply with the minimum fake ctx; capture the provided service. */
+  function bootClient(): OpsPanels {
+    let provided: OpsPanels | undefined
+    const ctx = {
+      provide: (key: string, value: unknown) => { if (key === 'opsPanels') provided = value as OpsPanels },
+      on: () => {},
+      get: () => undefined,
+      effect: (fn: () => () => void) => fn(),
+    } as unknown as Context
+    applyClient(ctx)
+    if (provided === undefined) throw new Error('opsPanels was not provided')
+    return provided
+  }
+
+  it('exposes imperative open/close beside registerPanel', () => {
+    const svc = bootClient()
+    svc.registerPanel({ command: 'access', title: 't', component: () => null })
+    expect(svc.open('s1', 'access')).toBe(true)
+    expect(svc.open('s1', 'unregistered')).toBe(false)
+    svc.close('s1') // no throw with no panel open
+  })
+
+  it('open honours the availability filter', () => {
+    const svc = bootClient()
+    svc.registerPanel({ command: 'access', title: 't', component: () => null, available: (sid) => sid === 'ops' })
+    expect(svc.open('other', 'access')).toBe(false)
+    expect(svc.open('ops', 'access')).toBe(true)
   })
 })

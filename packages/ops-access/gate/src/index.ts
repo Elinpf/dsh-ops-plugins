@@ -212,7 +212,7 @@ type PendingQueue = ReturnType<typeof makePendingQueue>
 // ── Audit log ────────────────────────────────────────────────────────────────
 
 interface AuditEvent {
-  event: 'grant' | 'expire' | 'revoke' | 'rw-issue' | 'gated-issue' | 'ledger-reset' | 'grant-request' | 'request-decide'
+  event: 'grant' | 'grant-extend' | 'expire' | 'revoke' | 'rw-issue' | 'gated-issue' | 'ledger-reset' | 'grant-request' | 'request-decide'
   /** Absent on ledger-reset, which is process-scoped, not session-scoped. */
   session?: string
   kind?: string
@@ -224,6 +224,8 @@ interface AuditEvent {
   requestedTtlMinutes?: number
   /** grant / request-decide: the TTL actually granted. */
   ttlMinutes?: number
+  /** grant-extend: the expiry before renewal (the new one is expiresAt). */
+  previousExpiresAt?: number
   /** request-decide: approved, or the rejection outcome. */
   outcome?: string
   /** revoke: 'panel' (human via access panel) or 'agent' (request_access). */
@@ -518,6 +520,40 @@ export function apply(ctx: Context, config: Config): void {
           audit({ event: 'revoke', session, kind, name, source: 'panel' })
           queueNotice(session, '<access-revoked>运维收回了本会话 ' + kind + '/' + name + ' 的提权权限，已回落只读</access-revoked>')
           sendJson(res, 200, { ok: true })
+        } catch (err) {
+          sendJsonError(res, 500, err)
+        }
+      },
+    }))
+
+    // POST /ops-access/grants/extend — renew one active grant {session, kind, name, ttlMinutes}.
+    wctx.effect(() => ws.webServer.register({
+      kind: 'exact',
+      path: '/ops-access/grants/extend',
+      handler: async (req: { method: string, on: unknown }, res: Parameters<typeof sendJson>[0]) => {
+        try {
+          if (req.method !== 'POST') { sendJsonError(res, 405, new Error('method not allowed')); return }
+          const body = JSON.parse(await readRequestBody(req as never)) as Record<string, unknown>
+          const { session, kind, name } = body
+          if (typeof session !== 'string' || session === '' || typeof kind !== 'string' || kind === '' || typeof name !== 'string' || name === '') {
+            sendJsonError(res, 400, new Error('session, kind, and name (non-empty strings) are required'))
+            return
+          }
+          const ttl = ttlOptionError(body.ttlMinutes)
+          if (ttl === null) { sendJsonError(res, 400, new Error(ttlOptionsMessage)); return }
+          // gate.list filters expired grants — an expired grant cannot be
+          // extended; grant it anew instead.
+          const active = gate.list(session).find((g) => g.kind === kind && g.name === name)
+          if (!active) { sendJsonError(res, 400, new Error('no active grant for ' + kind + '/' + name + ' in this session — expired grants cannot be extended')); return }
+          // Renew from NOW, not from the old expiry: repeated extends must
+          // never accumulate past one TTL tier — the ceiling discipline holds.
+          const expiresAt = Date.now() + ttl * 60000
+          gate.authorize({ session, kind, name, expiresAt, reason: active.reason, approvedBy: active.approvedBy })
+          audit({ event: 'grant-extend', session, kind, name, expiresAt, ttlMinutes: ttl, previousExpiresAt: active.expiresAt })
+          queueNotice(session,
+            '<access-grant>运维延长了本会话 ' + kind + '/' + name + ' 的授权，新到期时间 '
+            + new Date(expiresAt).toISOString() + '（' + ttl + ' 分钟）</access-grant>')
+          sendJson(res, 200, { ok: true, expiresAt })
         } catch (err) {
           sendJsonError(res, 500, err)
         }

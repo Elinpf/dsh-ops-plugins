@@ -258,6 +258,15 @@ function postPanelRevokeAll(sessionId: string): Promise<ApiResult> {
   }, 'postPanelRevokeAll')
 }
 
+/** Extend one active grant by a TTL tier (renewed from now). Never throws. */
+function postPanelExtend(sessionId: string, kind: string, name: string, ttlMinutes: number): Promise<ApiResult> {
+  return apiFetchResult('/ops-access/grants/extend', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ session: sessionId, kind, name, ttlMinutes }),
+  }, 'postPanelExtend')
+}
+
 /** Decide a pending request (approve with a TTL option, or reject). Never throws. */
 function postPanelDecide(id: string, approved: boolean, ttlMinutes?: number): Promise<ApiResult> {
   return apiFetchResult('/ops-access/access-requests/decide', {
@@ -265,6 +274,51 @@ function postPanelDecide(id: string, approved: boolean, ttlMinutes?: number): Pr
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(approved ? { id, approved, ttlMinutes } : { id, approved }),
   }, 'postPanelDecide')
+}
+
+// ── Pending-request badge (input dock) ─────────────────────────────────────
+
+/** Structural slice of the runtime conversation snapshot the badge reads. */
+interface SnapshotRunningCall { name: string }
+
+/**
+ * Count this session's in-flight request_access calls: each parked call is
+ * one pending human decision. The runtime pairs tool/call with tool/result
+ * into runningCalls, so a decided or timed-out request drops out on its
+ * own — zero polling, straight off the session snapshot the dock owner
+ * already passes.
+ */
+function pendingAccessCount(session: { runningCalls?: readonly SnapshotRunningCall[] } | null | undefined): number {
+  if (session === null || session === undefined || !Array.isArray(session.runningCalls)) return 0
+  return session.runningCalls.filter((c) => c.name === 'request_access').length
+}
+
+/** Dock badge props: the InputZone owner share plus the framework sessionId. */
+interface AccessBadgeProps {
+  sessionId?: string
+  session?: { runningCalls?: readonly SnapshotRunningCall[] }
+  /** Open the access panel imperatively (ops-panel seam, ADR-0004 §9). */
+  openPanel: (sessionId: string) => boolean
+}
+
+/**
+ * Red-dot alert in the input dock while request_access calls await a human
+ * decision: renders nothing on an empty pending set (decided/timed-out
+ * requests leave runningCalls, extinguishing the badge on their own);
+ * clicking opens the access panel's approval deck.
+ */
+function AccessBadge(props: AccessBadgeProps): unknown {
+  const count = pendingAccessCount(props.session)
+  if (count === 0 || props.sessionId === undefined) return null
+  const sid = props.sessionId
+  return h('button', {
+    className: 'ops-access-badge',
+    title: '有待审批的提权申请 — 点击打开授权面板',
+    onClick: () => props.openPanel(sid),
+  },
+    h('span', { className: 'ops-access-badge-dot' }),
+    String(count) + ' 个提权申请待审批',
+  )
 }
 
 // ── CSS (theme variables, same discipline as trace dock) ────────────────────
@@ -603,6 +657,19 @@ const CSS = `
 .ops-access-panel-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; margin-right: 6px; vertical-align: 1px; }
 .ops-access-panel-dot.rw { background: var(--dsw-alias-success, #1a7f37); box-shadow: 0 0 4px var(--dsw-alias-success, #1a7f37); }
 .ops-access-panel-dot.deny { background: var(--dsw-alias-danger, #cf222e); }
+.ops-access-badge {
+  display: inline-flex; align-items: center; gap: 6px; width: fit-content;
+  padding: 3px 10px; border-radius: 999px; font-size: 12px; cursor: pointer;
+  border: 1px solid var(--dsw-alias-border-l1, #e5e7eb);
+  background: var(--dsw-alias-bg-primary, #ffffff);
+  color: var(--dsw-alias-text-primary, #1f2328);
+}
+.ops-access-badge:hover { background: var(--dsw-alias-bg-secondary, #f6f8fa); }
+.ops-access-badge-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: var(--dsw-alias-danger, #cf222e);
+  box-shadow: 0 0 0 3px rgba(207, 34, 46, 0.18);
+}
 `.trim()
 
 let cssInjected = false
@@ -1320,11 +1387,24 @@ function AccessPanel({ sessionId }: AccessPanelProps): any {
         return h('div', { key, className: 'ops-access-panel-grant' },
           h('div', {
             className: 'ops-access-panel-row clickable',
-            onClick: () => setConfirmKey(confirmKey === 'revoke:' + key ? null : 'revoke:' + key),
+            onClick: () => setConfirmKey(confirmKey === 'row:' + key ? null : 'row:' + key),
           },
             h('span', { className: 'ops-access-panel-row-title' }, key),
             h('span', { className: 'ops-access-panel-row-detail' }, '剩 ' + g.remainingMinutes + ' 分钟 · ' + g.approvedBy),
           ),
+          // The row expands into extend (per-TTL confirm, same two-click
+          // discipline as the grant flow) and revoke. Renewal is from NOW —
+          // repeated extends never accumulate past one TTL tier.
+          confirmKey === 'row:' + key && h('div', { className: 'ops-access-panel-actions' },
+            ttlRow(0, (ttl) => setConfirmKey('extend:' + key + ':' + ttl)),
+            h('button', {
+              className: 'ops-access-panel-btn',
+              onClick: () => setConfirmKey('revoke:' + key),
+            }, '收回…'),
+          ),
+          ttlOptions.map((ttl) =>
+            confirmStrip('extend:' + key + ':' + ttl, '延长 ' + key + ' · 从现在起 ' + ttl + ' 分钟？', () =>
+              void run(() => postPanelExtend(sessionId, g.kind, g.name, ttl), '已延长 ' + key + '（' + ttl + ' 分钟）'))),
           confirmStrip('revoke:' + key, '收回 ' + key + ' 的提权权限？', () =>
             void run(() => postPanelRevoke(sessionId, g.kind, g.name), '已收回 ' + key)),
         )
@@ -1449,15 +1529,38 @@ function apply(ctx: Context): void {
   // itself is registered preset-plane by the gate — the panel opens only in
   // sessions whose preset mounts the gate.
   ;(ctx as unknown as { inject(deps: string[], cb: (c: unknown) => void): void }).inject(['opsPanels'], (pctx) => {
-    const opsPanels = (pctx as { opsPanels?: { registerPanel(def: Record<string, unknown>): () => void } }).opsPanels
+    const opsPanels = (pctx as { opsPanels?: {
+      registerPanel(def: Record<string, unknown>): () => void
+      open(sessionId: string, command: string): boolean
+      close(sessionId: string): void
+    } }).opsPanels
     if (opsPanels === undefined) return
-    ;(pctx as { effect(fn: () => () => void): void }).effect(() =>
+    const effect = (pctx as { effect(fn: () => () => void): void }).effect.bind(pctx)
+    effect(() =>
       opsPanels.registerPanel({
         command: 'access',
         title: '访问授权',
         component: AccessPanel,
       }),
     )
+    // Pending-request badge in the input dock (ticket 03): lit while a
+    // request_access call parks — derived from the session snapshot, zero
+    // polling — click opens the approval deck through the seam's open().
+    if (slots !== undefined) {
+      effect(() =>
+        slots.inject('conversation.input.dock', () =>
+          slots.register(
+            { name: 'conversation.input.dock', id: 'ops-access-badge', order: 30 },
+            (props: { sessionId?: string, session?: { runningCalls?: readonly SnapshotRunningCall[] } }) =>
+              AccessBadge({
+                sessionId: props.sessionId,
+                session: props.session,
+                openPanel: (sid) => opsPanels.open(sid, 'access'),
+              }),
+          ),
+        ),
+      )
+    }
   })
 }
 
@@ -1472,8 +1575,8 @@ export { apply, inject, name }
 /** @internal */
 export {
   apiFetchList, apiFetchResult, fetchAdminList, fetchKinds, submitEntry, deleteEntry, AdminSection,
-  fetchPanelGrants, fetchPanelRequests, postPanelGrant, postPanelRevoke, postPanelRevokeAll, postPanelDecide,
-  AccessPanel, defaultTtlChoice, liveGrantFor,
+  fetchPanelGrants, fetchPanelRequests, postPanelGrant, postPanelExtend, postPanelRevoke, postPanelRevokeAll, postPanelDecide,
+  AccessPanel, AccessBadge, pendingAccessCount, defaultTtlChoice, liveGrantFor,
 }
 /** @internal */
 export type { AdminEntry, AdminTierStatus, KindDescriptor, SubmitEntryBody, ApiResult, PanelGrant, PanelPendingRequest }

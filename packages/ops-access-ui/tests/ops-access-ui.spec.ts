@@ -421,6 +421,17 @@ describe('access panel', () => {
     }))
   })
 
+  it('postPanelExtend posts session/kind/name/ttlMinutes to the extend route', async () => {
+    const spy = vi.fn(async () => ({ ok: true, json: async () => ({ ok: true }) }))
+    vi.stubGlobal('fetch', spy)
+    const res = await client.postPanelExtend('sess-1', 'k8s', 'prod', 30)
+    expect(res.ok).toBe(true)
+    expect(spy).toHaveBeenCalledWith('/ops-access/grants/extend', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ session: 'sess-1', kind: 'k8s', name: 'prod', ttlMinutes: 30 }),
+    }))
+  })
+
   it('postPanelRevoke and postPanelRevokeAll post to their routes', async () => {
     const spy = vi.fn(async () => ({ ok: true, json: async () => ({ ok: true }) }))
     vi.stubGlobal('fetch', spy)
@@ -496,5 +507,19 @@ describe('degradation: 404 and network failure never throw', () => {
     expect((await client.postPanelRevoke('s', 'k', 'n')).ok).toBe(false)
     expect((await client.postPanelRevokeAll('s')).ok).toBe(false)
     expect((await client.postPanelDecide('x', true, 10)).ok).toBe(false)
+  })
+})
+
+// ── Pending-request badge derivation ────────────────────────────────────────
+
+describe('pendingAccessCount', () => {
+  it('counts in-flight request_access calls only — a settled call has left runningCalls', () => {
+    expect(client.pendingAccessCount(undefined)).toBe(0)
+    expect(client.pendingAccessCount(null)).toBe(0)
+    expect(client.pendingAccessCount({})).toBe(0)
+    expect(client.pendingAccessCount({ runningCalls: [] })).toBe(0)
+    expect(client.pendingAccessCount({ runningCalls: [{ name: 'bash' }] })).toBe(0)
+    expect(client.pendingAccessCount({ runningCalls: [{ name: 'bash' }, { name: 'request_access' }] })).toBe(1)
+    expect(client.pendingAccessCount({ runningCalls: [{ name: 'request_access' }, { name: 'request_access' }] })).toBe(2)
   })
 })

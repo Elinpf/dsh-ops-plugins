@@ -19,7 +19,7 @@
 
 ### ops-panel
 
-**面板缝**（ADR-0004 / spec 0003，已落地：packages/ops-panel）。会话作用域对话框的公共机制，独立插件包、以 cordis 服务形态提供（client 半 `ctx.opsPanels`，key 复数 = registry）：`registerPanel({ command, title, available?, component })` 注册一个面板，框架持有单一 `command/executed` 监听按命令名分发 + overlay 外壳（标题栏/Escape/背景关闭/每会话开关状态）。node 半只有无状态 helper `registerPanelCommand`（注册空 handler 的 host 命令，让 `/名字` 进斜杠菜单）。**服务而非纯库**——纯库会被各消费方 bundle 各打包一份，注册表/监听/外壳互撞（双模块实例教训）。先例是 dsh 的 ui-commands（`ctx.commandUi`），本缝是它的"完整对话框"档。消费方只剩四件身份：命令名、面板标题、内容组件、可用性过滤器。第一个消费方是授权面板。
+**面板缝**（ADR-0004 / spec 0003，已落地：packages/ops-panel）。会话作用域对话框的公共机制，独立插件包、以 cordis 服务形态提供（client 半 `ctx.opsPanels`，key 复数 = registry）：`registerPanel({ command, title, available?, component })` 注册一个面板，框架持有单一 `command/executed` 监听按命令名分发 + overlay 外壳（标题栏/Escape/背景关闭/每会话开关状态）。node 半只有无状态 helper `registerPanelCommand`（注册空 handler 的 host 命令，让 `/名字` 进斜杠菜单）。**服务而非纯库**——纯库会被各消费方 bundle 各打包一份，注册表/监听/外壳互撞（双模块实例教训）。先例是 dsh 的 ui-commands（`ctx.commandUi`），本缝是它的"完整对话框"档。消费方只剩四件身份：命令名、面板标题、内容组件、可用性过滤器。命令触发之外另有命令式 `open(sessionId, command)`/`close(sessionId)`（ADR-0004 §9），供待办信号拉起面板——第一个消费方是授权面板的待决申请角标（输入区 dock 红点计数，从会话快照 runningCalls 派生在飞的 request_access 数，零轮询；点击开审批台）。
 
 ### ops-prompts
 
@@ -82,7 +82,7 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 - **凭证代发 (credential brokering)** — 门不改基础设施权限，只决定某 session 的工具调用拿到 ro 还是 rw 凭证
 - **两档账号 (ro/rw)** — 每环境静态预置只读/可写两套账号；ro/rw 是注册表条目内的 tier 子字段（单一注册表文件，默认 `~/.dsh-ops/access.yaml`，同现读现校验纪律；ADR-0003 由双文件合并而来），ro 档默认可用、rw 档需授权。门注册的 broker 是**纯决策函数**（`(kind, name, agent) => 'ro' | 'rw' | 拒绝`），不碰凭证内容。ssh 不分档，每次使用需授权
 - **授权 (grant)** — `{ session, profile, tier, 到期时间, 批准人, 理由 }`。agent 调 `request_access` 显式申请，人一次性批准；TTL 到期自动回落，可手动撤销，重启即清空。审批通道由 ADR-0004 从 dsh 原生 approval 换成自建待决请求通道（原生四态结果不能携带人修改后的 TTL）
-- **授权面板 (access panel)**（ADR-0004 / spec 0003，已落地：gate 提供路由与 /access 命令，ops-access-ui 渲染内容，ops-panel 提供外壳）— 人的授权操作唯一入口：会话作用域的自建对话框，敲 `/access`（host 命令）触发，client 半经 `command/executed` 本地事件打开。两个模式：空闲时是主动授权（选档案 → 选 TTL 档位 → 确认）/撤销面板；有待决请求时是审批台（可调档位后批准/拒绝）。不做固定设置页——固定页要先选目标会话，与 session 分键模型心智错位
+- **授权面板 (access panel)**（ADR-0004 / spec 0003，已落地：gate 提供路由与 /access 命令，ops-access-ui 渲染内容，ops-panel 提供外壳）— 人的授权操作唯一入口：会话作用域的自建对话框，敲 `/access`（host 命令）触发，client 半经 `command/executed` 本地事件打开。两个模式：空闲时是主动授权（选档案 → 选 TTL 档位 → 确认）/活跃授权管理面板（**延长**：按档位从现在起续期——不从旧到期点累加，反复续期也不会突破单档上限；过期 grant 不可续、只能重授，审计落 `grant-extend` 并带原到期点；收回单项/全部）；有待决请求时是审批台（可调档位后批准/拒绝）。不做固定设置页——固定页要先选目标会话，与 session 分键模型心智错位。注意路由是 preset-plane：**无活跃会话时 /ops-access/* 不存在**（请求落在 SPA fallback），现场验证路由必须先有一个跑着的会话
 - **待决请求 (pending request)**（同上）— agent 提权申请在 gate 进程内的驻留形态：入队后工具 Promise 挂起，人经面板 HTTP 路由裁决（批准可拨 TTL 档位）解出；默认 5 分钟无人裁决自动拒，exec.signal 中止按 cancelled 解出。headless（无 webServer）不入队、立即报错给带外指引
 - **面板授权 (panel grant)**（同上）— 人主动发起的授权，与申请批准的 grant **同构同寿命**（session 分键、TTL 有界、重启清空），只是跳过"agent 开口"。TTL 只能选档位（默认 5/10/30 分钟，Config 可配），主动授权与审批共用同一份档位
 - **对称通知**（同上）— 命令面不进模型历史，面板的授权/撤销动作由路由往目标 session 追加 model-visible 消息（`<access-grant>`/`<access-revoked>`），agent 立刻感知权限变化。撤销语义：**下一次解析生效，不掐断进行中命令**；面板可一键收回本会话全部授权
