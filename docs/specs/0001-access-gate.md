@@ -95,6 +95,6 @@ ops 模式下，agent 默认拿着 `access.yaml` 里登记的全部凭证的全�
 
 ## 基础设施侧待办（2026-08-27 实战排查暴露；2026-08-28 已补齐，票 14）
 
-- ✅ **k8s ro 档补 `pods/portforward` create**——新建补充 ClusterRole/Binding `pf-test-cluster-ro-extra`（内置 view 不动）；删绑定实测 forbidden、恢复后 port-forward 读 Prometheus `/api/v1/targets` 200，因果闭环。注：`kubectl auth can-i create pods/portforward` 对该子资源误报 no（SSRR --list 显示正确），以功能实测为准。
+- ✅ **k8s ro 档补 `pods/portforward` create**——新建补充 ClusterRole/Binding `pf-test-cluster-ro-extra`（内置 view 不动）；删绑定实测 forbidden、恢复后 port-forward 读 Prometheus `/api/v1/targets` 200，因果闭环。注：`kubectl auth can-i create pods/portforward` 对该子资源误报 no（SSRR --list 显示正确），以功能实测为准。该补充角色 2026-08-28 又随票 15 增补 `ceph.rook.io` 的 cephclusters/cephblockpools 读取（ro 实测通过）。
 - ✅ **k8s ro 档补 PV(persistentvolumes）读取**——同一补充 ClusterRole（get/list/watch），ro 实测 `kubectl get pv` 正常列出。
 - ✅ **ceph ro 档补 `class-read`**——`auth caps client.pf-test-cluster-ro mon 'allow r' osd 'allow r class-read' mds 'allow r' mgr 'allow r'`；ro 实测 `rbd ls -p rbd-pool` 正常列出卷（原 Operation not permitted），`ceph df` 不受影响。

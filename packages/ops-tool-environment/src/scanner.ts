@@ -23,6 +23,7 @@ import { spawn } from 'node:child_process'
 import { scrapePrometheusTargets } from './prometheus.js'
 import type { SpawnFn } from './prometheus.js'
 import type {
+  CephHints,
   ClusterScan,
   ScannedConfigMap,
   ScannedEndpoints,
@@ -281,6 +282,14 @@ export async function scanCluster(input: ScanClusterInput): Promise<ClusterScan>
   // never a guess, never a scan failure.
   const endpointsRaw = await run(['get', 'endpoints', '--all-namespaces', '-o', 'json'])
     .catch(() => undefined)
+  // rook-ceph footprint (ticket 15): CephBlockPool/CephCluster CRs and the
+  // rook-ceph-tools pod location. Same degraded discipline as endpoints —
+  // CRDs absent or the ro account unable to list them (built-in `view`
+  // covers no ceph.rook.io resources) yields no hints, never a scan failure.
+  const cephCrsRaw = await run(['get', 'cephclusters.ceph.rook.io,cephblockpools.ceph.rook.io', '--all-namespaces', '-o', 'json'])
+    .catch(() => undefined)
+  const cephToolsRaw = await run(['get', 'pods', '--all-namespaces', '-l', 'app=rook-ceph-tools', '-o', `jsonpath=${SECRETS_JSONPATH}`])
+    .catch(() => undefined)
 
   const workloadItems: ScannedWorkload[] = []
   // A combined `get a,b,c -o json` returns a single List whose items mix kinds.
@@ -321,6 +330,28 @@ export async function scanCluster(input: ScanClusterInput): Promise<ClusterScan>
   if (endpointsRaw !== undefined) {
     scan.endpoints = (parseOrThrow(endpointsRaw.stdout, 'endpoints').items ?? []).map(reduceEndpoints)
   }
+
+  // Fold the ceph hints: emit only when something was actually found.
+  let ceph: CephHints | undefined
+  if (cephCrsRaw !== undefined) {
+    const pools: CephHints['pools'] = []
+    const clusters: CephHints['clusters'] = []
+    for (const item of parseOrThrow(cephCrsRaw.stdout, 'ceph CRs').items ?? []) {
+      const ns = item?.metadata?.namespace
+      const nm = item?.metadata?.name
+      if (typeof ns !== 'string' || typeof nm !== 'string') continue
+      if (item.kind === 'CephBlockPool') pools.push({ namespace: ns, name: nm })
+      else if (item.kind === 'CephCluster') clusters.push({ namespace: ns, name: nm })
+    }
+    if (pools.length + clusters.length > 0) ceph = { pools, clusters }
+  }
+  // The tools-pod read reuses the namespace<TAB>name reduction (metadata only).
+  const toolsPods = cephToolsRaw !== undefined ? parseSecretNames(cephToolsRaw.stdout) : []
+  if (toolsPods.length > 0) {
+    ceph = ceph ?? { pools: [], clusters: [] }
+    ceph.toolsPod = toolsPods[0]
+  }
+  if (ceph !== undefined) scan.ceph = ceph
   if (prometheus !== undefined) scan.prometheus = prometheus
   return scan
 }

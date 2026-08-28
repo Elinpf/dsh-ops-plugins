@@ -105,7 +105,7 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 
 ### 环境清单 (environment inventory)
 
-只读的环境地图，构建内容见 `docs/specs/0004-environment-inventory.md`。遍历 ops-access 注册的 k8s 集群，从 k8s API 盘出「集群 → 命名空间 → 中间件实例/应用 → 尽力而为的关联边 + Prometheus 监控状态」，落盘为 `~/.dsh-ops/environment.yaml`（自动生成、勿手改）。agent 通过 preset 平面的 `environment` 工具消费（overview / show / refresh），系统提示词只放一句引导。
+只读的环境地图，构建内容见 `docs/specs/0004-environment-inventory.md`。遍历 ops-access 注册的 k8s 集群，从 k8s API 盘出「集群 → 命名空间 → 中间件实例/应用 → 尽力而为的关联边 + Prometheus 监控状态」，落盘为 `~/.dsh-ops/environment.yaml`（自动生成、勿手改）。有 rook-ceph 足迹的集群额外带 **ceph 提示**（CephBlockPool 池名——即 ceph 工具的 `-p` 参数、CephCluster、rook-ceph-tools pod 位置；无 tools pod 会明写，缺席本身是有用信息），降级纪律与 endpoints 一致：CRD 不存在或 ro 档无权 list 就不带该段，扫描不受影响。agent 通过 preset 平面的 `environment` 工具消费（overview / show / refresh），系统提示词只放一句引导。
 
 ### 盘点 (scan)
 

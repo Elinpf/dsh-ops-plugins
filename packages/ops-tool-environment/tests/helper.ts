@@ -35,7 +35,10 @@ export function fakeExec(opts: { failFor?: string[], fixtureDir?: string } = {})
   const calls: FakeExecCall[] = []
   const exec: ExecFn = async (args, { timeoutMs }) => {
     calls.push({ args, timeoutMs })
-    const resource = args[args.indexOf('get') + 1]
+    let resource = args[args.indexOf('get') + 1]
+    // Normalized keys for the ticket-15 rook-ceph reads.
+    if (resource === 'cephclusters.ceph.rook.io,cephblockpools.ceph.rook.io') resource = 'ceph-crs'
+    else if (resource === 'pods') resource = 'pods-ceph-tools'
     if (opts.failFor?.includes(resource) || opts.failFor?.includes('*')) {
       // kubectl echoes the kubeconfig path in its errors — as the real CLI does.
       throw new Error(`kubectl exited with code 1: error loading config file "${FAKE_KUBECONFIG}": connection refused`)
@@ -46,6 +49,8 @@ export function fakeExec(opts: { failFor?: string[], fixtureDir?: string } = {})
     if (resource === 'configmaps') return { stdout: fixtureText('configmaps.json', dir) }
     if (resource === 'endpoints') return { stdout: fixtureText('endpoints.json', dir) }
     if (resource === 'secrets') return { stdout: fixtureText('secrets.jsonpath', dir) }
+    if (resource === 'ceph-crs') return { stdout: fixtureText('ceph-crs.json', dir) }
+    if (resource === 'pods-ceph-tools') return { stdout: fixtureText('pods-ceph-tools.jsonpath', dir) }
     throw new Error(`unexpected resource: ${resource}`)
   }
   return { exec, calls }

@@ -29,7 +29,7 @@ import type { OpsAccess } from '@deepseek-ai/dsh-ops-access'
 import { readInventory, refreshInventory } from './inventory.js'
 import { HELP_TEXT, TOOL_DESCRIPTION } from './doctrine.js'
 import type { EnvironmentInventory, InventorySection, RefreshTarget } from './inventory.js'
-import type { Anomaly, MonitoringStatus, RelationEdge, ResourceRef } from './types.js'
+import type { Anomaly, CephHints, MonitoringStatus, RelationEdge, ResourceRef } from './types.js'
 
 const MONITORING_SCHEMA = {
   type: 'object',
@@ -37,6 +37,19 @@ const MONITORING_SCHEMA = {
   properties: {
     up: { type: 'integer', required: true },
     down: { type: 'integer', required: true },
+  },
+} as const
+
+const CEPH_NS_NAME_SCHEMA = { type: 'object', additionalProperties: false, properties: { namespace: { type: 'string', required: true }, name: { type: 'string', required: true } } } as const
+
+/** rook-ceph footprint hints in show output (ticket 15). */
+const CEPH_HINTS_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    pools: { type: 'array', required: true, items: CEPH_NS_NAME_SCHEMA },
+    clusters: { type: 'array', required: true, items: CEPH_NS_NAME_SCHEMA },
+    toolsPod: CEPH_NS_NAME_SCHEMA,
   },
 } as const
 
@@ -89,6 +102,8 @@ export interface ClusterSummary {
   anomalies: number
   /** Middleware type → instance count. */
   byType: Array<{ type: string, count: number }>
+  /** CephBlockPool count when the scan found rook-ceph hints (ticket 15). */
+  cephPools?: number
   lastError?: string
 }
 
@@ -120,6 +135,8 @@ export interface ClusterDetail {
   lastError?: string
   /** The Prometheus service monitoring data came from, when discovered. */
   prometheusService?: string
+  /** rook-ceph footprint hints (pools / cluster / tools pod), when found. */
+  ceph?: CephHints
   middleware: InventorySection['middleware']
   unknown: UnknownWorkload[]
   edges: DisplayEdge[]
@@ -194,6 +211,7 @@ function summarize(name: string, section: InventorySection): ClusterSummary {
     anomalies: (section.anomalies ?? []).length,
     byType: [...byTypeMap.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([type, count]) => ({ type, count })),
   }
+  if (section.ceph !== undefined && section.ceph.pools.length > 0) summary.cephPools = section.ceph.pools.length
   if (section.lastError !== undefined) summary.lastError = section.lastError
   return summary
 }
@@ -221,6 +239,7 @@ function detailOf(name: string, section: InventorySection): ClusterDetail {
   }
   if (section.lastError !== undefined) detail.lastError = section.lastError
   if (section.prometheusService !== undefined) detail.prometheusService = section.prometheusService
+  if (section.ceph !== undefined) detail.ceph = section.ceph
   return detail
 }
 
@@ -421,6 +440,7 @@ export function createEnvironmentTool(
                     },
                   },
                 },
+                cephPools: { type: 'integer' },
                 lastError: { type: 'string' },
               },
             },
@@ -434,6 +454,7 @@ export function createEnvironmentTool(
               stale: { type: 'boolean', required: true },
               lastError: { type: 'string' },
               prometheusService: { type: 'string' },
+              ceph: CEPH_HINTS_SCHEMA,
               counts: {
                 type: 'object',
                 additionalProperties: false,
@@ -623,7 +644,8 @@ function renderResult(value: EnvironmentToolResult, args: { namespace?: string, 
       const stale = c.stale ? ' [STALE]' : ''
       const down = c.down > 0 ? ` · PROMETHEUS DOWN: ${c.down}` : ''
       const anomalies = c.anomalies > 0 ? ` · ${c.anomalies} anomalies` : ''
-      lines.push(`- ${c.name}: ${c.middleware} middleware (${types}), ${c.unknown} unknown, scanned ${c.scannedAt}${stale}${down}${anomalies}`)
+      const ceph = (c.cephPools ?? 0) > 0 ? ` · ceph pools: ${c.cephPools}` : ''
+      lines.push(`- ${c.name}: ${c.middleware} middleware (${types}), ${c.unknown} unknown, scanned ${c.scannedAt}${stale}${down}${anomalies}${ceph}`)
       if (c.lastError !== undefined) lines.push(`  last error: ${c.lastError}`)
     }
     if (value.anomalies !== undefined && value.anomalies.length > 0) {
@@ -659,6 +681,15 @@ function renderResult(value: EnvironmentToolResult, args: { namespace?: string, 
     ].filter(Boolean)
     if (filterBits.length > 0) lines.push(`filtered by ${filterBits.join(' AND ')} (lists below are the matching subset)`)
     if (c.lastError !== undefined) lines.push(`last error: ${c.lastError}`)
+    // rook-ceph hints: pool names are the ceph tool's -p arguments; the
+    // tools pod location (or its absence) saves a live discovery step.
+    if (c.ceph !== undefined) {
+      const pools = c.ceph.pools.map(p => p.name).join(', ')
+      const clusters = c.ceph.clusters.map(cl => `${cl.namespace}/${cl.name}`).join(', ')
+      lines.push('ceph: ' + (c.ceph.pools.length > 0 ? `pools ${pools}` : 'no CephBlockPool CRs found')
+        + (clusters !== '' ? ` · cluster ${clusters}` : '')
+        + (c.ceph.toolsPod !== undefined ? ` · tools pod ${c.ceph.toolsPod.namespace}/${c.ceph.toolsPod.name}` : ' · no rook-ceph-tools pod deployed'))
+    }
     lines.push('Middleware:')
     for (const m of c.middleware) {
       lines.push(`- ${m.type} · ${m.namespace}/${m.workload} (${m.workloadKind}) · svc: ${m.serviceEntries.join(', ') || 'none'} · ${m.images.join(', ')}${renderMonitoring(m.monitoring)}${notesFor(m.namespace, m.workload, m.serviceEntries)}`)

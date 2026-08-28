@@ -1,0 +1,30 @@
+{
+  "kind": "List",
+  "apiVersion": "v1",
+  "items": [
+    {
+      "kind": "CephBlockPool",
+      "apiVersion": "ceph.rook.io/v1",
+      "metadata": {
+        "namespace": "rook-ceph",
+        "name": "rbd-pool"
+      }
+    },
+    {
+      "kind": "CephBlockPool",
+      "apiVersion": "ceph.rook.io/v1",
+      "metadata": {
+        "namespace": "rook-ceph",
+        "name": "cephfs-data-ec01"
+      }
+    },
+    {
+      "kind": "CephCluster",
+      "apiVersion": "ceph.rook.io/v1",
+      "metadata": {
+        "namespace": "rook-ceph",
+        "name": "rook-ceph"
+      }
+    }
+  ]
+}
