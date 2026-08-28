@@ -87,7 +87,7 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 - **面板授权 (panel grant)**（同上）— 人主动发起的授权，与申请批准的 grant **同构同寿命**（session 分键、TTL 有界、重启清空），只是跳过"agent 开口"。TTL 只能选档位（默认 5/10/30 分钟，Config 可配），主动授权与审批共用同一份档位
 - **对称通知**（同上）— 命令面不进模型历史，面板的授权/撤销动作由路由往目标 session 追加 model-visible 消息（`<access-grant>`/`<access-revoked>`），agent 立刻感知权限变化。撤销语义：**下一次解析生效，不掐断进行中命令**；面板可一键收回本会话全部授权
 - **授权账本 (grant ledger)** — 进程内授权表，按 `exec.agent.id`（= session id）分键；`exec.agent` 缺失时由 broker 裁决：两档 kind 回落 ro，ssh 类直接拒绝（ssh 凭证本质是 rw——没有真只读 shell——无会话可键权就不发）。apply（启动与 HMR 重载）即清空账本
-- **审计日志** — 授权（批准/到期/撤销）、rw 代发、账本重置（`ledger-reset`，启动与 HMR 各落一行）逐条落 JSONL 文件（默认 `~/.dsh-ops/audit.log`），不进 session 事件流
+- **审计日志** — 授权（批准/续期/到期/撤销）、rw 代发、账本重置（`ledger-reset`，启动与 HMR 各落一行）逐条落 JSONL 文件（默认 `~/.dsh-ops/audit.log`），不进 session 事件流。**完整性声明限定为「经门控工具的操作」**：持通用 bash 的 agent 可绕过门（读宿主机密钥自跑 ssh/kubectl），绕道操作只进 session 事件流（ADR-0001 §1 补记）；主要缓解是把门控工具修可靠让绕道失去动机，而非堵 bash
 
 ### 凭证管理 UI (Access Admin UI)
 
