@@ -6,8 +6,9 @@
  * output schema, the render function, and the execute template (resolve the
  * profile per call through `ctx.get('opsAccess')` — never a static inject,
  * never cached — assemble the command, run it through `ctx.shell` with a
- * fixed 30s timeout, normalize a signal-killed exitCode to -1, pass errors
- * through verbatim).
+ * fixed 30s timeout, normalize a signal-killed exitCode to -1 while
+ * surfacing the kill cause (timeout / caller abort / signal name) in the
+ * error field, pass errors through verbatim).
  *
  * Credential paths never reach the model or the event log. Consumers mark
  * file-bearing fields with the `ref()` helper, which emits a display token
@@ -240,14 +241,26 @@ export function registerProfiledShellTool(ctx: Context, spec: ProfiledShellToolS
         const resolved = ctx.shell.resolve(request)
         const result = await ctx.shell.run(resolved)
         // exitCode is null when the process died from a signal — normalize to
-        // -1. stdout/stderr are scrubbed value → token: CLIs echo credential
+        // -1, and the kill's cause is always surfaced in the error field so
+        // the model never has to guess WHY there is no exit code — a bare -1
+        // used to leave it guessing, and it guessed wrong ('unstable pipes'
+        // for a wedged remote end, 2026-08-27).
+        // stdout/stderr are scrubbed value → token: CLIs echo credential
         // paths in errors, and the event log must never see them. stderr then
         // loses the consumer-declared noise lines (e.g. ceph keyring chatter).
+        const killNote = result.timedOut
+          ? 'killed: exceeded the ' + Math.round(result.timeoutMs / 1000) + 's tool timeout — the command never finished and may have partially taken effect (e.g. a delete was already issued). If the remote end may be hung, give the remote command its own timeout (e.g. wget -T N, timeout Ns); for slow batch operations use a non-waiting form (e.g. kubectl delete --wait=false).'
+          : result.aborted
+            ? 'aborted: the caller cancelled this run before it finished.'
+            : result.exitCode === null
+              ? 'killed by signal ' + (result.signal ?? 'unknown') + ' — no normal exit code; the process was terminated externally (OOM killer, sandbox policy, or a deliberate kill).'
+              : undefined
         return {
           exitCode: result.exitCode ?? -1,
           stdout: tokens.scrub(result.stdout.text),
           stderr: dropNoiseLines(tokens.scrub(result.stderr.text), spec.stderrNoise),
           command: fullCommand,
+          ...(killNote !== undefined ? { error: killNote } : {}),
         }
       } catch (e) {
         // Unknown profile names land here too — resolve's message already

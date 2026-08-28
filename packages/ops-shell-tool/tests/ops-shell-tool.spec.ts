@@ -28,6 +28,10 @@ interface ShellRunOutcome {
   exitCode: number | null
   stdoutText: string
   stderrText: string
+  timedOut?: boolean
+  aborted?: boolean
+  timeoutMs?: number
+  signal?: string
 }
 
 function setup(opts: {
@@ -57,6 +61,10 @@ function setup(opts: {
         const outcome = await (opts.runImpl ?? (async () => ({ exitCode: 0, stdoutText: 'ok\n', stderrText: '' })))(spec)
         return {
           exitCode: outcome.exitCode,
+          timedOut: outcome.timedOut,
+          aborted: outcome.aborted,
+          timeoutMs: outcome.timeoutMs,
+          signal: outcome.signal,
           stdout: { text: outcome.stdoutText },
           stderr: { text: outcome.stderrText },
         }
@@ -124,10 +132,51 @@ describe('registerProfiledShellTool', () => {
     expect(seen).toEqual([undefined])
   })
 
-  it('normalizes a null exitCode (signal death) to -1', async () => {
-    const h = setup({ runImpl: async () => ({ exitCode: null, stdoutText: '', stderrText: '' }) })
+  it('a signal death always names its cause (signal or unknown), never a bare -1', async () => {
+    const killed = setup({ runImpl: async () => ({ exitCode: null, stdoutText: '', stderrText: '', signal: 'SIGKILL' }) })
+    const kv = await killed.tool.execute({ target: 'prod', command: 'x' }, killed.exec())
+    expect(kv.exitCode).toBe(-1)
+    expect(kv.error).toContain('killed by signal SIGKILL')
+    expect(kv.error).toContain('terminated externally')
+    expect(kv.error).not.toContain('timeout')
+
+    const unnamed = setup({ runImpl: async () => ({ exitCode: null, stdoutText: '', stderrText: '' }) })
+    const uv = await unnamed.tool.execute({ target: 'prod', command: 'x' }, unnamed.exec())
+    expect(uv.exitCode).toBe(-1)
+    expect(uv.error).toContain('unknown')
+    expect(uv.error).not.toContain('timeout')
+  })
+
+  it('a timeout kill says so: seconds, partial-effect warning, faster-failure advice', async () => {
+    const h = setup({
+      runImpl: async () => ({ exitCode: null, stdoutText: 'pod x deleted\n', stderrText: '', timedOut: true, timeoutMs: 30000 }),
+    })
+    const value = await h.tool.execute({ target: 'prod', command: 'delete pod x' }, h.exec())
+    expect(value.exitCode).toBe(-1)
+    expect(value.error).toContain('killed')
+    expect(value.error).toContain('30s')
+    expect(value.error).toContain('partially taken effect')
+    expect(value.error).toContain('wget -T N')
+    // partial output survives the kill — the deleted line must not be swallowed
+    expect(value.stdout).toBe('pod x deleted\n')
+  })
+
+  it('a caller abort says so without masquerading as a timeout', async () => {
+    const h = setup({ runImpl: async () => ({ exitCode: null, stdoutText: '', stderrText: '', aborted: true }) })
     const value = await h.tool.execute({ target: 'prod', command: 'x' }, h.exec())
     expect(value.exitCode).toBe(-1)
+    expect(value.error).toContain('aborted')
+    expect(value.error).not.toContain('timeout')
+  })
+
+  it('the render surfaces the kill note through the error field', async () => {
+    const h = setup({
+      runImpl: async () => ({ exitCode: null, stdoutText: '', stderrText: '', timedOut: true, timeoutMs: 30000 }),
+    })
+    const value = await h.tool.execute({ target: 'prod', command: 'x' }, h.exec())
+    const text = tool_text(h.tool, value)
+    expect(text).toContain('[error] killed: exceeded the 30s tool timeout')
+    expect(text).toContain('[exit code: -1]')
   })
 
   it('unknown profile: resolve error passes through verbatim, shell untouched', async () => {

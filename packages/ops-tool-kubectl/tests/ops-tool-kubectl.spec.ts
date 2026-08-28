@@ -55,11 +55,14 @@ describe('kubectl', () => {
     expect(desc).toContain('repeat the full kubectl prefix')
   })
 
-  it('normalizes a null exitCode (signal death) to -1', async () => {
+  it('normalizes a null exitCode (signal death) to -1 and names the cause', async () => {
     const h = setup({ runImpl: async () => ({ exitCode: null, stdoutText: '', stderrText: 'killed' }) })
     const { value } = await h.runKubectl({ cluster: 'prod', command: 'get pods' })
     expect(value.exitCode).toBe(-1)
-    expect(value.error).toBeUndefined()
+    // the factory always surfaces WHY there is no exit code — never a bare -1
+    // for the model to guess at (this mock names no signal, so it says so)
+    expect(value.error).toContain('killed by signal unknown')
+    expect(value.error).not.toContain('timeout')
   })
 
   it('unknown cluster name: resolve error passes through with available names, shell untouched', async () => {
