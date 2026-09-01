@@ -1,3 +1,4 @@
+import { assessCephCaps, cephProbeFailure, parseCaps, provider } from '../src/index.ts'
 /**
  * Unit spec for ops-access-ceph: schema accept/reject, `~` expansion in
  * process, and registration/disposal through a mock opsAccess context.
@@ -116,9 +117,10 @@ describe('validateContent', () => {
     expect(plugin.provider.validateContent?.('keyring', VALID_KEYRING)).toBeNull()
   })
 
-  it('rejects content without a trailing newline (ceph buffer parser rejects it)', () => {
-    expect(plugin.provider.validateContent?.('conf', VALID_CONF.trimEnd())).toMatch(/end with a newline/)
-    expect(plugin.provider.validateContent?.('keyring', VALID_KEYRING.trimEnd())).toMatch(/end with a newline/)
+  it('no longer rejects a missing trailing newline — core normalizes it at write time', () => {
+    expect(plugin.provider.normalizeTrailingNewline).toBe(true)
+    expect(plugin.provider.validateContent?.('conf', VALID_CONF.trimEnd())).toBeNull()
+    expect(plugin.provider.validateContent?.('keyring', VALID_KEYRING.trimEnd())).toBeNull()
   })
 
   it('rejects a keyring whose key line lost its indentation (paste corruption)', () => {
@@ -142,5 +144,69 @@ describe('validateContent', () => {
 
   it('ignores non-file fields', () => {
     expect(plugin.provider.validateContent?.('name', 'anything')).toBeNull()
+  })
+})
+
+// ── capability probe (ticket 10) ─────────────────────────────────────────────
+
+describe('capability probe', () => {
+  const AUTH_GET = [
+    'exported keyring for client.demo-ro',
+    'caps mds = "allow r"',
+    'caps mgr = "allow r"',
+    'caps mon = "allow r"',
+    'caps osd = "allow r class-read"',
+  ].join('\n')
+
+  it('parseCaps reads the caps lines of ceph auth get output', () => {
+    expect(parseCaps(AUTH_GET)).toEqual({ mds: 'allow r', mgr: 'allow r', mon: 'allow r', osd: 'allow r class-read' })
+  })
+  it('ro verifies on all-read caps, class-read included', () => {
+    expect(assessCephCaps(parseCaps(AUTH_GET), 'ro')).toEqual({ status: 'verified' })
+  })
+  it('ro mismatches when any cap grants write, with the caps in the detail', () => {
+    const r = assessCephCaps({ mon: 'allow r', osd: 'allow rw' }, 'ro')
+    expect(r.status).toBe('mismatch')
+    expect(r.detail).toContain('osd')
+    expect(r.detail).toContain('allow rw')
+  })
+  it('rw verifies on a writable cap; mismatches when nothing can write', () => {
+    expect(assessCephCaps({ mon: 'allow r', osd: 'allow rw' }, 'rw')).toEqual({ status: 'verified' })
+    expect(assessCephCaps({ mon: 'allow *' }, 'rw')).toEqual({ status: 'verified' })
+    const r = assessCephCaps(parseCaps(AUTH_GET), 'rw')
+    expect(r.status).toBe('mismatch')
+    expect(r.detail).toContain('no cap grants write')
+  })
+  it('the real probe degrades to unverifiable when ceph auth get cannot run', async () => {
+    const res = await provider.probe!({ conf: '/nonexistent/ceph.conf', keyring: '/nonexistent/keyring', name: 'client.demo-ro' }, 'ro')
+    expect(res.status).toBe('unverifiable')
+    expect(JSON.stringify(res)).not.toContain('/nonexistent')
+  }, 20000)
+})
+
+describe('cap parser edge cases (review fix)', () => {
+  it('combined permission bundles carrying w (rwx, wx) count as writable', () => {
+    expect(assessCephCaps({ osd: 'allow rwx' }, 'ro').status).toBe('mismatch')
+    expect(assessCephCaps({ osd: 'allow wx' }, 'ro').status).toBe('mismatch')
+    expect(assessCephCaps({ osd: 'allow rwx' }, 'rw')).toEqual({ status: 'verified' })
+  })
+  it('pool qualifiers do not change the verdict; the allow keyword never counts as w', () => {
+    expect(assessCephCaps({ osd: 'allow rw pool=foo' }, 'ro').status).toBe('mismatch')
+    expect(assessCephCaps({ osd: 'allow r pool=foo' }, 'ro')).toEqual({ status: 'verified' })
+    expect(assessCephCaps({ osd: 'allow rx' }, 'ro')).toEqual({ status: 'verified' })
+  })
+})
+
+describe('cephProbeFailure classification (live-cluster finding)', () => {
+  it('a tight ro entity failing auth get with EACCES gets the self-explanatory unverifiable', () => {
+    const r = cephProbeFailure('ro', 'Error EACCES: access denied')
+    expect(r.status).toBe('unverifiable')
+    expect(r.detail).toContain('normal for a tight ro entity')
+  })
+  it('rw tier or non-EACCES failures get the generic message; stderr never surfaces', () => {
+    const rw = cephProbeFailure('rw', 'Error EACCES: access denied')
+    expect(rw.detail).toBe('ceph auth get could not run (cluster unreachable or ceph CLI missing)')
+    const ro = cephProbeFailure('ro', 'rados connect timeout')
+    expect(ro.detail).toBe('ceph auth get could not run (cluster unreachable or ceph CLI missing)')
   })
 })

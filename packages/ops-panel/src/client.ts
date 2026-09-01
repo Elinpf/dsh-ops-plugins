@@ -1,8 +1,9 @@
 /**
  * Ops panel seam, browser half (ADR-0004). Provides ctx.opsPanels: a panel
  * registry keyed by slash-command name, ONE command/executed listener that
- * opens the matching panel in the browser that ran the command, and the
- * overlay shell (header bar + Escape/backdrop dismissal) registered into
+ * opens the matching panel in the browser that ran the command, imperative
+ * open/close for ambient affordances (ADR-0004 §9), and the overlay shell
+ * (header bar + Escape/backdrop dismissal) registered into
  * conversation.input.overlay. Panel content and data are the consumer's;
  * the shell owns only chrome and open state.
  *
@@ -176,7 +177,13 @@ interface SlotsService {
 function apply(ctx: Context): void {
   injectCSS()
   const core = createPanelCore()
-  const service: OpsPanels = { registerPanel: (def) => core.registerPanel(def) }
+  const service: OpsPanels = {
+    registerPanel: (def) => core.registerPanel(def),
+    // The imperative open path (ADR-0004 §9): ambient affordances like the
+    // access-request badge pull the panel up without a typed command.
+    open: (sessionId, command) => core.open(sessionId, command),
+    close: (sessionId) => core.close(sessionId),
+  }
   ctx.provide('opsPanels', service)
 
   // One dispatcher for every panel: the local command/executed event fires

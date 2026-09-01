@@ -471,4 +471,31 @@ describe('anomalies surfacing', () => {
     expect(pgLine).toContain('[!]')
     expect(pgLine).toContain('no ready endpoints')
   })
+
+  it('renders ceph hints in overview and show (ticket 15)', async () => {
+    const { tool } = setup({
+      inventory: inventory({
+        test: section({
+          ceph: {
+            pools: [{ namespace: 'rook-ceph', name: 'rbd-pool' }, { namespace: 'rook-ceph', name: 'cephfs-data-ec01' }],
+            clusters: [{ namespace: 'rook-ceph', name: 'rook-ceph' }],
+            toolsPod: { namespace: 'rook-ceph', name: 'rook-ceph-tools-67f5f5587c-kwgnx' },
+          },
+        }),
+      }),
+    })
+    const overview = await tool.execute({ action: 'overview' }, exec())
+    const ovText = tool.output.render({ action: 'overview' }, overview).map((b: any) => b.text).join('\n')
+    expect(ovText).toContain('ceph pools: 2')
+    const value = await tool.execute({ action: 'show', cluster: 'test' }, exec())
+    const text = tool.output.render({ action: 'show', cluster: 'test' }, value).map((b: any) => b.text).join('\n')
+    expect(text).toContain('ceph: pools rbd-pool, cephfs-data-ec01 · cluster rook-ceph/rook-ceph · tools pod rook-ceph/rook-ceph-tools-67f5f5587c-kwgnx')
+  })
+
+  it('marks the absent tools pod explicitly (its absence is information)', async () => {
+    const { tool } = setup({ inventory: inventory({ test: section({ ceph: { pools: [{ namespace: 'rook-ceph', name: 'rbd-pool' }], clusters: [] } }) }) })
+    const value = await tool.execute({ action: 'show', cluster: 'test' }, exec())
+    const text = tool.output.render({ action: 'show', cluster: 'test' }, value).map((b: any) => b.text).join('\n')
+    expect(text).toContain('no rook-ceph-tools pod deployed')
+  })
 })

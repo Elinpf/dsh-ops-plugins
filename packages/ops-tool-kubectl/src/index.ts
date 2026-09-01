@@ -20,7 +20,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { registerProfiledShellTool } from '@deepseek-ai/dsh-ops-shell-tool'
-import type { AdminEntry, OpsAccess } from '@deepseek-ai/dsh-ops-access'
+import type { AdminEntry, AdminTierStatus, OpsAccess } from '@deepseek-ai/dsh-ops-access'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -44,6 +44,8 @@ interface ListedProfile {
   ro: boolean
   /** Whether the rw tier resolves (grant-gated; source for ro derivation). */
   rw: boolean
+  /** Capability-probe annotation per ok tier (ticket 10), e.g. 'ro 已核验 / rw 声明未核验'. */
+  probe?: string
 }
 
 interface ListAccessResult {
@@ -54,8 +56,18 @@ interface ListAccessResult {
 }
 
 /** Strip an admin entry down to envelope + tier readiness — `fields` never crosses into tool output. */
+/** Compact probe label for one tier: verified / failed / unverifiable / unprobed. */
+function probeLabel(status: AdminTierStatus): string {
+  if (status.probe === undefined) return '声明未核验'
+  if (status.probe.status === 'verified') return '已核验'
+  if (status.probe.status === 'mismatch') return '核验失败: ' + (status.probe.detail ?? '')
+  return '无法核验'
+}
+
 function toListedProfile(e: AdminEntry): ListedProfile {
   const listed: ListedProfile = { name: e.name, ro: e.tiers.ro.ok, rw: e.tiers.rw.ok }
+  const bits = (['ro', 'rw'] as const).filter((t) => e.tiers[t].ok).map((t) => t + ' ' + probeLabel(e.tiers[t]))
+  if (bits.length > 0) listed.probe = bits.join(' / ')
   if (e.envelope.name !== undefined) listed.displayName = e.envelope.name
   if (e.envelope.description !== undefined) listed.description = e.envelope.description
   if (e.envelope.environment !== undefined) listed.environment = e.envelope.environment
@@ -71,7 +83,7 @@ export function apply(ctx: Context, _config: Record<string, never>): void {
     targetParam: 'cluster',
     description: 'Execute a kubectl command on a specified K8s cluster. The plugin automatically injects the correct --kubeconfig credential (shown as a <id@tier:field> reference). Use list_access to see available cluster names. The command runs through a local shell: separators like ; | && are parsed by the shell before kubectl sees them, so to chain multiple kubectl commands repeat the full kubectl prefix (including the --kubeconfig=<id@tier:field> reference) after each separator — or make separate calls.',
     targetParamDescription: 'K8s cluster profile name. Use list_access to see options.',
-    commandDescription: 'kubectl subcommand WITHOUT the kubectl prefix. Examples: get pods -n default, describe node node-1',
+    commandDescription: 'kubectl subcommand WITHOUT the kubectl prefix. Examples: get pods -n default, describe node node-1. One call = one kubectl subcommand: the line is concatenated after the kubectl invocation, so a pipe applies locally to its output (useful: get pods | grep Running), but ; && and $() start NEW local commands that do NOT inherit the kubectl prefix — never use them, make separate calls instead.',
     buildCommand(fields, command, ref) {
       return `kubectl --kubeconfig=${ref('kubeconfigPath')} ${command}`
     },
@@ -111,6 +123,7 @@ export function apply(ctx: Context, _config: Record<string, never>): void {
                       environment: { type: 'string' },
                       ro: { type: 'boolean', required: true },
                       rw: { type: 'boolean', required: true },
+                      probe: { type: 'string' },
                     },
                   },
                 },
@@ -136,7 +149,8 @@ export function apply(ctx: Context, _config: Record<string, never>): void {
             const tier = !p.ro
               ? (p.rw ? ' [rw only — derive the ro tier via register_access]' : ' [no usable tier]')
               : ''
-            lines.push(`- ${p.name}${dn}${env}${desc}${tier}`)
+            const probe = p.probe !== undefined ? ` [probe: ${p.probe}]` : ''
+            lines.push(`- ${p.name}${dn}${env}${desc}${tier}${probe}`)
           }
         }
         return [{ type: 'text' as const, text: `Registered access profiles (${value.total}):\n${lines.join('\n')}` }]

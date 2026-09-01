@@ -372,11 +372,14 @@ describe('admin API: deleteEntry', () => {
 describe('access panel', () => {
   afterEach(() => { vi.unstubAllGlobals() })
 
-  it('registers the access panel when opsPanels is composed', () => {
+  it('registers the access panel and the cross-session overview when opsPanels is composed', () => {
     const { panels } = setupClient()
-    expect(panels).toHaveLength(1)
+    expect(panels).toHaveLength(2)
     expect(panels[0]).toMatchObject({ command: 'access', title: '访问授权' })
     expect(typeof panels[0].component).toBe('function')
+    // The panel seam's second consumer (ticket 13) — same registration API, no generalization needed.
+    expect(panels[1]).toMatchObject({ command: 'access-all', title: '授权总览（跨会话）' })
+    expect(typeof panels[1].component).toBe('function')
   })
 
   it('skips panel registration when opsPanels is absent (mention + admin unaffected)', () => {
@@ -418,6 +421,17 @@ describe('access panel', () => {
     expect(spy).toHaveBeenCalledWith('/ops-access/grants', expect.objectContaining({
       method: 'POST',
       body: JSON.stringify({ session: 'sess-1', kind: 'k8s', name: 'prod', ttlMinutes: 10 }),
+    }))
+  })
+
+  it('postPanelExtend posts session/kind/name/ttlMinutes to the extend route', async () => {
+    const spy = vi.fn(async () => ({ ok: true, json: async () => ({ ok: true }) }))
+    vi.stubGlobal('fetch', spy)
+    const res = await client.postPanelExtend('sess-1', 'k8s', 'prod', 30)
+    expect(res.ok).toBe(true)
+    expect(spy).toHaveBeenCalledWith('/ops-access/grants/extend', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ session: 'sess-1', kind: 'k8s', name: 'prod', ttlMinutes: 30 }),
     }))
   })
 
@@ -496,5 +510,70 @@ describe('degradation: 404 and network failure never throw', () => {
     expect((await client.postPanelRevoke('s', 'k', 'n')).ok).toBe(false)
     expect((await client.postPanelRevokeAll('s')).ok).toBe(false)
     expect((await client.postPanelDecide('x', true, 10)).ok).toBe(false)
+  })
+})
+
+// ── Pending-request badge derivation ────────────────────────────────────────
+
+describe('pendingAccessCount', () => {
+  it('counts in-flight request_access calls only — a settled call has left runningCalls', () => {
+    expect(client.pendingAccessCount(undefined)).toBe(0)
+    expect(client.pendingAccessCount(null)).toBe(0)
+    expect(client.pendingAccessCount({})).toBe(0)
+    expect(client.pendingAccessCount({ runningCalls: [] })).toBe(0)
+    expect(client.pendingAccessCount({ runningCalls: [{ name: 'bash' }] })).toBe(0)
+    expect(client.pendingAccessCount({ runningCalls: [{ name: 'bash' }, { name: 'request_access' }] })).toBe(1)
+    expect(client.pendingAccessCount({ runningCalls: [{ name: 'request_access' }, { name: 'request_access' }] })).toBe(2)
+  })
+})
+
+// ── Cross-session overview (ticket 13) ───────────────────────────────────────
+
+describe('cross-session overview panel', () => {
+  it('fetchPanelOverview maps the wire shape and degrades to null on failure', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => ({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        grants: [{ session: 'sess-b', kind: 'k8s', name: 'prod', expiresAt: 1, reason: 'r', approvedBy: 'panel', remainingMinutes: 9 }],
+        requests: [{ id: 'gr-1', session: 'sess-a', kind: 'ssh', name: 'box', requestedTtlMinutes: 30, reason: 'why', createdAt: 1, decidesAt: 2 }],
+        denied: [{ kind: 'ceph', name: 'main', deniedAt: 1, reason: 'freeze', deniedBy: 'panel' }],
+      }),
+    })))
+    const data = await client.fetchPanelOverview()
+    expect(fetch).toHaveBeenCalledWith('/ops-access/grants/all', expect.anything())
+    expect(data?.grants[0].session).toBe('sess-b')
+    expect(data?.requests[0].id).toBe('gr-1')
+    expect(data?.denied[0].reason).toBe('freeze')
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 404 })))
+    expect(await client.fetchPanelOverview()).toBeNull()
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline') }))
+    expect(await client.fetchPanelOverview()).toBeNull()
+  })
+
+  it('groupBySession groups and sorts sessions deterministically', () => {
+    const mk = (session: string, name: string): client.OverviewGrant => ({
+      session, kind: 'k8s', name, expiresAt: 1, reason: 'r', approvedBy: 'panel', remainingMinutes: 5,
+    })
+    const groups = client.groupBySession([mk('sess-b', 'a'), mk('sess-a', 'b'), mk('sess-b', 'c')])
+    expect(groups.map((g) => g.session)).toEqual(['sess-a', 'sess-b'])
+    expect(groups[1].grants.map((g) => g.name)).toEqual(['a', 'c'])
+    expect(client.groupBySession([])).toEqual([])
+  })
+})
+
+describe('mention probe annotation (review fix)', () => {
+  it('candidates: probe verdicts annotate the description', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => [
+        { kind: 'k8s', name: 'prod', description: '生产集群', ro: true, rw: true, mention: '@[k8s/prod](dsh-access:AAAA)', probe: { ro: 'verified', rw: 'mismatch' } },
+        { kind: 'ceph', name: 'main', ro: true, rw: false, mention: '@[ceph/main](dsh-access:BBBB)' },
+      ],
+    })))
+    const { source } = setupClient()
+    const out = await source.candidates({ sessionId: 's1' }, { query: '', signal: undefined })
+    expect(out[0].description).toBe('生产集群 · ro 已核验 · rw 核验失败')
+    expect(out[1].description).toBeUndefined()
   })
 })

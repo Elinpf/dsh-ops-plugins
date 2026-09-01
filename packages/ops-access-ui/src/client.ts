@@ -50,7 +50,19 @@ interface AccessMentionCandidate {
   /** Tier readiness — entries with only an rw tier still appear (ro derivable). */
   ro: boolean
   rw: boolean
+  /** Per-tier probe verdicts for ok tiers, when the provider probes (ticket 10). */
+  probe?: { ro?: string, rw?: string }
   mention: string
+}
+
+/** Compact probe annotation for the @ menu (ticket 10 review fix), e.g. 'ro 已核验 · rw 核验失败'. */
+function mentionProbeText(c: AccessMentionCandidate): string | undefined {
+  if (c.probe === undefined) return undefined
+  const label = (s: string): string => s === 'verified' ? '已核验' : s === 'mismatch' ? '核验失败' : '无法核验'
+  const bits: string[] = []
+  if (c.probe.ro !== undefined) bits.push('ro ' + label(c.probe.ro))
+  if (c.probe.rw !== undefined) bits.push('rw ' + label(c.probe.rw))
+  return bits.length > 0 ? bits.join(' · ') : undefined
 }
 
 // ── Admin wire shapes (mirrors the admin routes in ops-access core) ─────────
@@ -69,6 +81,8 @@ interface AdminEntry {
 interface AdminTierStatus {
   ok: boolean
   error?: string
+  /** Capability-probe outcome recorded at save time (ticket 10). */
+  probe?: { status: 'verified' | 'mismatch' | 'unverifiable', detail?: string, probedAt: string }
 }
 
 /** One registered credential kind: its JSON Schema and optional field docs. */
@@ -211,15 +225,43 @@ interface PanelPendingRequest {
   decidesAt: number
 }
 
-/** Fetch this session's live grants + the configured TTL options. Null on failure. */
-async function fetchPanelGrants(sessionId: string, signal?: AbortSignal): Promise<{ grants: PanelGrant[], ttlOptions: number[] } | null> {
+/** One operator lockdown row as reported by GET /ops-access/grants (ticket 12). */
+interface PanelDenied {
+  kind: string
+  name: string
+  deniedAt: number
+  reason: string
+  deniedBy: string
+}
+
+/** Fetch this session's live grants + the configured TTL options + the lockdown list. Null on failure. */
+async function fetchPanelGrants(sessionId: string, signal?: AbortSignal): Promise<{ grants: PanelGrant[], ttlOptions: number[], denied: PanelDenied[] } | null> {
   try {
     const res = await fetch('/ops-access/grants?session=' + encodeURIComponent(sessionId), { signal })
     if (!res.ok) return null
-    return await res.json()
+    const data = await res.json() as { grants?: PanelGrant[], ttlOptions?: number[], denied?: PanelDenied[] }
+    return { grants: data.grants ?? [], ttlOptions: data.ttlOptions ?? [], denied: Array.isArray(data.denied) ? data.denied : [] }
   } catch {
     return null
   }
+}
+
+/** Lock a profile outright (deny): even ro is refused; its live grants die everywhere. Never throws. */
+function postPanelDeny(kind: string, name: string): Promise<ApiResult> {
+  return apiFetchResult('/ops-access/deny', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ kind, name }),
+  }, 'postPanelDeny')
+}
+
+/** Lift a lockdown. Never throws. */
+function postPanelUndeny(kind: string, name: string): Promise<ApiResult> {
+  return apiFetchResult('/ops-access/undeny', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ kind, name }),
+  }, 'postPanelUndeny')
 }
 
 /** Fetch this session's pending access requests. Null on failure. */
@@ -260,6 +302,15 @@ function postPanelRevokeAll(sessionId: string): Promise<ApiResult> {
   }, 'postPanelRevokeAll')
 }
 
+/** Extend one active grant by a TTL tier (renewed from now). Never throws. */
+function postPanelExtend(sessionId: string, kind: string, name: string, ttlMinutes: number): Promise<ApiResult> {
+  return apiFetchResult('/ops-access/grants/extend', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ session: sessionId, kind, name, ttlMinutes }),
+  }, 'postPanelExtend')
+}
+
 /** Decide a pending request (approve with a TTL option, or reject). Never throws. */
 function postPanelDecide(id: string, approved: boolean, ttlMinutes?: number): Promise<ApiResult> {
   return apiFetchResult('/ops-access/access-requests/decide', {
@@ -267,6 +318,51 @@ function postPanelDecide(id: string, approved: boolean, ttlMinutes?: number): Pr
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(approved ? { id, approved, ttlMinutes } : { id, approved }),
   }, 'postPanelDecide')
+}
+
+// ── Pending-request badge (input dock) ─────────────────────────────────────
+
+/** Structural slice of the runtime conversation snapshot the badge reads. */
+interface SnapshotRunningCall { name: string }
+
+/**
+ * Count this session's in-flight request_access calls: each parked call is
+ * one pending human decision. The runtime pairs tool/call with tool/result
+ * into runningCalls, so a decided or timed-out request drops out on its
+ * own — zero polling, straight off the session snapshot the dock owner
+ * already passes.
+ */
+function pendingAccessCount(session: { runningCalls?: readonly SnapshotRunningCall[] } | null | undefined): number {
+  if (session === null || session === undefined || !Array.isArray(session.runningCalls)) return 0
+  return session.runningCalls.filter((c) => c.name === 'request_access').length
+}
+
+/** Dock badge props: the InputZone owner share plus the framework sessionId. */
+interface AccessBadgeProps {
+  sessionId?: string
+  session?: { runningCalls?: readonly SnapshotRunningCall[] }
+  /** Open the access panel imperatively (ops-panel seam, ADR-0004 §9). */
+  openPanel: (sessionId: string) => boolean
+}
+
+/**
+ * Red-dot alert in the input dock while request_access calls await a human
+ * decision: renders nothing on an empty pending set (decided/timed-out
+ * requests leave runningCalls, extinguishing the badge on their own);
+ * clicking opens the access panel's approval deck.
+ */
+function AccessBadge(props: AccessBadgeProps): unknown {
+  const count = pendingAccessCount(props.session)
+  if (count === 0 || props.sessionId === undefined) return null
+  const sid = props.sessionId
+  return h('button', {
+    className: 'ops-access-badge',
+    title: '有待审批的提权申请 — 点击打开授权面板',
+    onClick: () => props.openPanel(sid),
+  },
+    h('span', { className: 'ops-access-badge-dot' }),
+    String(count) + ' 个提权申请待审批',
+  )
 }
 
 // ── CSS (theme variables, same discipline as trace dock) ────────────────────
@@ -605,6 +701,23 @@ const CSS = `
 .ops-access-panel-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; margin-right: 6px; vertical-align: 1px; }
 .ops-access-panel-dot.rw { background: var(--dsw-alias-success, #1a7f37); box-shadow: 0 0 4px var(--dsw-alias-success, #1a7f37); }
 .ops-access-panel-dot.deny { background: var(--dsw-alias-danger, #cf222e); }
+.ops-access-badge {
+  display: inline-flex; align-items: center; gap: 6px; width: fit-content;
+  padding: 3px 10px; border-radius: 999px; font-size: 12px; cursor: pointer;
+  border: 1px solid var(--dsw-alias-border-l1, #e5e7eb);
+  background: var(--dsw-alias-bg-primary, #ffffff);
+  color: var(--dsw-alias-text-primary, #1f2328);
+}
+.ops-access-badge:hover { background: var(--dsw-alias-bg-secondary, #f6f8fa); }
+.ops-access-admin-probe { font-size: 11px; padding: 0 6px; border-radius: 4px; margin-left: 6px; }
+.ops-access-admin-probe.verified { background: var(--dsw-alias-success, #1a7f37); color: #fff; }
+.ops-access-admin-probe.mismatch { background: var(--dsw-alias-danger, #cf222e); color: #fff; }
+.ops-access-admin-probe.unverifiable { background: var(--dsw-alias-bg-secondary, #eaeef2); opacity: 0.8; }
+.ops-access-badge-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: var(--dsw-alias-danger, #cf222e);
+  box-shadow: 0 0 0 3px rgba(207, 34, 46, 0.18);
+}
 `.trim()
 
 let cssInjected = false
@@ -703,8 +816,15 @@ function extractSchemaFields(jsonSchema: Record<string, unknown>): SchemaField[]
 
 function TierBadge({ status }: { status: AdminTierStatus }): any {
   if (status.ok) {
+    const probe = status.probe
+    const chip = probe === undefined ? null
+      : h('span', {
+        className: 'ops-access-admin-probe ' + probe.status,
+        title: (probe.detail !== undefined ? probe.detail + ' · ' : '') + 'probed ' + probe.probedAt,
+      }, probe.status === 'verified' ? '已核验' : probe.status === 'mismatch' ? '核验失败' : '无法核验')
     return h('span', { className: 'ops-access-admin-tier-cell ops-access-admin-tier-ok' },
       h(CheckIcon),
+      chip,
     )
   }
   const title = status.error ?? 'not registered'
@@ -1222,6 +1342,7 @@ function defaultTtlChoice(options: number[], requested: number): number {
 
 function AccessPanel({ sessionId }: AccessPanelProps): any {
   const [grants, setGrants] = useState<PanelGrant[]>([])
+  const [denied, setDenied] = useState<PanelDenied[]>([])
   const [ttlOptions, setTtlOptions] = useState<number[]>([5, 10, 30])
   const [requests, setRequests] = useState<PanelPendingRequest[]>([])
   const [candidates, setCandidates] = useState<AccessMentionCandidate[]>([])
@@ -1234,6 +1355,7 @@ function AccessPanel({ sessionId }: AccessPanelProps): any {
     const g = await fetchPanelGrants(sessionId)
     if (g !== null) {
       setGrants(g.grants)
+      setDenied(g.denied)
       if (Array.isArray(g.ttlOptions) && g.ttlOptions.length > 0) setTtlOptions(g.ttlOptions)
     }
     const r = await fetchPanelRequests(sessionId)
@@ -1323,11 +1445,24 @@ function AccessPanel({ sessionId }: AccessPanelProps): any {
         return h('div', { key, className: 'ops-access-panel-grant' },
           h('div', {
             className: 'ops-access-panel-row clickable',
-            onClick: () => setConfirmKey(confirmKey === 'revoke:' + key ? null : 'revoke:' + key),
+            onClick: () => setConfirmKey(confirmKey === 'row:' + key ? null : 'row:' + key),
           },
             h('span', { className: 'ops-access-panel-row-title' }, key),
             h('span', { className: 'ops-access-panel-row-detail' }, '剩 ' + g.remainingMinutes + ' 分钟 · ' + g.approvedBy),
           ),
+          // The row expands into extend (per-TTL confirm, same two-click
+          // discipline as the grant flow) and revoke. Renewal is from NOW —
+          // repeated extends never accumulate past one TTL tier.
+          confirmKey === 'row:' + key && h('div', { className: 'ops-access-panel-actions' },
+            ttlRow(0, (ttl) => setConfirmKey('extend:' + key + ':' + ttl)),
+            h('button', {
+              className: 'ops-access-panel-btn',
+              onClick: () => setConfirmKey('revoke:' + key),
+            }, '收回…'),
+          ),
+          ttlOptions.map((ttl) =>
+            confirmStrip('extend:' + key + ':' + ttl, '延长 ' + key + ' · 从现在起 ' + ttl + ' 分钟？', () =>
+              void run(() => postPanelExtend(sessionId, g.kind, g.name, ttl), '已延长 ' + key + '（' + ttl + ' 分钟）'))),
           confirmStrip('revoke:' + key, '收回 ' + key + ' 的提权权限？', () =>
             void run(() => postPanelRevoke(sessionId, g.kind, g.name), '已收回 ' + key)),
         )
@@ -1350,6 +1485,7 @@ function AccessPanel({ sessionId }: AccessPanelProps): any {
         const key = c.kind + '/' + c.name
         const open = grantTarget === key
         const live = liveGrantFor(grants, c.kind, c.name)
+        const locked = denied.find((d) => d.kind === c.kind && d.name === c.name)
         return h('div', { key, className: 'ops-access-panel-candidate' },
           h('div', {
             className: 'ops-access-panel-row clickable',
@@ -1360,27 +1496,188 @@ function AccessPanel({ sessionId }: AccessPanelProps): any {
               // Access-state marker on the right: lit green = this session
               // holds an rw grant for the profile right now; no dot = plain
               // ro. (A red 'deny' state is reserved for the future lockdown.)
-              live !== undefined &&
-                h('span', {
-                  className: 'ops-access-panel-dot rw',
-                  title: '本会话已授权 rw · 剩 ' + live.remainingMinutes + ' 分钟',
-                }),
-              live !== undefined ? '已授权 · 剩 ' + live.remainingMinutes + ' 分钟'
+              locked !== undefined
+                ? h('span', { className: 'ops-access-panel-dot deny', title: '已封禁 · ' + locked.reason })
+                : (live !== undefined &&
+                  h('span', {
+                    className: 'ops-access-panel-dot rw',
+                    title: '本会话已授权 rw · 剩 ' + live.remainingMinutes + ' 分钟',
+                  })),
+              locked !== undefined ? '已封禁 · ' + locked.reason
+                : live !== undefined ? '已授权 · 剩 ' + live.remainingMinutes + ' 分钟'
                 : (c.rw ? 'rw 就绪' : (c.ro ? '限时使用' : '未配置')),
               c.environment ? ' · ' + c.environment : ''),
           ),
           open && h('div', { className: 'ops-access-panel-actions' },
-            ttlRow(0, (ttl) => setConfirmKey('grant:' + key + ':' + ttl)),
+            locked !== undefined
+              ? h('button', { className: 'ops-access-panel-btn', onClick: () => setConfirmKey('undeny:' + key) }, '解封…')
+              : ttlRow(0, (ttl) => setConfirmKey('grant:' + key + ':' + ttl)),
+            locked === undefined && h('button', {
+              className: 'ops-access-panel-btn',
+              onClick: () => setConfirmKey('deny:' + key),
+            }, '封禁…'),
           ),
-          open && ttlOptions.map((ttl) =>
+          open && locked === undefined && ttlOptions.map((ttl) =>
             confirmStrip('grant:' + key + ':' + ttl, '授予 ' + key + ' · ' + ttl + ' 分钟？', () =>
               void run(() => postPanelGrant(sessionId, c.kind, c.name, ttl), '已授予 ' + key + '（' + ttl + ' 分钟）'))),
+          confirmStrip('deny:' + key, '封禁 ' + key + '？连只读访问也会锁定，其所有会话的授权立即收回', () =>
+            void run(() => postPanelDeny(c.kind, c.name), '已封禁 ' + key + '（连只读也锁定）')),
+          confirmStrip('undeny:' + key, '解封 ' + key + '？恢复正常的 ro/rw 授权流程', () =>
+            void run(() => postPanelUndeny(c.kind, c.name), '已解封 ' + key)),
         )
       }),
     ),
   )
 }
 
+// ── Cross-session overview panel (ticket 13 — the panel seam's second consumer) ──
+
+/** One cross-session grant row as reported by GET /ops-access/grants/all. */
+interface OverviewGrant extends PanelGrant { session: string }
+
+/** Fetch the cross-session overview: every session's grants + parked requests + lockdowns. Null on failure. */
+async function fetchPanelOverview(signal?: AbortSignal): Promise<{ grants: OverviewGrant[], requests: PanelPendingRequest[], denied: PanelDenied[] } | null> {
+  try {
+    const res = await fetch('/ops-access/grants/all', { signal })
+    if (!res.ok) return null
+    const data = await res.json() as { grants?: OverviewGrant[], requests?: PanelPendingRequest[], denied?: PanelDenied[] }
+    return {
+      grants: Array.isArray(data.grants) ? data.grants : [],
+      requests: Array.isArray(data.requests) ? data.requests : [],
+      denied: Array.isArray(data.denied) ? data.denied : [],
+    }
+  } catch {
+    return null
+  }
+}
+
+/** Group grants by session id, sessions sorted alphabetically (stable render). */
+function groupBySession(grants: OverviewGrant[]): Array<{ session: string, grants: OverviewGrant[] }> {
+  const map = new Map<string, OverviewGrant[]>()
+  for (const g of grants) {
+    const list = map.get(g.session)
+    if (list) list.push(g)
+    else map.set(g.session, [g])
+  }
+  return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([session, gs]) => ({ session, grants: gs }))
+}
+
+function AccessOverviewPanel(_props: AccessPanelProps): any {
+  const [grants, setGrants] = useState<OverviewGrant[]>([])
+  const [requests, setRequests] = useState<PanelPendingRequest[]>([])
+  const [denied, setDenied] = useState<PanelDenied[]>([])
+  const [confirmKey, setConfirmKey] = useState<string | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
+
+  const refresh = useCallback(async () => {
+    const data = await fetchPanelOverview()
+    if (data !== null) {
+      setGrants(data.grants)
+      setRequests(data.requests)
+      setDenied(data.denied)
+    }
+  }, [])
+
+  useEffect(() => {
+    void refresh()
+    const timer = setInterval(() => { void refresh() }, 3000)
+    return () => clearInterval(timer)
+  }, [refresh])
+
+  async function run(action: () => Promise<ApiResult>, okText: string): Promise<void> {
+    const res = await action()
+    setMessage(res.ok ? okText : (res.error ?? '操作失败'))
+    setConfirmKey(null)
+    await refresh()
+  }
+
+  function confirmStrip(key: string, text: string, onConfirm: () => void): any {
+    if (confirmKey !== key) return null
+    return h('div', { className: 'ops-access-panel-confirm' },
+      h('span', null, text),
+      h('button', { className: 'ops-access-panel-btn danger', onClick: onConfirm }, '确认'),
+      h('button', { className: 'ops-access-panel-btn', onClick: () => setConfirmKey(null) }, '取消'),
+    )
+  }
+
+  const groups = groupBySession(grants)
+
+  return h('div', null,
+    message !== null && h('div', { className: 'ops-access-panel-message' }, message),
+
+    h('div', { className: 'ops-access-panel-section' },
+      h('div', { className: 'ops-access-panel-heading' }, '活跃授权（全部会话）'),
+      groups.length === 0 && h('div', { className: 'ops-access-panel-empty' }, '当前无任何会话持有提权授权'),
+      groups.map((group) => h('div', { key: group.session, className: 'ops-access-panel-candidate' },
+        h('div', { className: 'ops-access-panel-row' },
+          h('span', { className: 'ops-access-panel-row-title' }, group.session),
+          h('span', { className: 'ops-access-panel-row-detail' }, group.grants.length + ' 项授权'),
+        ),
+        group.grants.map((g) => {
+          const key = g.session + ':' + g.kind + '/' + g.name
+          return h('div', { key, className: 'ops-access-panel-grant' },
+            h('div', {
+              className: 'ops-access-panel-row clickable',
+              onClick: () => setConfirmKey(confirmKey === 'row:' + key ? null : 'row:' + key),
+            },
+              h('span', { className: 'ops-access-panel-row-title' }, g.kind + '/' + g.name),
+              h('span', { className: 'ops-access-panel-row-detail' }, '剩 ' + g.remainingMinutes + ' 分钟 · ' + g.approvedBy + ' · ' + g.reason),
+            ),
+            confirmStrip('row:' + key, '收回 ' + group.session + ' 对 ' + g.kind + '/' + g.name + ' 的授权？', () =>
+              void run(() => postPanelRevoke(g.session, g.kind, g.name), '已收回 ' + g.kind + '/' + g.name)),
+          )
+        }),
+        h('div', null,
+          h('div', {
+            className: 'ops-access-panel-row clickable danger-zone',
+            onClick: () => setConfirmKey(confirmKey === 'all:' + group.session ? null : 'all:' + group.session),
+          }, h('span', { className: 'ops-access-panel-row-title' }, '收回该会话全部授权')),
+          confirmStrip('all:' + group.session, '收回 ' + group.session + ' 的全部 ' + group.grants.length + ' 项授权？', () =>
+            void run(() => postPanelRevokeAll(group.session), '已收回 ' + group.session + ' 的全部授权')),
+        ),
+      )),
+      groups.length > 1 && h('div', null,
+        h('div', {
+          className: 'ops-access-panel-row clickable danger-zone',
+          onClick: () => setConfirmKey(confirmKey === 'all-sessions' ? null : 'all-sessions'),
+        }, h('span', { className: 'ops-access-panel-row-title' }, '收回全部会话的全部授权')),
+        confirmStrip('all-sessions', '收回 ' + groups.length + ' 个会话的全部授权？', () =>
+          void run(async () => {
+            const results = await Promise.all(groups.map((g) => postPanelRevokeAll(g.session)))
+            const failed = results.filter((r) => !r.ok)
+            return failed.length === 0 ? { ok: true } : { ok: false, error: failed.length + ' 个会话收回失败' }
+          }, '已收回全部会话的授权')),
+      ),
+    ),
+
+    h('div', { className: 'ops-access-panel-section' },
+      h('div', { className: 'ops-access-panel-heading' }, '待决申请（全部会话）'),
+      requests.length === 0 && h('div', { className: 'ops-access-panel-empty' }, '无待决申请'),
+      requests.map((r) => h('div', { key: r.id, className: 'ops-access-panel-row' },
+        h('span', { className: 'ops-access-panel-row-title' }, r.kind + '/' + r.name),
+        h('span', { className: 'ops-access-panel-row-detail' }, r.session + ' · 请求 ' + r.requestedTtlMinutes + ' 分钟 · ' + r.reason),
+      )),
+    ),
+
+    h('div', { className: 'ops-access-panel-section' },
+      h('div', { className: 'ops-access-panel-heading' }, '封禁（连只读也锁定）'),
+      denied.length === 0 && h('div', { className: 'ops-access-panel-empty' }, '无封禁档案'),
+      denied.map((d) => {
+        const key = d.kind + '/' + d.name
+        return h('div', { key, className: 'ops-access-panel-grant' },
+          h('div', { className: 'ops-access-panel-row' },
+            h('span', { className: 'ops-access-panel-dot deny', title: '已封禁' }),
+            h('span', { className: 'ops-access-panel-row-title' }, key),
+            h('span', { className: 'ops-access-panel-row-detail' }, d.reason + ' · ' + d.deniedBy),
+            h('button', { className: 'ops-access-panel-btn', onClick: () => setConfirmKey('undeny:' + key) }, '解封…'),
+          ),
+          confirmStrip('undeny:' + key, '解封 ' + key + '？恢复正常的 ro/rw 授权流程', () =>
+            void run(() => postPanelUndeny(d.kind, d.name), '已解封 ' + key)),
+        )
+      }),
+    ),
+  )
+}
 // ── Plugin apply ─────────────────────────────────────────────────────────────
 
 function apply(ctx: Context): void {
@@ -1402,14 +1699,18 @@ function apply(ctx: Context): void {
         } catch {
           return []
         }
-        return list.map((c): InputTriggerCandidate => ({
-          name: `${c.kind}/${c.name}`,
+        return list.map((c): InputTriggerCandidate => {
           // Badge rw-only entries: the agent cannot read them yet, but the
           // rw→ro derivation flow starts from picking exactly these.
-          description: c.ro ? c.description : [c.description, 'ro 未注册（可由 rw 派生）'].filter(Boolean).join(' — '),
-          hint: c.environment,
-          value: c.mention,
-        }))
+          const base = c.ro ? c.description : [c.description, 'ro 未注册（可由 rw 派生）'].filter(Boolean).join(' — ')
+          const probe = mentionProbeText(c)
+          return {
+            name: `${c.kind}/${c.name}`,
+            description: [base, probe].filter(Boolean).join(' · ') || undefined,
+            hint: c.environment,
+            value: c.mention,
+          }
+        })
       },
       onPick({ candidate }) {
         const mention = candidate.value
@@ -1452,15 +1753,47 @@ function apply(ctx: Context): void {
   // itself is registered preset-plane by the gate — the panel opens only in
   // sessions whose preset mounts the gate.
   ;(ctx as unknown as { inject(deps: string[], cb: (c: unknown) => void): void }).inject(['opsPanels'], (pctx) => {
-    const opsPanels = (pctx as { opsPanels?: { registerPanel(def: Record<string, unknown>): () => void } }).opsPanels
+    const opsPanels = (pctx as { opsPanels?: {
+      registerPanel(def: Record<string, unknown>): () => void
+      open(sessionId: string, command: string): boolean
+      close(sessionId: string): void
+    } }).opsPanels
     if (opsPanels === undefined) return
-    ;(pctx as { effect(fn: () => () => void): void }).effect(() =>
+    const effect = (pctx as { effect(fn: () => () => void): void }).effect.bind(pctx)
+    effect(() =>
       opsPanels.registerPanel({
         command: 'access',
         title: '访问授权',
         component: AccessPanel,
       }),
     )
+    // The seam's second consumer (ticket 13): cross-session overview. The
+    // registration API sufficed unchanged — ADR-0004 decision-8 checkpoint.
+    effect(() =>
+      opsPanels.registerPanel({
+        command: 'access-all',
+        title: '授权总览（跨会话）',
+        component: AccessOverviewPanel,
+      }),
+    )
+    // Pending-request badge in the input dock (ticket 03): lit while a
+    // request_access call parks — derived from the session snapshot, zero
+    // polling — click opens the approval deck through the seam's open().
+    if (slots !== undefined) {
+      effect(() =>
+        slots.inject('conversation.input.dock', () =>
+          slots.register(
+            { name: 'conversation.input.dock', id: 'ops-access-badge', order: 30 },
+            (props: { sessionId?: string, session?: { runningCalls?: readonly SnapshotRunningCall[] } }) =>
+              AccessBadge({
+                sessionId: props.sessionId,
+                session: props.session,
+                openPanel: (sid) => opsPanels.open(sid, 'access'),
+              }),
+          ),
+        ),
+      )
+    }
   })
 }
 
@@ -1475,8 +1808,8 @@ export { apply, inject, name }
 /** @internal */
 export {
   apiFetchList, apiFetchResult, fetchAdminList, fetchKinds, submitEntry, deleteEntry, AdminSection,
-  fetchPanelGrants, fetchPanelRequests, postPanelGrant, postPanelRevoke, postPanelRevokeAll, postPanelDecide,
-  AccessPanel, defaultTtlChoice, liveGrantFor,
+  fetchPanelGrants, fetchPanelRequests, fetchPanelOverview, groupBySession, postPanelGrant, postPanelExtend, postPanelRevoke, postPanelRevokeAll, postPanelDecide, postPanelDeny, postPanelUndeny,
+  AccessPanel, AccessBadge, pendingAccessCount, defaultTtlChoice, liveGrantFor,
 }
 /** @internal */
-export type { AdminEntry, AdminTierStatus, KindDescriptor, SubmitEntryBody, ApiResult, PanelGrant, PanelPendingRequest }
+export type { AdminEntry, AdminTierStatus, KindDescriptor, SubmitEntryBody, ApiResult, PanelGrant, PanelPendingRequest, PanelDenied, OverviewGrant }

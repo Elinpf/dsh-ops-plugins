@@ -1163,7 +1163,20 @@ describe('existing routes unchanged', () => {
     const json = JSON.stringify(body)
     expect(json).not.toContain('endpoint')
   })
-})
+  it('GET /ops-access/list carries probe verdicts for ok tiers, omits the rest', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    h.write(VALID_REGISTRY.replace('endpoint: https://alpha.internal',
+      'endpoint: https://alpha.internal\n      probe: { status: verified, probedAt: "2026-08-28T00:00:00Z" }'))
+    const { status, body } = await h.listRoute()
+    expect(status).toBe(200)
+    const alpha = body.find((c: { name: string }) => c.name === 'alpha')
+    expect(alpha.probe).toEqual({ ro: 'verified' })
+    const beta = body.find((c: { name: string }) => c.name === 'beta')
+    expect(beta.probe).toBeUndefined()
+    expect(JSON.stringify(body)).not.toContain('endpoint')
+  })
+});
 
 // ── register_access tool ─────────────────────────────────────────────────────
 
@@ -1276,6 +1289,35 @@ describe('register_access tool', () => {
     expect(res.message).toMatch(/invalid content for files\/prod ro kubeconfig: not a valid kubeconfig/)
     expect(existsSync(registryFile)).toBe(false)
     expect(existsSync(join(credentialsDir, 'files'))).toBe(false)
+  })
+
+  it('normalizes the trailing newline when the provider opts in, validating the normalized bytes', async () => {
+    const { handle, callRegisterAccess, credentialsDir } = setup()
+    const seen: string[] = []
+    handle.register({
+      ...fileProvider,
+      normalizeTrailingNewline: true,
+      validateContent: (_field, content) => { seen.push(content); return null },
+    })
+    const res = await callRegisterAccess({ profile: 'files/prod', fields: { kubeconfig: 'apiVersion: v1\n\n' } })
+    expect(res.ok).toBe(true)
+    const file = join(credentialsDir, 'files', 'prod', 'ro', 'kubeconfig')
+    expect(readFileSync(file, 'utf8')).toBe('apiVersion: v1\n')
+    // the validator saw exactly the bytes that landed on disk
+    expect(seen).toEqual(['apiVersion: v1\n'])
+  })
+
+  it('supports an async validateContent (deep-parse hooks like ssh-keygen)', async () => {
+    const { handle, callRegisterAccess } = setup()
+    handle.register({
+      ...fileProvider,
+      validateContent: async (_field, content) => content.includes('async-corrupt') ? 'deep parse failed' : null,
+    })
+    const bad = await callRegisterAccess({ profile: 'files/prod', fields: { kubeconfig: 'async-corrupt' } })
+    expect(bad.ok).toBe(false)
+    expect(bad.message).toMatch(/invalid content for files\/prod ro kubeconfig: deep parse failed/)
+    const good = await callRegisterAccess({ profile: 'files/prod2', fields: { kubeconfig: 'fine' } })
+    expect(good.ok).toBe(true)
   })
 
   it('rejects a path-hostile id BEFORE writing any credential file', async () => {
@@ -1464,3 +1506,46 @@ test:
   })
 })
 
+
+// ── capability probe (ticket 10) ─────────────────────────────────────────────
+
+describe('capability probe', () => {
+  it('stores the probe outcome beside the tier at save time; listAll surfaces it', async () => {
+    const probing: AccessProvider = { ...testProvider, probe: async () => ({ status: 'verified' }) }
+    const { handle, write } = setup()
+    handle.register(probing)
+    write(VALID_REGISTRY)
+    await handle.writeEntry('test', 'alpha', 'ro', { endpoint: 'https://alpha.internal' })
+    const entries = await handle.listAll()
+    const alpha = entries.find((e) => e.name === 'alpha')
+    expect(alpha?.tiers.ro.probe?.status).toBe('verified')
+    expect(typeof alpha?.tiers.ro.probe?.probedAt).toBe('string')
+    const profile = await handle.resolve('test', 'alpha')
+    expect(profile.fields.endpoint).toBe('https://alpha.internal')
+    expect(profile.fields.probe).toBeUndefined()
+  })
+
+  it('a throwing probe degrades to unverifiable and never rejects the write', async () => {
+    const probing: AccessProvider = { ...testProvider, probe: async () => { throw new Error('boom\nsecond line') } }
+    const { handle, write } = setup()
+    handle.register(probing)
+    write(VALID_REGISTRY)
+    await handle.writeEntry('test', 'alpha', 'ro', { endpoint: 'https://alpha.internal' })
+    const entries = await handle.listAll()
+    const alpha = entries.find((e) => e.name === 'alpha')
+    expect(alpha?.tiers.ro.probe?.status).toBe('unverifiable')
+    expect(alpha?.tiers.ro.probe?.detail).toBe('boom')
+  })
+
+  it('probe-less providers stay unprobed; a garbage persisted probe is dropped at the boundary', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(VALID_REGISTRY)
+    await handle.writeEntry('test', 'alpha', 'ro', { endpoint: 'https://alpha.internal' })
+    let entries = await handle.listAll()
+    expect(entries.find((e) => e.name === 'alpha')?.tiers.ro.probe).toBeUndefined()
+    write(VALID_REGISTRY.replace('endpoint: https://alpha.internal', 'endpoint: https://alpha.internal\n      probe: { status: bogus }'))
+    entries = await handle.listAll()
+    expect(entries.find((e) => e.name === 'alpha')?.tiers.ro.probe).toBeUndefined()
+  })
+})

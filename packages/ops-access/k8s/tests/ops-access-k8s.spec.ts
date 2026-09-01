@@ -1,3 +1,4 @@
+import { assessK8sTier, provider } from '../src/index.ts'
 /**
  * Unit spec for ops-access-k8s: schema accept/reject, `~` expansion in
  * process, and registration/disposal through a mock opsAccess context.
@@ -178,5 +179,55 @@ describe('validateContent current-context', () => {
     expect(d).toContain('--raw')
     expect(d).toContain('current-context')
     expect(d).toContain('forbidden')
+  })
+})
+
+// ── capability probe (ticket 10) ─────────────────────────────────────────────
+
+describe('capability probe', () => {
+  it('ro verifies when reading works and writing is denied', () => {
+    expect(assessK8sTier(true, false, 'ro')).toEqual({ status: 'verified' })
+  })
+  it('ro mismatches when write is allowed — an over-privileged credential in the ro slot', () => {
+    const r = assessK8sTier(true, true, 'ro')
+    expect(r.status).toBe('mismatch')
+    expect(r.detail).toContain('ro slot')
+  })
+  it('ro mismatches when the credential cannot even read', () => {
+    const r = assessK8sTier(false, false, 'ro')
+    expect(r.status).toBe('mismatch')
+    expect(r.detail).toContain('cannot even read')
+  })
+  it('rw verifies on read+write; mismatches with the can-i summary otherwise', () => {
+    expect(assessK8sTier(true, true, 'rw')).toEqual({ status: 'verified' })
+    const r = assessK8sTier(true, false, 'rw')
+    expect(r.status).toBe('mismatch')
+    expect(r.detail).toContain('create deployments=no')
+  })
+  it('the real probe degrades to unverifiable when kubectl cannot reach the cluster', async () => {
+    const res = await provider.probe!({ kubeconfigPath: '/nonexistent/kubeconfig' }, 'ro')
+    expect(res.status).toBe('unverifiable')
+    expect(JSON.stringify(res)).not.toContain('/nonexistent')
+  }, 20000)
+})
+
+describe('probe facets (review fix)', () => {
+  it('facets annotate a verified result without gating it', () => {
+    const r = assessK8sTier(true, false, 'ro', { servicesProxy: true, podsExec: false })
+    expect(r.status).toBe('verified')
+    expect(r.detail).toBe('facets: services/proxy=yes, pods/exec=no')
+  })
+  it('unknown facets are annotated as unknown, never silently dropped', () => {
+    const r = assessK8sTier(true, true, 'rw', { servicesProxy: null, podsExec: null })
+    expect(r.status).toBe('verified')
+    expect(r.detail).toBe('facets: services/proxy=unknown, pods/exec=unknown')
+  })
+  it('facets ride along on mismatches too', () => {
+    const r = assessK8sTier(true, true, 'ro', { servicesProxy: false, podsExec: true })
+    expect(r.status).toBe('mismatch')
+    expect(r.detail).toContain('pods/exec=yes')
+  })
+  it('no facets argument keeps the bare verified shape (backwards compatible)', () => {
+    expect(assessK8sTier(true, false, 'ro')).toEqual({ status: 'verified' })
   })
 })

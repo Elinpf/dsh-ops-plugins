@@ -109,6 +109,19 @@ export interface MonitoringStatus {
   down: number
 }
 
+/** rook-ceph footprint hints discovered in a cluster (ticket 15). */
+export interface CephHints {
+  /** CephBlockPool CRs — the pool names to use with the ceph tool (`rbd ls -p <name>`). */
+  pools: { namespace: string, name: string }[]
+  /** CephCluster CRs. */
+  clusters: { namespace: string, name: string }[]
+  /**
+   * rook-ceph-tools pod location when one is deployed (in-cluster ceph
+   * CLI); absent = none deployed, which is itself useful to know.
+   */
+  toolsPod?: { namespace: string, name: string }
+}
+
 /** Raw read of one cluster — the scanner's output before classification. */
 export interface ClusterScan {
   /** Cluster profile id (the ops-access registry key), never a path. */
@@ -130,6 +143,12 @@ export interface ClusterScan {
    * scraped (undefined otherwise — enhancement, never a hard dependency).
    */
   prometheus?: { service: string, targets: PromTarget[] }
+  /**
+   * rook-ceph hints, when any were found (pools/clusters/tools pod).
+   * Absent both when the cluster has no rook footprint AND when the reads
+   * failed — absence of evidence is not annotated.
+   */
+  ceph?: CephHints
 }
 
 /** A workload after classification. `type` is a middleware name, 'infra', or 'unknown'. */
@@ -190,4 +209,6 @@ export interface ClusterInventory {
   edges: RelationEdge[]
   /** The Prometheus service this cluster's monitoring data came from. */
   prometheusService?: string
+  /** rook-ceph footprint hints carried through from the scan. */
+  ceph?: CephHints
 }

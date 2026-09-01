@@ -105,13 +105,39 @@ export interface AccessProvider {
    * Save-time validator for a file field's pasted CONTENT, run before the
    * content is written to disk (the admin UI route and the register_access
    * tool share this check). Return an error message to reject the write,
-   * nothing to accept. Keep it structural — format and shape only (a ceph
+   * nothing to accept. May be ASYNC — a provider may run a real local
+   * parser (ssh passes the paste through ssh-keygen -y, the same parser ssh
+   * runs at connection time). Receives the content AFTER provider-declared
+   * normalization (normalizeTrailingNewline), i.e. exactly the bytes that
+   * will land on disk. Keep it structural — format and shape only (a ceph
    * keyring has an indented, base64-decodable key line; a kubeconfig parses
    * as YAML with clusters/contexts/users), never connectivity or value
    * judgments. Catching paste corruption here beats a cryptic CLI parse
    * error at use time.
    */
-  validateContent?: (field: string, content: string) => string | null | undefined
+  validateContent?: (field: string, content: string) => string | null | undefined | Promise<string | null | undefined>
+  /**
+   * When true, file-field content is normalized to end with exactly one
+   * trailing newline BEFORE validation and write. PEM/armored formats
+   * require the END line newline-terminated, and pastes / model transcripts
+   * routinely drop that last byte (2026-08-27: a registered ssh key failed
+   * in libcrypto at first use over exactly one missing newline).
+   */
+  normalizeTrailingNewline?: boolean
+  /**
+   * Capability probe (ticket 10): verify the credential's REAL
+   * permissions against the claimed tier. Core runs it at save time,
+   * after validation (credential files are on disk by then), and stores
+   * the result as a `probe` key beside the tier in the registry —
+   * surfaced by listAll / list_access / the admin UI. Receives the
+   * schema-validated, provider-processed fields. A probe must be
+   * READ-ONLY against the infrastructure (k8s runs a can-i matrix;
+   * ceph re-reads `auth get` caps). Providers that cannot probe (ssh —
+   * there is no read-only shell to test) omit the hook; their tiers
+   * stay unprobed. Probe failures degrade to 'unverifiable' — they
+   * never reject the write.
+   */
+  probe?: (fields: Record<string, unknown>, tier: 'ro' | 'rw') => Promise<{ status: ProbeState['status'], detail?: string }>
 }
 
 /** A resolved access profile: envelope fields plus the provider-processed type-specific fields. */
@@ -146,10 +172,40 @@ export interface EntryEnvelope {
   environment?: string
 }
 
+/**
+ * Capability-probe outcome for one tier (ticket 10): whether the stored
+ * credential's REAL permissions match its claimed tier, measured at save
+ * time. 'verified' = claims match reality; 'mismatch' = reality
+ * contradicts the tier (an admin credential sitting in the ro slot is
+ * the classic case); 'unverifiable' = the probe could not run (binary
+ * missing, cluster unreachable) — never a write rejection.
+ */
+export interface ProbeState {
+  status: 'verified' | 'mismatch' | 'unverifiable'
+  detail?: string
+  /** ISO timestamp of the probe run. */
+  probedAt: string
+}
+
+/** Read a persisted probe result off a raw tier object (durable boundary — sanitize). */
+function probeOf(tierRaw: unknown): ProbeState | undefined {
+  if (!isPlainObject(tierRaw)) return undefined
+  const p = (tierRaw as Record<string, unknown>).probe
+  if (!isPlainObject(p)) return undefined
+  const probe = p as Record<string, unknown>
+  if (probe.status !== 'verified' && probe.status !== 'mismatch' && probe.status !== 'unverifiable') return undefined
+  if (typeof probe.probedAt !== 'string') return undefined
+  const out: ProbeState = { status: probe.status, probedAt: probe.probedAt }
+  if (typeof probe.detail === 'string') out.detail = probe.detail
+  return out
+}
+
 /** Validation status of one entry in one tier — `error` carries the zod reason, never field values. */
 export interface AdminTierStatus {
   ok: boolean
   error?: string
+  /** Capability-probe outcome recorded at save time, when the provider probes. */
+  probe?: ProbeState
 }
 
 /** One entry in the merged admin view: envelope + per-tier validation status, never fields. */
@@ -224,7 +280,7 @@ export interface OpsAccess {
    * structural failures: unknown kind, missing file, unparseable file, or
    * missing entry.
    */
-  canResolve(kind: string, name: string, tier: 'ro' | 'rw'): Promise<{ ok: boolean, error?: string }>
+  canResolve(kind: string, name: string, tier: 'ro' | 'rw'): Promise<AdminTierStatus>
   /**
    * Resolve one profile by kind and name. Throws on unknown kind, unknown
    * name, or invalid entry. When a broker is registered it is consulted on
@@ -468,7 +524,7 @@ function assertValidProfileName(profileName: string): void {
   }
 }
 
-async function writeContentFiles(credentialsDir: string, kind: string, profileName: string, tier: string, fileFields: readonly string[], contentFiles: Record<string, unknown>, entryFields: Record<string, unknown>, validateContent?: AccessProvider['validateContent']): Promise<string[]> {
+async function writeContentFiles(credentialsDir: string, kind: string, profileName: string, tier: string, fileFields: readonly string[], contentFiles: Record<string, unknown>, entryFields: Record<string, unknown>, provider?: AccessProvider): Promise<string[]> {
   const allowed = new Set(fileFields)
   const written: string[] = []
   for (const [fieldName, content] of Object.entries(contentFiles)) {
@@ -481,16 +537,19 @@ async function writeContentFiles(credentialsDir: string, kind: string, profileNa
     if (!allowed.has(fieldName)) {
       throw new Error(`ops-access: "${fieldName}" is not a declared file field for kind "${kind}" (declared: ${fileFields.join(', ') || '(none)'})`)
     }
-    // Save-time content validation (provider hook): reject corrupt pastes
-    // BEFORE anything lands on disk.
-    const problem = validateContent?.(fieldName, content)
+    // Provider-declared write-time normalization runs FIRST — validator
+    // and disk both see the normalized bytes.
+    const normalized = provider?.normalizeTrailingNewline ? content.replace(/[\r\n]+$/, '') + '\n' : content
+    // Save-time content validation (provider hook, possibly async — ssh
+    // runs ssh-keygen): reject corrupt pastes BEFORE anything lands on disk.
+    const problem = await provider?.validateContent?.(fieldName, normalized)
     if (problem) {
       throw new Error(`ops-access: invalid content for ${kind}/${profileName} ${tier} ${fieldName}: ${problem}`)
     }
     const dir = credentialsDir + '/' + kind + '/' + profileName + '/' + tier
     await mkdir(dir, { recursive: true })
     const filePath = dir + '/' + fieldName
-    await writeFile(filePath, content, { encoding: 'utf8', mode: 0o600 })
+    await writeFile(filePath, normalized, { encoding: 'utf8', mode: 0o600 })
     written.push(filePath)
     entryFields[fieldName] = filePath
   }
@@ -597,7 +656,7 @@ export function apply(ctx: Context, config: Config): void {
       return dispose
     },
 
-    async canResolve(kind: string, profileName: string, tier: 'ro' | 'rw'): Promise<{ ok: boolean, error?: string }> {
+    async canResolve(kind: string, profileName: string, tier: 'ro' | 'rw'): Promise<AdminTierStatus> {
       const provider = providers.get(kind)
       if (!provider) return { ok: false }
       // Load + locate the entry in its own try/catch: a missing or unparseable
@@ -711,6 +770,7 @@ export function apply(ctx: Context, config: Config): void {
         '      ro:                                      # ro tier fields (agent-readable default)',
         '        <kind-specific fields, see below>',
         '      rw:                                      # rw tier fields (grant-gated)',
+        '        probe: {...}                            # auto-managed capability check (ticket 10): status/detail/probedAt, written at save time — do not edit',
         '',
         'Registered kinds and their entry fields:',
       ]
@@ -766,7 +826,19 @@ export function apply(ctx: Context, config: Config): void {
       // touch the file. buildProfile throws with zod issue paths + messages,
       // never raw field values. (The in-memory merged entry is what we
       // validate, matching the spec's read→merge→validate→write sequence.)
-      buildProfile(provider, kind, profileName, tier, tierData, registryFile, entry)
+      const writtenProfile = buildProfile(provider, kind, profileName, tier, tierData, registryFile, entry)
+      // Capability probe (ticket 10): verify claims against reality at save
+      // time — the credential files are already on disk (the caller writes
+      // them first). A probe failure degrades to 'unverifiable', never a
+      // write rejection.
+      if (provider.probe) {
+        const probed = await provider.probe(writtenProfile.fields, tier)
+          .catch((err: unknown) => ({
+            status: 'unverifiable' as const,
+            detail: err instanceof Error ? err.message.split('\n')[0] : String(err),
+          }))
+        tierData.probe = { ...probed, probedAt: new Date().toISOString() }
+      }
       await saveRegistry(registryFile, registry)
     },
 
@@ -813,6 +885,11 @@ export function apply(ctx: Context, config: Config): void {
           const envelope = buildEnvelope([entry as Record<string, unknown>])
           const roStatus = await handle.canResolve(kind, name, 'ro')
           const rwStatus = await handle.canResolve(kind, name, 'rw')
+          const rawEntry = entry as Record<string, unknown>
+          const roProbe = probeOf(rawEntry.ro)
+          if (roProbe !== undefined) roStatus.probe = roProbe
+          const rwProbe = probeOf(rawEntry.rw)
+          if (rwProbe !== undefined) rwStatus.probe = rwProbe
           result.push({ kind, name, envelope, tiers: { ro: roStatus, rw: rwStatus } })
         }
       }
@@ -935,7 +1012,7 @@ export function apply(ctx: Context, config: Config): void {
       let written: string[] = []
       try {
         if (Object.keys(contentFiles).length > 0) {
-          written = await writeContentFiles(credentialsDir, kind, profileName, 'ro', descriptor.fileFields ?? [], contentFiles, entryFields, providers.get(kind)?.validateContent)
+          written = await writeContentFiles(credentialsDir, kind, profileName, 'ro', descriptor.fileFields ?? [], contentFiles, entryFields, providers.get(kind))
         }
         // writeEntry validates against the provider schema BEFORE touching
         // the registry; its errors carry zod issue paths + messages, never
@@ -970,6 +1047,14 @@ export function apply(ctx: Context, config: Config): void {
         // Tier readiness flags ride along so the picker can badge them;
         // fields never cross (listAll is envelope + status only).
         const entries = await handle.listAll()
+        // Probe verdicts ride along for ok tiers (ticket 10 review fix: the
+        // @ menu is one of the three display surfaces the ticket names).
+        const probeOf2 = (tiers: AdminEntry['tiers']): { ro?: string, rw?: string } | undefined => {
+          const out: { ro?: string, rw?: string } = {}
+          if (tiers.ro.ok && tiers.ro.probe !== undefined) out.ro = tiers.ro.probe.status
+          if (tiers.rw.ok && tiers.rw.probe !== undefined) out.rw = tiers.rw.probe.status
+          return Object.keys(out).length > 0 ? out : undefined
+        }
         const candidates = entries
           .filter((e) => needle === ''
             || `${e.kind}/${e.name}`.toLocaleLowerCase().includes(needle)
@@ -983,6 +1068,7 @@ export function apply(ctx: Context, config: Config): void {
             ...e.envelope.environment === undefined ? {} : { environment: e.envelope.environment },
             ro: e.tiers.ro.ok,
             rw: e.tiers.rw.ok,
+            ...(() => { const p = probeOf2(e.tiers); return p === undefined ? {} : { probe: p } })(),
             mention: formatAccessMention({ kind: e.kind, name: e.name }),
           }))
         res.writeHead(200, { 'content-type': 'application/json' })
@@ -1051,7 +1137,7 @@ export function apply(ctx: Context, config: Config): void {
             assertValidProfileName(name)
             let writtenFiles: string[] = []
             if (isPlainObject(contentFiles)) {
-              writtenFiles = await writeContentFiles(credentialsDir, kind, name, tier, provider?.fileFields ?? [], contentFiles, entryFields, provider?.validateContent)
+              writtenFiles = await writeContentFiles(credentialsDir, kind, name, tier, provider?.fileFields ?? [], contentFiles, entryFields, provider)
             }
             // Write-only-after-save preserve: file fields never come back
             // from the UI (getEntry withholds them), so an edit request

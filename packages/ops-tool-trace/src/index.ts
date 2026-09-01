@@ -658,6 +658,12 @@ function apply(ctx: Context, _config: Record<string, never>): void {
     projectionRegistry = pctx.sessionProjections ?? null
   })
 
+  // Once-per-tree latch for the add_step flat-hang hint, keyed by
+  // session + tree position in the forest: a hint teaches the drill-down
+  // habit at the moment it matters; repeating it on every flat add is
+  // noise — the nesting reminder (pre-step) remains as the backstop.
+  const hintLatched = new Set<string>()
+
   // The store owns the in-process forest map and the seeding protocol; the
   // projection registry only feeds it snapshots.
   const store = new SessionForestStore(
@@ -672,7 +678,7 @@ function apply(ctx: Context, _config: Record<string, never>): void {
   // Clean up in-process tree state when the plugin's fiber is disposed
   // (process restart, preset unmount); the store re-seeds from the projection
   // on next access.
-  ctx.effect(() => () => { store.clear() })
+  ctx.effect(() => () => { store.clear(); hintLatched.clear() })
 
   // ── Register model tool (06) ──────────────────────────────────────────────
   ctx.tools.register(defineTool({
@@ -826,7 +832,15 @@ function apply(ctx: Context, _config: Record<string, never>): void {
             const doneSteps = tree.nodes.filter((n) =>
               n.parent === parent.id && n.status === 'done' && n.summary !== null)
             if (doneSteps.length > 0) {
-              hint = milestoneFollowUpHint(doneSteps.map((n) => n.id))
+              // Once per tree — the tree's position in the forest is stable
+              // for its lifetime; a new tree (previous one resolved) earns
+              // its own single hint.
+              const forest = store.current(session).forest
+              const latchKey = session.id + ':' + forest.trees.indexOf(tree)
+              if (!hintLatched.has(latchKey)) {
+                hintLatched.add(latchKey)
+                hint = milestoneFollowUpHint(doneSteps.map((n) => n.id))
+              }
             }
           }
 

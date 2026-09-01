@@ -120,6 +120,7 @@ export function setup(opts: SetupOptions = {}) {
     auditFile,
     grantTtlOptions: [5, 10, 30],
     pendingRequestTimeoutMinutes: 5,
+    deniedFile: join(dir, 'denied.json'),
     ...opts.config,
   })
   const mountCore = () => coreApply(ctx, { registryFile, credentialsDir: join(dir, 'credentials') })

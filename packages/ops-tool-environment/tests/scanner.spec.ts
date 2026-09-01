@@ -187,3 +187,27 @@ describe('defaultExec (real spawn)', () => {
       .rejects.toThrow()
   })
 })
+
+describe('rook-ceph hints (ticket 15)', () => {
+  it('collects pools, cluster, and tools pod location', async () => {
+    const { exec } = fakeExec()
+    const scan = await scanCluster({ cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn: failSpawn })
+    expect(scan.ceph?.pools.map(p => p.name)).toEqual(['rbd-pool', 'cephfs-data-ec01'])
+    expect(scan.ceph?.clusters).toEqual([{ namespace: 'rook-ceph', name: 'rook-ceph' }])
+    expect(scan.ceph?.toolsPod).toEqual({ namespace: 'rook-ceph', name: 'rook-ceph-tools-67f5f5587c-kwgnx' })
+  })
+
+  it('ceph CRs forbidden (ro without rook RBAC) still reports the tools pod', async () => {
+    const { exec } = fakeExec({ failFor: ['ceph-crs'] })
+    const scan = await scanCluster({ cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn: failSpawn })
+    expect(scan.ceph?.pools).toEqual([])
+    expect(scan.ceph?.toolsPod?.name).toBe('rook-ceph-tools-67f5f5587c-kwgnx')
+  })
+
+  it('tools-pod read failure keeps the CR hints', async () => {
+    const { exec } = fakeExec({ failFor: ['pods-ceph-tools'] })
+    const scan = await scanCluster({ cluster: 'test', kubeconfigPath: FAKE_KUBECONFIG, exec, spawn: failSpawn })
+    expect(scan.ceph?.pools).toHaveLength(2)
+    expect(scan.ceph?.toolsPod).toBeUndefined()
+  })
+})

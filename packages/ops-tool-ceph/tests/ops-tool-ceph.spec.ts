@@ -27,6 +27,33 @@ describe('ceph', () => {
     expect(h.shellRequests[0].signal).toBe(exec.signal)
   })
 
+  it('rbd command: first word selects the rbd binary, injected flags unchanged', async () => {
+    const h = setup()
+    const { value } = await h.runCeph({ cluster: 'prod', command: 'rbd ls -p rbd-pool' })
+    expect(value.command).toBe('rbd --conf=<prod@ro:conf> --keyring=<prod@ro:keyring> ls -p rbd-pool')
+  })
+
+  it('rados command: first word selects the rados binary', async () => {
+    const h = setup()
+    const { value } = await h.runCeph({ cluster: 'prod', command: 'rados df' })
+    expect(value.command).toBe('rados --conf=<prod@ro:conf> --keyring=<prod@ro:keyring> df')
+  })
+
+  it('an explicit ceph prefix is stripped to the same ceph invocation', async () => {
+    const h = setup()
+    const { value } = await h.runCeph({ cluster: 'prod', command: 'ceph osd tree' })
+    expect(value.command).toBe('ceph --conf=<prod@ro:conf> --keyring=<prod@ro:keyring> osd tree')
+  })
+
+  it('a binary this tool does not wrap is rejected with a boundary message, shell untouched', async () => {
+    const h = setup()
+    const { value } = await h.runCeph({ cluster: 'prod', command: 'mount -t cephfs :/ /mnt/x' })
+    expect(value.exitCode).toBe(-1)
+    expect(value.error).toContain('runs locally')
+    expect(value.error).toContain('ssh tool')
+    expect(h.calls.shellRun).toBe(0)
+  })
+
   it('resolves the profile with kind "ceph" and the given cluster name', async () => {
     const seen: Array<[string, string]> = []
     const h = setup({

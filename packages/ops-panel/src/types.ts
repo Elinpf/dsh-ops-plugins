@@ -53,6 +53,21 @@ export interface OpsPanels {
    * @returns disposer removing the panel.
    */
   registerPanel(def: PanelDefinition): () => void
+  /**
+   * Open a panel without a slash command (ADR-0004 §9): the imperative
+   * path for ambient affordances — e.g. the access-request badge pulling
+   * up the approval deck while a request_access call parks.
+   * @param sessionId - the session whose overlay hosts the panel.
+   * @param command - the panel's command name.
+   * @returns false when nothing is registered for the command or the
+   *   panel's capability filter declines this session.
+   */
+  open(sessionId: string, command: string): boolean
+  /**
+   * Dismiss the session's open panel. No-op when none is open.
+   * @param sessionId - the session whose panel to close.
+   */
+  close(sessionId: string): void
 }
 
 /** Spec for the node-side slash command that triggers a panel. */

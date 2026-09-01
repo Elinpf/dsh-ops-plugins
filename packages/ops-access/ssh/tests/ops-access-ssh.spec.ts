@@ -3,7 +3,14 @@
  * process, and registration/disposal through a mock opsAccess context.
  */
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { execFile } from 'node:child_process'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
+
+const execFileAsync = promisify(execFile)
 import * as plugin from '../src/index.ts'
 import type { AccessProvider } from '@deepseek-ai/dsh-ops-access'
 
@@ -100,20 +107,52 @@ it('carries a derivationDoc for help()', () => {
   expect(plugin.provider.derivationDoc).toContain('register_access')
 })
 
-// ── validateContent (save-time paste guard) ──────────────────────────────────
+// ── validateContent (armor gate + REAL ssh-keygen parse) ─────────────────
 
 describe('validateContent', () => {
-  it('accepts PEM and OpenSSH private key blocks', () => {
-    expect(plugin.provider.validateContent?.('key', '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAA=\n-----END OPENSSH PRIVATE KEY-----\n')).toBeNull()
-    expect(plugin.provider.validateContent?.('key', '-----BEGIN RSA PRIVATE KEY-----\nMIIEow==\n-----END RSA PRIVATE KEY-----\n')).toBeNull()
+  let dir: string
+  let validKey: string
+  let encryptedKey: string
+
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'ops-ssh-spec-'))
+    await execFileAsync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', join(dir, 'plain')])
+    await execFileAsync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', 'pw123', '-f', join(dir, 'encrypted')])
+    validKey = await readFile(join(dir, 'plain'), 'utf8')
+    encryptedKey = await readFile(join(dir, 'encrypted'), 'utf8')
   })
 
-  it('rejects content that is not a private key', () => {
-    expect(plugin.provider.validateContent?.('key', 'ssh-ed25519 AAAA... ops@host\n')).toMatch(/not a private key/)
-    expect(plugin.provider.validateContent?.('key', '-----BEGIN OPENSSH PRIVATE KEY-----\ntruncated\n')).toMatch(/not a private key/)
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true })
   })
 
-  it('ignores non-file fields', () => {
-    expect(plugin.provider.validateContent?.('host', 'anything')).toBeNull()
+  it('opts into write-time trailing-newline normalization (the 2026-08-27 incident class)', () => {
+    expect(plugin.provider.normalizeTrailingNewline).toBe(true)
+  })
+
+  it('accepts a real parseable private key', async () => {
+    expect(await plugin.provider.validateContent?.('key', validKey)).toBeNull()
+  })
+
+  it('rejects a structurally plausible but corrupt key through the real parser', async () => {
+    // armor intact, body decodes to garbage — the old regex-only check passed this
+    const corrupt = '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAA=\n-----END OPENSSH PRIVATE KEY-----\n'
+    const res = await plugin.provider.validateContent?.('key', corrupt)
+    expect(res).toMatch(/ssh-keygen cannot parse this key/)
+  })
+
+  it('rejects a passphrase-protected key with a BatchMode explanation', async () => {
+    const res = await plugin.provider.validateContent?.('key', encryptedKey)
+    expect(res).toMatch(/passphrase/)
+    expect(res).toMatch(/BatchMode/)
+  })
+
+  it('rejects content that is not a private key', async () => {
+    expect(await plugin.provider.validateContent?.('key', 'ssh-ed25519 AAAA... ops@host\n')).toMatch(/not a private key/)
+    expect(await plugin.provider.validateContent?.('key', '-----BEGIN OPENSSH PRIVATE KEY-----\ntruncated\n')).toMatch(/not a private key/)
+  })
+
+  it('ignores non-file fields', async () => {
+    expect(await plugin.provider.validateContent?.('host', 'anything')).toBeNull()
   })
 })

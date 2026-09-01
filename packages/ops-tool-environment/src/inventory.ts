@@ -142,6 +142,7 @@ export function buildClusterInventory(
     edges,
   }
   if (scan.prometheus !== undefined) inventory.prometheusService = scan.prometheus.service
+  if (scan.ceph !== undefined) inventory.ceph = scan.ceph
   return inventory
 }
 

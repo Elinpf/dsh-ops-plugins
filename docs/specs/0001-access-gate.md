@@ -93,8 +93,8 @@ ops 模式下，agent 默认拿着 `access.yaml` 里登记的全部凭证的全�
 - **ro/rw 分档只是存放位置，无机制核验凭证的真实权限**——一个 admin 凭证躺进 ro 档就是默认全权限，门对此不可见。候选方向：provider 可选实现能力探针（k8s 用 `auth can-i` 自检，ceph/ssh 未必可行），或登记时人工声明 + 展示。下次架构走查若重提，先读这条。
 - **凭证管理没有 webui**——目前全部靠手编 YAML。候选方向：登记文件的浏览/校验界面（@ 菜单的候选路由 `/ops-access/list` 已是现成数据源），审批面板二期再谈。
 
-## 基础设施侧待办（2026-08-27 实战排查暴露，需改集群/账号权限，未定）
+## 基础设施侧待办（2026-08-27 实战排查暴露；2026-08-28 已补齐，票 14）
 
-- **k8s ro 档补 `pods/portforward` create**——否则环境清单的 Prometheus 印证（port-forward 读 targets）在 ro 路径上静默缺席。
-- **k8s ro 档补 PV(persistentvolumes）读取**——view ClusterRole 读不了 cluster-scope 的 PV,CSI 排查需要 volumeHandle/driver 信息。
-- **ceph ro 档补 `class-read`**——`rbd lock list` / `rbd info` 在 CSI 卷锁排查中需要。
+- ✅ **k8s ro 档补 `pods/portforward` create**——新建补充 ClusterRole/Binding `pf-test-cluster-ro-extra`（内置 view 不动）；删绑定实测 forbidden、恢复后 port-forward 读 Prometheus `/api/v1/targets` 200，因果闭环。注：`kubectl auth can-i create pods/portforward` 对该子资源误报 no（SSRR --list 显示正确），以功能实测为准。该补充角色 2026-08-28 又随票 15 增补 `ceph.rook.io` 的 cephclusters/cephblockpools 读取（ro 实测通过）。
+- ✅ **k8s ro 档补 PV(persistentvolumes）读取**——同一补充 ClusterRole（get/list/watch），ro 实测 `kubectl get pv` 正常列出。
+- ✅ **ceph ro 档补 `class-read`**——`auth caps client.pf-test-cluster-ro mon 'allow r' osd 'allow r class-read' mds 'allow r' mgr 'allow r'`；ro 实测 `rbd ls -p rbd-pool` 正常列出卷（原 Operation not permitted），`ceph df` 不受影响。

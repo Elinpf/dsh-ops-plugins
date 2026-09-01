@@ -12,6 +12,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import { parse as parseYaml } from 'yaml'
+import { execFile } from 'node:child_process'
 import type { AccessProvider } from '@deepseek-ai/dsh-ops-access'
 import { expandHome, registerAccessProvider } from '@deepseek-ai/dsh-ops-access'
 
@@ -43,6 +44,8 @@ export const provider: AccessProvider = {
   // Save-time guard against corrupt pastes: a kubeconfig must be a YAML
   // mapping with clusters, contexts, and users. Structural only — no
   // connectivity checks.
+  // Ticket 10: verify the credential's real permissions at save time.
+  probe: probeK8s,
   validateContent(field, content) {
     if (field !== 'kubeconfig') return null
     let doc: unknown
@@ -77,6 +80,74 @@ export const provider: AccessProvider = {
   },
 }
 
+
+// ── Capability probe (ticket 10) ─────────────────────────────────────────────
+
+/**
+ * Pure tier assessment from the can-i matrix (unit-tested directly):
+ * read = can-i get pods, write = can-i create deployments. ro verifies when
+ * reading works and writing is denied; rw verifies when both work.
+ */
+/** Live verdicts for the operationally interesting faces (ticket 10); null = the check could not run. */
+export interface K8sProbeFacets {
+  servicesProxy: boolean | null
+  podsExec: boolean | null
+}
+
+function fmtVerdict(v: boolean | null): string {
+  return v === null ? 'unknown' : v ? 'yes' : 'no'
+}
+
+export function assessK8sTier(read: boolean, write: boolean, tier: 'ro' | 'rw', facets?: K8sProbeFacets): { status: 'verified' | 'mismatch', detail?: string } {
+  // Facets ANNOTATE, never gate: subresource can-i verdicts can be wrong
+  // (the ticket-14 pods/portforward quirk), so they ride along as facts.
+  const facetNote = facets === undefined ? undefined : 'facets: services/proxy=' + fmtVerdict(facets.servicesProxy) + ', pods/exec=' + fmtVerdict(facets.podsExec)
+  const join = (base?: string): string | undefined => [base, facetNote].filter(Boolean).join(' · ') || undefined
+  if (tier === 'ro') {
+    if (read && !write) return { status: 'verified', ...(facetNote === undefined ? {} : { detail: facetNote }) }
+    if (write) return { status: 'mismatch', detail: join('claims ro but can-i create deployments = yes — an over-privileged credential sits in the ro slot') }
+    return { status: 'mismatch', detail: join('claims ro but can-i get pods = no — the credential cannot even read') }
+  }
+  if (read && write) return { status: 'verified', ...(facetNote === undefined ? {} : { detail: facetNote }) }
+  return { status: 'mismatch', detail: join('claims rw but can-i says: get pods=' + (read ? 'yes' : 'no') + ', create deployments=' + (write ? 'yes' : 'no')) }
+}
+
+/**
+ * One can-i verdict: true/false from kubectl's answer, null when the check
+ * itself could not run (unreachable cluster, missing binary). stderr is
+ * never surfaced — kubectl echoes the kubeconfig path in its errors.
+ */
+function canI(kubeconfig: string, verb: string, resource: string): Promise<boolean | null> {
+  return new Promise((resolve) => {
+    execFile('kubectl', ['--kubeconfig', kubeconfig, 'auth', 'can-i', verb, resource, '-n', 'default'],
+      { timeout: 10000 },
+      (err, stdout) => {
+        if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') { resolve(null); return }
+        const answer = (stdout ?? '').trim().toLowerCase()
+        if (answer.startsWith('yes')) { resolve(true); return }
+        if (answer.startsWith('no')) { resolve(false); return }
+        // kubectl exits 1 with the verdict on stdout for 'no', but a
+        // connection failure produces no verdict at all. Any answer that
+        // is not a clean yes/no verdict means the check itself failed —
+        // unverifiable, never a silent 'no' (review fix).
+        resolve(null)
+      })
+  })
+}
+
+async function probeK8s(fields: Record<string, unknown>, tier: 'ro' | 'rw') {
+  const kubeconfig = String(fields.kubeconfigPath ?? '')
+  const [read, write, servicesProxy, podsExec] = await Promise.all([
+    canI(kubeconfig, 'get', 'pods'),
+    canI(kubeconfig, 'create', 'deployments'),
+    canI(kubeconfig, 'get', 'services/proxy'),
+    canI(kubeconfig, 'create', 'pods/exec'),
+  ])
+  if (read === null || write === null) {
+    return { status: 'unverifiable' as const, detail: 'kubectl auth can-i could not run (cluster unreachable or kubectl missing)' }
+  }
+  return assessK8sTier(read, write, tier, { servicesProxy, podsExec })
+}
 // ── Plugin apply ─────────────────────────────────────────────────────────────
 
 export function apply(ctx: Context, _config: Record<string, never>): void {

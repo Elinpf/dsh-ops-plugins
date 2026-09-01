@@ -19,7 +19,7 @@
 
 ### ops-panel
 
-**面板缝**（ADR-0004 / spec 0003，已落地：packages/ops-panel）。会话作用域对话框的公共机制，独立插件包、以 cordis 服务形态提供（client 半 `ctx.opsPanels`，key 复数 = registry）：`registerPanel({ command, title, available?, component })` 注册一个面板，框架持有单一 `command/executed` 监听按命令名分发 + overlay 外壳（标题栏/Escape/背景关闭/每会话开关状态）。node 半只有无状态 helper `registerPanelCommand`（注册空 handler 的 host 命令，让 `/名字` 进斜杠菜单）。**服务而非纯库**——纯库会被各消费方 bundle 各打包一份，注册表/监听/外壳互撞（双模块实例教训）。先例是 dsh 的 ui-commands（`ctx.commandUi`），本缝是它的"完整对话框"档。消费方只剩四件身份：命令名、面板标题、内容组件、可用性过滤器。第一个消费方是授权面板。
+**面板缝**（ADR-0004 / spec 0003，已落地：packages/ops-panel）。会话作用域对话框的公共机制，独立插件包、以 cordis 服务形态提供（client 半 `ctx.opsPanels`，key 复数 = registry）：`registerPanel({ command, title, available?, component })` 注册一个面板，框架持有单一 `command/executed` 监听按命令名分发 + overlay 外壳（标题栏/Escape/背景关闭/每会话开关状态）。node 半只有无状态 helper `registerPanelCommand`（注册空 handler 的 host 命令，让 `/名字` 进斜杠菜单）。**服务而非纯库**——纯库会被各消费方 bundle 各打包一份，注册表/监听/外壳互撞（双模块实例教训）。先例是 dsh 的 ui-commands（`ctx.commandUi`），本缝是它的"完整对话框"档。消费方只剩四件身份：命令名、面板标题、内容组件、可用性过滤器。命令触发之外另有命令式 `open(sessionId, command)`/`close(sessionId)`（ADR-0004 §9），供待办信号拉起面板——第一个消费方是授权面板的待决申请角标（输入区 dock 红点计数，从会话快照 runningCalls 派生在飞的 request_access 数，零轮询；点击开审批台）。**第二消费方（票 13）是授权总览 `/access-all`**：跨会话查看所有在飞 rw 授权/待决申请/封禁列表（数据源 gate 新只读路由 `GET /ops-access/grants/all` + `OpsAccessGate.listAll()`），按授权收回、按会话收回全部、多会话时一键全局收回（复用既有 per-session 路由，未新增写路径）；注册 API 原样够用，ADR-0004 决策 8 的反向检查点通过。
 
 ### ops-prompts
 
@@ -38,12 +38,13 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 
 - **定义包 ops-access/core**（npm 名 `@deepseek-ai/dsh-ops-access`，不变）— 拥有 `ctx.opsAccess` 服务和登记文件，定义词汇类型
 - **提供方 ops-access/{k8s,ceph,ssh}** — 每种凭证类型一个：该类型的 zod schema、字段加工（如 `~` 展开）、可选的 `validateContent` 保存时内容校验。apply 里只调定义包的 `registerAccessProvider(ctx, provider)` 帮手注册——不要手写 `ctx.inject(['opsAccess'], ...)`（静态 inject 兄弟行服务会让 loader 死锁，帮手内含这段防护）
-- **保存时内容校验 (validateContent)** — provider 可选钩子，文件类字段的粘贴内容**落盘前**做结构性校验（k8s：合法 YAML 且有 clusters/contexts/users，且 `current-context` 必须指向已定义的 context——ops 工具不带 `--context`，缺失或失效的 current-context 会让每次调用都炸；ceph：行尾换行 + [global]/mon_host + keyring 的 key 行缩进且 base64 ≥16 字节；ssh：含 PRIVATE KEY 块）。两条写入路径（admin UI、register_access）共用，校验失败 400/ok:false 且零文件 IO——粘贴丢格式（如 ceph keyring 的 TAB 缩进）在保存时就报明确错误，而不是使用时爆 cannot parse buffer
+- **保存时内容校验 (validateContent)** — provider 可选钩子，文件类字段的粘贴内容**落盘前**做结构性校验（k8s：合法 YAML 且有 clusters/contexts/users，且 `current-context` 必须指向已定义的 context——ops 工具不带 `--context`，缺失或失效的 current-context 会让每次调用都炸；ceph：[global]/mon_host + keyring 的 key 行缩进且 base64 ≥16 字节；ssh：**盔甲检查 + 真实解析**——`ssh-keygen -y -P ''` 跑通才放行（与 ssh 连接时同一个解析器），加密私钥报 BatchMode 不可用的明确错误）。钩子可以是**异步**的（ssh 要跑子进程）；provider 可声明 **`normalizeTrailingNewline`**（ssh/ceph 启用）在**校验前**把内容归一化为恰好一个结尾换行——PEM 的 END 行必须换行终止，粘贴/模型转述常丢这一字节（2026-08-27：ssh 密钥落盘缺尾换行 → 使用时 error in libcrypto，密钥数学关系完全自洽仍失败）。两条写入路径（admin UI、register_access）共用，校验失败 400/ok:false 且零文件 IO——粘贴丢格式（如 ceph keyring 的 TAB 缩进）在保存时就报明确错误，而不是使用时爆 cannot parse buffer
+- **能力探针 (capability probe)**（票 10）— provider 可选钩子，登记/保存时核验凭证的**真实权限**与声明档位是否相符（k8s 跑 `kubectl auth can-i` 矩阵——读 pods 必须 yes、写 deployments 按档位定；services/proxy、pods/exec 只做实况标注不卡判——子资源 can-i 可能误报（票 14 的 portforward 教训）；ceph 回读 `ceph auth get` 的 caps 比对，`allow r class-read` 仍算只读、任何含 w 的权限束（rwx/wx 等）算可写；紧 ro 实体无权自读 auth 库（EACCES）会标「无法核验」并自解释——危险方向（超权凭证占 ro 槽）必有足够权限做 auth get，必被抓；ssh 没有可测的只读壳，不实现钩子、档位恒为未核验）。结果以 `probe` 键落在注册表该 tier 旁（status/detail/probedAt，自动管理勿手改），经 listAll 透出到 list_access（`[probe: ro 已核验 / rw 核验失败: …]`；无记录的档位标 声明未核验）和管理 UI（tier 徽章旁的已核验/核验失败/无法核验 chip）。探针只读、失败降级 unverifiable——**从不拒绝写入**；stderr 永不上浮（kubectl/ceph 的报错会带出凭证路径）。`canResolve` 返回类型并入 `AdminTierStatus`（probe 的载体）。
 - **消费方 ops-tool-{kubectl,ceph,ssh}** — 模型工具，按名字解析凭证后拼命令。留在 `packages/` 顶层：它们是工具层，不是凭证层
 
 ### ops-shell-tool
 
-**命令工具工厂**（`packages/ops-shell-tool`，纯库不是插件）。所有消费方共享的那套机器的唯一事实源：标准结果形状 `{ exitCode, stdout, stderr, command, error? }`、output schema、render、execute 模板（`ctx.get('opsAccess')` 现解析 → buildCommand 拼命令 → `ctx.shell` 执行，30s 超时，信号死亡 exitCode 归一为 -1，错误原样透传）。消费方只剩身份四件：工具名、解析的 kind、档案名参数名、`buildCommand`，外加可选的 `stderrNoise`——已知噪音 stderr 行的正则表（如 ceph 容器内缺默认 keyring 的告警），工厂在凭证擦除之后按行过滤，只丢精确匹配的行，其余 stderr 原样保留。
+**命令工具工厂**（`packages/ops-shell-tool`，纯库不是插件）。所有消费方共享的那套机器的唯一事实源：标准结果形状 `{ exitCode, stdout, stderr, command, error? }`、output schema、render、execute 模板（`ctx.get('opsAccess')` 现解析 → buildCommand 拼命令 → `ctx.shell` 执行，30s 超时，信号死亡 exitCode 归一为 -1 **并在 error 字段注明首因，永不裸 -1**（超时杀：含秒数、「操作可能已部分生效」警告、远端显式超时建议；调用方中止：aborted 文案；其他信号杀：透传信号名，SIGKILL 指向 OOM/策略/人为终止——裸 -1 曾让模型把挂死端点误诊为「管道不稳定」，2026-08-27 实战），错误原样透传）。消费方只剩身份四件：工具名、解析的 kind、档案名参数名、`buildCommand`，外加可选的 `stderrNoise`——已知噪音 stderr 行的正则表（如 ceph 容器内缺默认 keyring 的告警），工厂在凭证擦除之后按行过滤，只丢精确匹配的行，其余 stderr 原样保留。`shellQuote` 是导出助手：**ssh 消费方把整条远端命令引成单一参数**（`&&`/`|`/`;`/`$()` 全在远端 shell 解释，本地零切割——2026-08-27 近失事件：未引用时 `&&` 后段会以 root 在本地执行，manifest 恢复链差点断在本地）；kubectl 维持原样拼接（本地管道过滤有用），描述里明示「一次调用 = 一条子命令，`;`/`&&`/`$()` 不继承前缀」。**ceph 消费方按命令首词在 `[ceph, rbd, rados]` 白名单选二进制**（rbd/rados 是独立二进制不是 ceph 子命令——`ceph rbd ls` 的 no valid command found 曾诱使 agent 误诊为权限问题，2026-08-27），不包装的本地二进制（mount/ceph-fuse 等）直接拒绝并指路 ssh 工具；只读性由凭证 caps 在 mon/osd 强制执行，不靠二进制名兜底。
 
 **凭证引用 token（credential reference）**是路径不出日志的统一机制，只在工厂实现一次：buildCommand 用 `ref('字段名')` 标记文件类字段，得到展示 token `<id@tier:field>`（如 `<pf-test-cluster@rw:kubeconfigPath>`）；工厂在执行前把 token 换成 shell 安全引用的真实路径，并把展示命令、stdout、stderr 里所有真实路径的出现一律擦回 token（CLI 报错也会回显 --kubeconfig 路径，只改命令字符串堵不住）。模型和事件日志只看到 token，永远看不到 `/root/.dsh-ops/credentials/...`。
 
@@ -82,12 +83,12 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 - **凭证代发 (credential brokering)** — 门不改基础设施权限，只决定某 session 的工具调用拿到 ro 还是 rw 凭证
 - **两档账号 (ro/rw)** — 每环境静态预置只读/可写两套账号；ro/rw 是注册表条目内的 tier 子字段（单一注册表文件，默认 `~/.dsh-ops/access.yaml`，同现读现校验纪律；ADR-0003 由双文件合并而来），ro 档默认可用、rw 档需授权。门注册的 broker 是**纯决策函数**（`(kind, name, agent) => 'ro' | 'rw' | 拒绝`），不碰凭证内容。ssh 不分档，每次使用需授权
 - **授权 (grant)** — `{ session, profile, tier, 到期时间, 批准人, 理由 }`。agent 调 `request_access` 显式申请，人一次性批准；TTL 到期自动回落，可手动撤销，重启即清空。审批通道由 ADR-0004 从 dsh 原生 approval 换成自建待决请求通道（原生四态结果不能携带人修改后的 TTL）
-- **授权面板 (access panel)**（ADR-0004 / spec 0003，已落地：gate 提供路由与 /access 命令，ops-access-ui 渲染内容，ops-panel 提供外壳）— 人的授权操作唯一入口：会话作用域的自建对话框，敲 `/access`（host 命令）触发，client 半经 `command/executed` 本地事件打开。两个模式：空闲时是主动授权（选档案 → 选 TTL 档位 → 确认）/撤销面板；有待决请求时是审批台（可调档位后批准/拒绝）。不做固定设置页——固定页要先选目标会话，与 session 分键模型心智错位
+- **授权面板 (access panel)**（ADR-0004 / spec 0003，已落地：gate 提供路由与 /access 命令，ops-access-ui 渲染内容，ops-panel 提供外壳）— 人的授权操作唯一入口：会话作用域的自建对话框，敲 `/access`（host 命令）触发，client 半经 `command/executed` 本地事件打开。两个模式：空闲时是主动授权（选档案 → 选 TTL 档位 → 确认）/活跃授权管理面板（**延长**：按档位从现在起续期——不从旧到期点累加，反复续期也不会突破单档上限；过期 grant 不可续、只能重授，审计落 `grant-extend` 并带原到期点；收回单项/全部）；有待决请求时是审批台（可调档位后批准/拒绝）。不做固定设置页——固定页要先选目标会话，与 session 分键模型心智错位。注意路由是 preset-plane：**无活跃会话时 /ops-access/* 不存在**（请求落在 SPA fallback），现场验证路由必须先有一个跑着的会话
 - **待决请求 (pending request)**（同上）— agent 提权申请在 gate 进程内的驻留形态：入队后工具 Promise 挂起，人经面板 HTTP 路由裁决（批准可拨 TTL 档位）解出；默认 5 分钟无人裁决自动拒，exec.signal 中止按 cancelled 解出。headless（无 webServer）不入队、立即报错给带外指引
 - **面板授权 (panel grant)**（同上）— 人主动发起的授权，与申请批准的 grant **同构同寿命**（session 分键、TTL 有界、重启清空），只是跳过"agent 开口"。TTL 只能选档位（默认 5/10/30 分钟，Config 可配），主动授权与审批共用同一份档位
 - **对称通知**（同上）— 命令面不进模型历史，面板的授权/撤销动作由路由往目标 session 追加 model-visible 消息（`<access-grant>`/`<access-revoked>`），agent 立刻感知权限变化。撤销语义：**下一次解析生效，不掐断进行中命令**；面板可一键收回本会话全部授权
 - **授权账本 (grant ledger)** — 进程内授权表，按 `exec.agent.id`（= session id）分键；`exec.agent` 缺失时由 broker 裁决：两档 kind 回落 ro，ssh 类直接拒绝（ssh 凭证本质是 rw——没有真只读 shell——无会话可键权就不发）。apply（启动与 HMR 重载）即清空账本
-- **审计日志** — 授权（批准/到期/撤销）、rw 代发、账本重置（`ledger-reset`，启动与 HMR 各落一行）逐条落 JSONL 文件（默认 `~/.dsh-ops/audit.log`），不进 session 事件流
+- **审计日志** — 授权（批准/续期/到期/撤销）、rw 代发、账本重置（`ledger-reset`，启动与 HMR 各落一行）逐条落 JSONL 文件（默认 `~/.dsh-ops/audit.log`），不进 session 事件流。**完整性声明限定为「经门控工具的操作」**：持通用 bash 的 agent 可绕过门（读宿主机密钥自跑 ssh/kubectl），绕道操作只进 session 事件流（ADR-0001 §1 补记）；主要缓解是把门控工具修可靠让绕道失去动机，而非堵 bash
 
 ### 凭证管理 UI (Access Admin UI)
 
@@ -96,16 +97,18 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 - **id 与名称 (id vs display name)** — 条目的注册表键是 **id**：可读但稳定，进文件路径（`credentials/<kind>/<id>/<tier>/<field>`）、@-mention、工具参数、授权账本、关联引用，创建后不可改。`name`（envelope 字段）是**显示名**，只用于 UI 和 list_access 展示，随时可改、不触发任何文件移动。id 格式受限：字母/数字开头，可含 `. _ - @`（writeEntry 入口校验，防路径逃逸与 mention 语法破坏）
 - **凭证内容粘贴 (content paste)** — 文件类字段（provider 声明的 `fileFields`）在 UI 里直接粘贴凭证内容（kubeconfig、ceph.conf、keyring、私钥），core 落盘到 credentials 目录、注册表只存路径；用户从不接触宿主机路径。**只写不回读**：保存后内容永不回读——getEntry 只回非文件字段 + 文件字段的「已保存」布尔标记（连路径都不回），编辑表单该字段留空、占位提示「已保存 · 内容不可回读——粘贴新内容以覆盖」；留空提交=保留（服务端 carry-over 存回旧路径），粘贴新内容=覆盖
 - **envelope-only 列表** — 列表 API 只返回 kind/name/description/environment + 验证状态，不含 fields。和 `list_access` 工具的纪律一致；编辑回读（getEntry）是给人类操作员的显式例外
-- **凭证条目验证 (entry validation)** — 用现有 `canResolve` 机器（存在性 + provider schema 校验），返回 `{ ok: boolean, error?: string }`。**不做**真实权限探针（k8s `auth can-i` 等）——ro/rw 分档只是存放位置，无机制核验凭证的真实权限（ADR-0001 决策 2）
+- **凭证条目验证 (entry validation)** — 用现有 `canResolve` 机器（存在性 + provider schema 校验），返回 `AdminTierStatus`（`{ ok, error?, probe? }`）。条目验证本身不做联网探针——真实权限核验是独立的**能力探针**机制（见上方词条，票 10 起）：canResolve 只填 ok/error，探针结果由 listAll 从注册表 tier 旁的 `probe` 键挂上
 - **core 读写 (core read-write)** — core 从只读变读写，`OpsAccess` 接口增加 `writeEntry`/`deleteEntry`/`getEntry`/`listAll`。core 是注册表的唯一管理者，写入复用现有 `loadRegistry`/`buildProfile` 的 parse + validate 机器。写入路由在 preset 平面注册（和 `GET /ops-access/list` 同位置）
 - **kind 描述符 (KindDescriptor)** — `{ kind, jsonSchema, fieldsDoc?, fileFields? }`，通过 zod v4 的 `z.toJSONSchema()` 序列化 provider 的 zod schema 为标准 JSON Schema，前端据此动态渲染表单字段；fileFields 字段渲染为内容粘贴文本框
 - **派生注册 (derived registration)** — agent 持 rw 凭证在基础设施上自助创建只读账号（命名约定：k8s ServiceAccount `<id>-ro`、ceph `client.<id>-ro`），再调 **`register_access`** 工具把派生凭证写入 ro 档。不设授权门槛：ro 档是 agent 默认工作面，人可随时在管理 UI 注册/覆盖；rw 档永远只能人注册（工具只写 ro，kind/id 缺失时整条新建）。每次注册随工具调用进 session 事件流，可重建。各 kind 的派生配方是 provider 的 `derivationDoc`（prose 而非代码——命令随基础设施版本漂移，由 agent 用判断力执行），经 `list_access help: true` 按需拉取。文件类字段内容与 UI 粘贴共用同一落盘机器（`writeContentFiles`，0600，根目录可配 `credentialsDir`，默认 `~/.dsh-ops/credentials`）。配套可发现性：rw-only 条目在 @ 菜单、list_access、mention 注入三处都可见并标注「可派生」；`request_access` 对两档 kind 只要求 rw 档可解析（ro 缺失正是派生引导场景，若卡 ro 检查会死锁）；ro 缺失且 rw 存在时 resolve 的报错直接指向 register_access
+
+- **封禁 (deny 第四态)**（票 12）— 运维对某 profile 的显式锁：broker 裁决的第一道检查，连 ro 档也拒发（场景：凭证泄露、维护期、事故冻结）。与授权的三处本质区别：进程级而非会话级、**持久化**到 `~/.dsh-ops/denied.json`（重启不悄悄解冻）、封禁瞬间连带收回所有会话的该档案授权并通知。面板档案行红点 + 封禁/解封两段确认；审计事件 `deny`/`undeny`/`deny-block`；被封档案上的 request_access 直接快速失败（不挂起）。
 
 ## 环境清单 (Environment Inventory)
 
 ### 环境清单 (environment inventory)
 
-只读的环境地图，构建内容见 `docs/specs/0004-environment-inventory.md`。遍历 ops-access 注册的 k8s 集群，从 k8s API 盘出「集群 → 命名空间 → 中间件实例/应用 → 尽力而为的关联边 + Prometheus 监控状态」，落盘为 `~/.dsh-ops/environment.yaml`（自动生成、勿手改）。agent 通过 preset 平面的 `environment` 工具消费（overview / show / refresh），系统提示词只放一句引导。
+只读的环境地图，构建内容见 `docs/specs/0004-environment-inventory.md`。遍历 ops-access 注册的 k8s 集群，从 k8s API 盘出「集群 → 命名空间 → 中间件实例/应用 → 尽力而为的关联边 + Prometheus 监控状态」，落盘为 `~/.dsh-ops/environment.yaml`（自动生成、勿手改）。有 rook-ceph 足迹的集群额外带 **ceph 提示**（CephBlockPool 池名——即 ceph 工具的 `-p` 参数、CephCluster、rook-ceph-tools pod 位置；无 tools pod 会明写，缺席本身是有用信息），降级纪律与 endpoints 一致：CRD 不存在或 ro 档无权 list 就不带该段，扫描不受影响。agent 通过 preset 平面的 `environment` 工具消费（overview / show / refresh），系统提示词只放一句引导。
 
 ### 盘点 (scan)
 
