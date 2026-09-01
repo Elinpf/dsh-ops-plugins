@@ -20,6 +20,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ForestState, TreeState, TreeNode, NodeStatus } from '@deepseek-ai/dsh-ops-tool-trace/types'
 import { depthOf, flattenTree } from '@deepseek-ai/dsh-ops-tool-trace/tree-layout'
+import type { DockUiState, TraceDockProps } from './types.js'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -494,13 +495,11 @@ function TreeNodeItem({ node, depth, nodes }: { node: TreeNode, depth: number, n
 
 // ── Dock component ───────────────────────────────────────────────────────────
 
-// Per-session panel UI state. The dock unmounts when switching conversations,
-// so React state resets on every switch-back — the panel re-expanded and the
-// tree selection jumped to the first tree. Keep the two UI choices in a
-// module-level map keyed by session so they survive unmount.
-// activeIndex null = follow the active tree (auto), set = user-pinned.
-interface DockUiState { collapsed: boolean, activeIndex: number | null }
-
+// Per-session panel UI state (DockUiState lives in ./types.ts). The dock
+// unmounts when switching conversations, so React state resets on every
+// switch-back — the panel re-expanded and the tree selection jumped to the
+// first tree. Keep the two UI choices in a module-level map keyed by
+// session so they survive unmount.
 const dockUiState = new Map<string, DockUiState>()
 
 function uiStateFor(sessionKey: string): DockUiState {
@@ -520,10 +519,7 @@ function activeTreeIndex(forest: ForestState): number {
   return forest.trees.length - 1
 }
 
-function TraceDock({ useProjection, session }: {
-  useProjection?: (key: string) => unknown | undefined
-  session?: { sessionId?: string }
-}): any {
+function TraceDock({ useProjection, session }: TraceDockProps): any {
   let forest: ForestState | null = null
   try {
     if (useProjection) {
@@ -531,6 +527,8 @@ function TraceDock({ useProjection, session }: {
       forest = (val as ForestState | null | undefined) ?? null
     }
   } catch {
+    // useProjection throws when the projection registry is absent (deployment
+    // without ops-trace-ui's host half) — render the dock with no forest data.
     forest = null
   }
 

@@ -20,6 +20,39 @@ describe('export shape', () => {
     expect(plugin.Config).toBeDefined()
     expect(typeof plugin.apply).toBe('function')
   })
+
+  it('invariant subpath: companion plugin shape, no default', async () => {
+    const invariant = await import('../src/invariant.ts')
+    expect('default' in invariant).toBe(false)
+    expect(invariant.name).toBe('ops-kubectl-invariant')
+    expect(invariant.inject).toEqual(['invariants'])
+    expect(typeof invariant.apply).toBe('function')
+
+    // apply reserves package ownership on the invariants service.
+    const registered: string[] = []
+    await invariant.apply({ invariants: { register: (pkg: string) => { registered.push(pkg) } } } as any)
+    expect(registered).toEqual(['@deepseek-ai/dsh-ops-kubectl'])
+  })
+
+  it('types subpath is types-only: zero runtime exports', async () => {
+    const types = await import('../src/types.ts')
+    expect(Object.keys(types)).toEqual([])
+  })
+})
+
+// ── HMR unload ───────────────────────────────────────────────────────────────
+
+describe('HMR unload', () => {
+  it('running every effect disposer removes both tools from the registry', () => {
+    const h = setup()
+    // Both registrations went through ctx.effect: one disposer per tool.
+    expect(h.tools.map((t) => t.name).sort()).toEqual(['kubectl', 'list_access'])
+    expect(h.effectCleanups).toHaveLength(2)
+
+    for (const cleanup of h.effectCleanups) cleanup()
+
+    expect(h.tools).toEqual([])
+  })
 })
 
 // ── kubectl ──────────────────────────────────────────────────────────────────

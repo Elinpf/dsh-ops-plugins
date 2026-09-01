@@ -5,9 +5,26 @@
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./invariant": {
+      "types": "./lib/invariant.d.ts",
+      "default": "./lib/invariant.js"
+    },
+    "./types": {
+      "types": "./lib/types.d.ts",
+      "default": "./lib/types.js"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "lib/index.js",
-    "lib/index.d.ts",
+    "lib/invariant.js",
+    "lib/types.js",
+    "lib/**/*.d.ts",
     "cordis.patch.yml"
   ],
   "dsh": {
@@ -27,6 +44,7 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-invariants": "^0.0.1-rc.1",
     "@deepseek-ai/dsh-ops-access": "^0.1.0"
   },
   "devDependencies": {

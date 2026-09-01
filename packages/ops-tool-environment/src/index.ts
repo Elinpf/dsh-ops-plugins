@@ -35,6 +35,8 @@ export const Config: z<EnvironmentToolConfig> = z.object({
   inventoryFile: z.string().default(DEFAULT_INVENTORY_FILE),
   rulesFile: z.string().default(DEFAULT_USER_RULES_FILE),
   ttlMinutes: z.number().default(60),
+  scanTimeoutMs: z.number().default(30000),
+  prometheusTimeoutMs: z.number().default(15000),
 })
 
 // ── Plugin apply ─────────────────────────────────────────────────────────────

@@ -1,0 +1,4 @@
+title: "@deepseek-ai/dsh-ops-access-gate"
+description:
+  zh: "按会话凭据代理与人工审批 — 拥有授权台账，在每次凭据解析时裁决 ro/rw/deny"
+  en: "Per-session credential brokering with human approval — owns the authorization ledger, ruling ro/rw/deny on every resolve"

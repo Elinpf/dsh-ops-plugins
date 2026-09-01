@@ -1,0 +1,4 @@
+title: "@deepseek-ai/dsh-ops-access-ssh"
+description:
+  zh: "ops access 接缝的 SSH 凭据 provider — 校验 ssh registry 条目并展开密钥路径"
+  en: "SSH credential provider for the ops access seam — validates ssh registry entries and expands key paths"

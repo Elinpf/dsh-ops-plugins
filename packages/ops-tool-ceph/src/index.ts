@@ -16,6 +16,9 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { registerProfiledShellTool } from '@deepseek-ai/dsh-ops-shell-tool'
+import type { CephToolConfig } from './types.js'
+
+export type { CephToolConfig } from './types.js'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -25,7 +28,10 @@ export const inject = ['shell', 'tools']
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
-export const Config = z.object({})
+export const Config = z.object({
+  /** Per-call shell timeout for ceph runs (ms). Slow clusters may need more. */
+  timeoutMs: z.number().default(30000),
+})
 
 // ── Plugin apply ─────────────────────────────────────────────────────────────
 
@@ -50,8 +56,9 @@ const CEPH_BINARIES = ['ceph', 'rbd', 'rados'] as const
 // boundary instead of the mon's misleading 'no valid command found'.
 const NOT_WRAPPED = ['mount', 'umount', 'mount.ceph', 'ceph-fuse', 'ceph-volume', 'rclone', 'rbd-nbd', 'rbd-mirror'] as const
 
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, config: CephToolConfig): void {
   registerProfiledShellTool(ctx, {
+    timeoutMs: config.timeoutMs,
     name: 'ceph',
     kind: 'ceph',
     targetParam: 'cluster',

@@ -32,6 +32,20 @@ import type {
   InputTriggerCandidate,
   InputTriggerSource,
 } from '@deepseek-ai/dsh-client-ui-input-trigger'
+// Pure wire types live in ./types.ts (the package's ./types subpath); they
+// are erased at bundle time, so this import costs the client bundle nothing.
+import type {
+  AccessMentionCandidate,
+  AdminEntry,
+  AdminTierStatus,
+  KindDescriptor,
+  SubmitEntryBody,
+  ApiResult,
+  PanelGrant,
+  PanelPendingRequest,
+  PanelDenied,
+  OverviewGrant,
+} from './types.ts'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -40,20 +54,7 @@ const name = 'ops-access-ui-client'
 // — a ctx.get at apply time can lose the race and silently skip registration.
 const inject = ['inputTriggers', 'slots']
 
-// ── @-mention wire shape (mirrors the route in ops-access core) ─────────────
-
-interface AccessMentionCandidate {
-  kind: string
-  name: string
-  description?: string
-  environment?: string
-  /** Tier readiness — entries with only an rw tier still appear (ro derivable). */
-  ro: boolean
-  rw: boolean
-  /** Per-tier probe verdicts for ok tiers, when the provider probes (ticket 10). */
-  probe?: { ro?: string, rw?: string }
-  mention: string
-}
+// ── @-mention wire shape — AccessMentionCandidate lives in ./types.ts ──────
 
 /** Compact probe annotation for the @ menu (ticket 10 review fix), e.g. 'ro 已核验 · rw 核验失败'. */
 function mentionProbeText(c: AccessMentionCandidate): string | undefined {
@@ -65,53 +66,8 @@ function mentionProbeText(c: AccessMentionCandidate): string | undefined {
   return bits.length > 0 ? bits.join(' · ') : undefined
 }
 
-// ── Admin wire shapes (mirrors the admin routes in ops-access core) ─────────
-
-/** One entry in the merged admin view: envelope + per-tier validation, never fields. */
-interface AdminEntry {
-  kind: string
-  /** Stable id (registry key). */
-  name: string
-  /** envelope.name is the editable display label. */
-  envelope: { name?: string, description?: string, environment?: string }
-  tiers: { ro: AdminTierStatus, rw: AdminTierStatus }
-}
-
-/** Validation status of one entry in one tier. */
-interface AdminTierStatus {
-  ok: boolean
-  error?: string
-  /** Capability-probe outcome recorded at save time (ticket 10). */
-  probe?: { status: 'verified' | 'mismatch' | 'unverifiable', detail?: string, probedAt: string }
-}
-
-/** One registered credential kind: its JSON Schema and optional field docs. */
-interface KindDescriptor {
-  kind: string
-  jsonSchema: Record<string, unknown>
-  fieldsDoc?: string
-  fileFields?: string[]
-}
-
-/** Body for POST /ops-access/admin/entry. */
-interface SubmitEntryBody {
-  kind: string
-  /** The entry's stable id (registry key, paths, mentions). */
-  name: string
-  tier: 'ro' | 'rw'
-  fields: Record<string, unknown>
-  contentFiles?: Record<string, string>
-  /** Display label (editable, not an identity). */
-  displayName?: string
-  description?: string
-  environment?: string
-}
-
-/** Generic API result shape from the admin routes. */
-interface ApiResult {
-  ok: boolean
-  error?: string
-}
+// ── Admin wire shapes — AdminEntry/AdminTierStatus/KindDescriptor/ ──────────
+// ── SubmitEntryBody/ApiResult live in ./types.ts ────────────────────────────
 
 // ── Admin API functions ──────────────────────────────────────────────────────
 // Pure fetch wrappers so the data-fetching logic is unit-testable without
@@ -200,39 +156,7 @@ async function fetchEntry(kind, name, tier) {
 
 
 // ── Access panel API functions (mirror the gate's human-side routes) ─────────
-
-/** One live grant row as reported by GET /ops-access/grants. */
-interface PanelGrant {
-  kind: string
-  name: string
-  expiresAt: number
-  reason: string
-  approvedBy: string
-  remainingMinutes: number
-}
-
-/** One parked request_access call awaiting a human decision. */
-interface PanelPendingRequest {
-  id: string
-  session: string
-  /** The dispatching session, when the requester is a spawned sub-agent (血缘). */
-  parentSession?: string
-  kind: string
-  name: string
-  requestedTtlMinutes: number
-  reason: string
-  createdAt: number
-  decidesAt: number
-}
-
-/** One operator lockdown row as reported by GET /ops-access/grants (ticket 12). */
-interface PanelDenied {
-  kind: string
-  name: string
-  deniedAt: number
-  reason: string
-  deniedBy: string
-}
+// PanelGrant/PanelPendingRequest/PanelDenied live in ./types.ts.
 
 /** Fetch this session's live grants + the configured TTL options + the lockdown list. Null on failure. */
 async function fetchPanelGrants(sessionId: string, signal?: AbortSignal): Promise<{ grants: PanelGrant[], ttlOptions: number[], denied: PanelDenied[] } | null> {
@@ -748,14 +672,15 @@ const CSS = `
 }
 `.trim()
 
-let cssInjected = false
 function injectCSS(): void {
-  if (cssInjected || typeof document === 'undefined') return
+  if (typeof document === 'undefined') return
+  // Idempotent across HMR reloads: a fresh module instance must not append a
+  // second <style> tag, so guard on the DOM marker, not a module-level flag.
+  if (document.head.querySelector('style[data-plugin="ops-access-admin"]') !== null) return
   const tag = document.createElement('style')
   tag.dataset.plugin = 'ops-access-admin'
   tag.textContent = CSS
   document.head.appendChild(tag)
-  cssInjected = true
 }
 
 // ── Inline SVG icons (14px, same discipline as trace dock glyphs) ───────────
@@ -1559,9 +1484,7 @@ function AccessPanel({ sessionId }: AccessPanelProps): any {
 }
 
 // ── Cross-session overview panel (ticket 13 — the panel seam's second consumer) ──
-
-/** One cross-session grant row as reported by GET /ops-access/grants/all. */
-interface OverviewGrant extends PanelGrant { session: string }
+// OverviewGrant lives in ./types.ts.
 
 /** Fetch the cross-session overview: every session's grants + parked requests + lockdowns. Null on failure. */
 async function fetchPanelOverview(signal?: AbortSignal): Promise<{ grants: OverviewGrant[], requests: PanelPendingRequest[], denied: PanelDenied[], ttlOptions: number[] } | null> {

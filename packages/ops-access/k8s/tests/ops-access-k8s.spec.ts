@@ -15,8 +15,22 @@ describe('export shape', () => {
     expect('default' in plugin).toBe(false)
     expect(plugin.name).toBe('ops-access-k8s')
     expect(plugin.inject).toEqual([])
+    expect(typeof plugin.Config).toBe('function')
     expect(typeof plugin.apply).toBe('function')
     expect(plugin.provider.kind).toBe('k8s')
+  })
+
+  it('./invariant subpath is a companion plugin: named exports, no default', async () => {
+    const invariant = await import('../src/invariant.ts')
+    expect('default' in invariant).toBe(false)
+    expect(invariant.name).toBe('ops-access-k8s-invariant')
+    expect(invariant.inject).toEqual(['invariants'])
+    expect(typeof invariant.apply).toBe('function')
+  })
+
+  it('./types subpath is types-only: no runtime exports', async () => {
+    const types = await import('../src/types.ts')
+    expect(Object.keys(types)).toEqual([])
   })
 })
 
@@ -57,31 +71,47 @@ describe('process', () => {
 
 // ── Registration ─────────────────────────────────────────────────────────────
 
+/** Mock ctx whose register disposer really removes the provider from the registry. */
+function mockCtx() {
+  const registered: AccessProvider[] = []
+  const effectCleanups: Array<() => void> = []
+  const pctx: any = {
+    opsAccess: {
+      register: (p: AccessProvider) => {
+        registered.push(p)
+        return () => {
+          const i = registered.indexOf(p)
+          if (i >= 0) registered.splice(i, 1)
+        }
+      },
+    },
+    effect: (fn: () => () => void) => { effectCleanups.push(fn()) },
+  }
+  let injectedDeps: string[] = []
+  const ctx: any = {
+    inject: (deps: string[], cb: (c: any) => void) => { injectedDeps = deps; cb(pctx) },
+  }
+  return { ctx, registered, effectCleanups, get injectedDeps() { return injectedDeps } }
+}
+
 describe('apply', () => {
   it('defers through ctx.inject and registers once opsAccess arrives', () => {
-    const registered: AccessProvider[] = []
-    let disposed = false
-    const effectCleanups: Array<() => void> = []
-    const pctx: any = {
-      opsAccess: {
-        register: (p: AccessProvider) => {
-          registered.push(p)
-          return () => { disposed = true }
-        },
-      },
-      effect: (fn: () => () => void) => { effectCleanups.push(fn()) },
-    }
-    let injectedDeps: string[] = []
-    const ctx: any = {
-      inject: (deps: string[], cb: (c: any) => void) => { injectedDeps = deps; cb(pctx) },
-    }
+    const m = mockCtx()
+    plugin.apply(m.ctx, { probeTimeoutMs: 10000, probeNamespace: 'default' })
+    expect(m.injectedDeps).toEqual(['opsAccess'])
+    expect(m.registered).toHaveLength(1)
+    expect(m.registered[0].kind).toBe(plugin.provider.kind)
+    expect(m.effectCleanups).toHaveLength(1)
+  })
 
-    plugin.apply(ctx, {})
-    expect(injectedDeps).toEqual(['opsAccess'])
-    expect(registered).toEqual([plugin.provider])
-    expect(effectCleanups).toHaveLength(1)
-    effectCleanups[0]()
-    expect(disposed).toBe(true)
+  it('HMR unload: running the effect disposers removes the provider from the registry', () => {
+    const { ctx, registered, effectCleanups } = mockCtx()
+
+    plugin.apply(ctx, { probeTimeoutMs: 10000, probeNamespace: 'default' })
+    expect(registered.map((p) => p.kind)).toEqual(['k8s'])
+
+    for (const dispose of effectCleanups) dispose()
+    expect(registered).toEqual([])
   })
 })
 

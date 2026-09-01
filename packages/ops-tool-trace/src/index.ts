@@ -49,7 +49,7 @@ import type {
   TraceArgs,
   LinkPair,
 } from './types.js'
-import { activeTree, NODE_STATUSES } from './types.js'
+import { activeTree, NODE_STATUSES } from './node-status.js'
 import { SessionForestStore } from './session-forests.js'
 import { buildReminderContext, createIdleRule, createNestingRule, ReminderLatch } from './reminders.js'
 import type { ReminderContext } from './reminders.js'
@@ -66,7 +66,14 @@ const inject = ['tools']
 /**
  * Schemastery configuration for the ops-trace tool consumer.
  */
-const Config = z.object({})
+const Config = z.object({
+  /** Idle reminder: nudge after this many steps without a trace update (default 5). */
+  idleReminderGapSteps: z.number().default(5),
+  /** Idle reminder backoff ceiling (steps): the refire gap doubles per fire up to this cap (default 40). */
+  idleReminderBackoffCeilingSteps: z.number().default(40),
+  /** Nesting reminder: fires when this many steps hang flat under milestones with nothing deeper (default 3). */
+  nestingReminderFlatSteps: z.number().default(3),
+})
 
 // ── State machine (05) ───────────────────────────────────────────────────────
 
@@ -131,6 +138,8 @@ function foldEvent(state: ForestState | null, event: FoldEvent): ForestState | n
   try {
     args = typeof data.arguments === 'string' ? JSON.parse(data.arguments) : data.arguments
   } catch {
+    // Truncated/malformed arguments JSON (e.g. a hand-edited log line): skip
+    // the event — one corrupt record must not break the fold of the whole log.
     return state
   }
 
@@ -646,7 +655,7 @@ interface ProjectionRegistryLike {
   snapshot(session: { id: string }): { values: { trace?: ForestState | null } }
 }
 
-function apply(ctx: Context, _config: Record<string, never>): void {
+function apply(ctx: Context, config: { idleReminderGapSteps: number, idleReminderBackoffCeilingSteps: number, nestingReminderFlatSteps: number }): void {
   // ── Session projection access (09) ─────────────────────────────────────────
   // The projection itself is registered host-plane by ops-trace-ui (the
   // panel's package) — see its src/index.ts. Here we only capture the
@@ -1011,35 +1020,41 @@ function apply(ctx: Context, _config: Record<string, never>): void {
   // agent answers a reminder, so each quiet stretch starts over at 5. The
   // fire cap is a formality against runaway state, not the anti-spam
   // mechanism — the ceiling is.
-  const idleRule = createIdleRule(new ReminderLatch((fires) => Math.min(5 * 2 ** (fires - 1), 40), 1000))
-  const nestingRule = createNestingRule(new ReminderLatch(1, 5))
+  const idleRule = createIdleRule(new ReminderLatch((fires) => Math.min(config.idleReminderGapSteps * 2 ** (fires - 1), config.idleReminderBackoffCeilingSteps), 1000), config.idleReminderGapSteps)
+  const nestingRule = createNestingRule(new ReminderLatch(1, 5), config.nestingReminderFlatSteps)
   const runRule = (rule: (ctx: ReminderContext) => string | null) => (agent: unknown): string | null => {
     const ctx = buildReminderContext(agent, store)
     return ctx === null ? null : rule(ctx)
   }
 
-  const registerThroughHandle = (opsPrompts: OpsPromptsHandle): void => {
-    // Register tool usage prompt as a methodology section
-    opsPrompts.registerMethodology({
-      name: 'trace:usage',
-      order: 240,
-      text: staticText,
+  // registerMethodology/registerReminder return disposers — route them
+  // through ctx.effect so the methodology section and the reminder closures
+  // (which capture this plugin's store/latches) leave the ops-prompts
+  // registry when this plugin's fiber is disposed (HMR reload / preset
+  // unmount), instead of outliving it.
+  const registerThroughHandle = (rctx: Context, opsPrompts: OpsPromptsHandle): void => {
+    rctx.effect(() => {
+      const disposeMethodology = opsPrompts.registerMethodology({
+        name: 'trace:usage',
+        order: 240,
+        text: staticText,
+      })
+      const disposeIdle = opsPrompts.registerReminder({ name: 'trace:idle', check: runRule(idleRule) })
+      const disposeNesting = opsPrompts.registerReminder({ name: 'trace:nesting', check: runRule(nestingRule) })
+      return () => { disposeMethodology(); disposeIdle(); disposeNesting() }
     })
-
-    opsPrompts.registerReminder({ name: 'trace:idle', check: runRule(idleRule) })
-    opsPrompts.registerReminder({ name: 'trace:nesting', check: runRule(nestingRule) })
   }
 
   const immediateOpsPrompts = ctx.get('opsPrompts')
   if (immediateOpsPrompts !== undefined) {
-    registerThroughHandle(immediateOpsPrompts)
+    registerThroughHandle(ctx, immediateOpsPrompts)
   } else {
     // No direct systemPrompt fallback: this plugin is preset-plane only
     // (ops-trace-ui owns the host-plane projection + panel). When ops-prompts
     // is genuinely absent, the tool description and the help action still
     // carry the usage documentation.
     ctx.inject(['opsPrompts'], (pctx: Context) => {
-      registerThroughHandle(pctx.opsPrompts!)
+      registerThroughHandle(pctx, pctx.opsPrompts!)
     })
   }
 }

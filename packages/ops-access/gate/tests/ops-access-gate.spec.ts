@@ -11,6 +11,8 @@
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import * as plugin from '../src/index.ts'
+import * as invariantEntry from '../src/invariant.ts'
+import * as typesEntry from '../src/types.ts'
 import { setup, REGISTRY, SSH_REGISTRY } from './harness.ts'
 
 const SESSION_A = { id: 'sess-a' }
@@ -73,7 +75,26 @@ describe('export shape', () => {
     expect('default' in plugin).toBe(false)
     expect(plugin.name).toBe('ops-access-gate')
     expect(plugin.inject).toEqual(['tools'])
+    expect(typeof plugin.Config).toBe('function')
     expect(typeof plugin.apply).toBe('function')
+  })
+
+  it('the ./types entry is types-only: no runtime exports, no default', () => {
+    expect('default' in typesEntry).toBe(false)
+    expect(Object.keys(typesEntry)).toEqual([])
+  })
+
+  it('the ./invariant entry is a function plugin companion: named exports, no default', async () => {
+    expect('default' in invariantEntry).toBe(false)
+    expect(invariantEntry.name).toBe('ops-access-gate-invariant')
+    expect(invariantEntry.inject).toEqual(['invariants'])
+    expect(typeof invariantEntry.apply).toBe('function')
+    // The companion reserves package ownership and installs nothing.
+    const registered: Array<{ pkg: string, install: () => void }> = []
+    await invariantEntry.apply({ invariants: { register: (pkg: string, install: () => void) => registered.push({ pkg, install }) } })
+    expect(registered).toHaveLength(1)
+    expect(registered[0].pkg).toBe('@deepseek-ai/dsh-ops-access-gate')
+    expect(registered[0].install()).toBeUndefined()
   })
 })
 
@@ -898,5 +919,82 @@ describe('cross-session overview', () => {
   it('the /access-all panel command is registered alongside /access', () => {
     const h = setup()
     expect(h.commands.map((c: { name: string }) => c.name)).toEqual(['access', 'access-all'])
+  })
+})
+
+// ── HMR unload (fiber disposal) ─────────────────────────────────────────────
+
+/** The nine panel/backend routes the gate registers. */
+const GATE_ROUTES = [
+  '/ops-access/grants',
+  '/ops-access/grants/revoke',
+  '/ops-access/grants/extend',
+  '/ops-access/grants/all',
+  '/ops-access/grants/revoke-all',
+  '/ops-access/access-requests',
+  '/ops-access/access-requests/decide',
+  '/ops-access/deny',
+  '/ops-access/undeny',
+]
+
+describe('hmr unload', () => {
+  it('dispose removes the tool, both commands, all 9 routes, the listener, the service, and the broker — core stays mounted', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    h.gate.authorize(futureGrant(SESSION_A.id, 'test', 'prod'))
+    // Mounted state: 1 gate tool alongside core's register_access, 2 panel
+    // commands, 9 gate routes alongside core's 4, 2 agent/pre-step listeners
+    // (core's mention + the gate's notice drain), broker active (grant → rw).
+    expect(h.tools.map((t) => t.name).sort()).toEqual(['register_access', 'request_access'])
+    expect(h.commands.map((c) => c.name)).toEqual(['access', 'access-all'])
+    expect(h.routes.filter((r) => GATE_ROUTES.includes(r.path))).toHaveLength(9)
+    expect(h.listeners.filter((l) => l.event === 'agent/pre-step')).toHaveLength(2)
+    expect(h.hasService('opsAccessGate')).toBe(true)
+    expect((await h.opsAccess.resolve('test', 'prod', SESSION_A)).fields.endpoint).toBe('https://rw-prod.internal')
+
+    h.dispose()
+
+    // Every registration surface the gate touched is gone…
+    expect(h.tools.map((t) => t.name)).toEqual(['register_access'])
+    expect(h.commands).toEqual([])
+    expect(h.routes.filter((r) => GATE_ROUTES.includes(r.path))).toHaveLength(0)
+    expect(h.routes.map((r) => r.path).sort()).toEqual([
+      '/ops-access/admin/entry',
+      '/ops-access/admin/kinds',
+      '/ops-access/admin/list',
+      '/ops-access/list',
+    ])
+    // …the notice listener is gone (core's mention listener survives)…
+    expect(h.listeners.filter((l) => l.event === 'agent/pre-step')).toHaveLength(1)
+    // …the provided service is unprovided…
+    expect(h.hasService('opsAccessGate')).toBe(false)
+    // …and the broker is unregistered: the grant still sits in the orphaned
+    // ledger, but resolve falls back to broker-less behavior — rw is never
+    // issued without a broker.
+    expect(h.gate.isAuthorized(SESSION_A.id, 'test', 'prod')).toBe(true)
+    expect((await h.opsAccess.resolve('test', 'prod', SESSION_A)).fields.endpoint).toBe('https://ro-prod.internal')
+  })
+
+  it('dispose settles parked requests as cancelled instead of leaking the tool promises', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    const call = h.callRequestAccess(
+      { action: 'request', profile: 'test/prod', reason: 'x' },
+      { agent: SESSION_A },
+    )
+    await awaitPending(h, 'sess-a')
+    h.dispose()
+    const result = await call
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('cancelled')
+    expect(h.readAudit().filter((l) => l.event === 'request-decide')[0]).toMatchObject({ outcome: 'cancelled' })
+  })
+
+  it('dispose is idempotent', () => {
+    const h = setup()
+    h.dispose()
+    h.dispose()
+    expect(h.tools.map((t) => t.name)).toEqual(['register_access'])
+    expect(h.commands).toEqual([])
   })
 })

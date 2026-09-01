@@ -29,18 +29,34 @@ export function setup(opts: { registryFile?: string, credentialsDir?: string } =
   const listeners: Array<{ event: string, listener: (...args: any[]) => unknown, options?: unknown }> = []
   const routes: any[] = []
   const tools: any[] = []
+  // Effect disposers collected for HMR-unload assertions — mirrors cordis,
+  // where ctx.effect/provide/on are all fiber-scoped and run their cleanup
+  // when the fiber is disposed.
+  const effectCleanups: Array<() => void> = []
+  const collectEffect = (fn: () => (() => void) | void): void => {
+    const dispose = fn()
+    if (typeof dispose === 'function') effectCleanups.push(dispose)
+  }
   // Deferred inject, mirroring cordis: an inject whose deps are not yet
   // provided pends and fires when they are — NOT silently dropped. This is
   // what registerAccessProvider's deferred-mount discipline is FOR; an
   // order-dependent mock would never exercise it.
   const services = new Map<string, any>()
   const pending: Array<{ deps: string[], cb: (c: any) => void }> = []
-  const webServer = { register: (route: any) => { routes.push(route); return () => {} } }
+  const webServer = {
+    register: (route: any) => {
+      routes.push(route)
+      return () => {
+        const i = routes.indexOf(route)
+        if (i >= 0) routes.splice(i, 1)
+      }
+    },
+  }
   services.set('webServer', webServer)
   const injectionCtx = () => ({
     opsAccess: services.get('opsAccess'),
     webServer,
-    effect: (fn: () => () => void) => { fn() },
+    effect: collectEffect,
   })
   const flush = () => {
     for (let i = pending.length - 1; i >= 0; i--) {
@@ -55,17 +71,36 @@ export function setup(opts: { registryFile?: string, credentialsDir?: string } =
       services.set(key, value)
       if (key === 'opsAccess') handle = value
       flush()
+      // cordis wraps ctx.provide in fiber.effect — the service unregisters
+      // when the fiber is disposed.
+      effectCleanups.push(() => { services.delete(key) })
     },
     on: (event: string, listener: (...args: any[]) => unknown, options?: unknown) => {
-      listeners.push({ event, listener, options })
-      return () => {}
+      const entry = { event, listener, options }
+      listeners.push(entry)
+      // cordis's ctx.on is itself fiber-scoped (fiber.effect), so the plugin
+      // dropping the returned disposer is NOT a leak — mirror that here.
+      const dispose = () => {
+        const i = listeners.indexOf(entry)
+        if (i >= 0) listeners.splice(i, 1)
+      }
+      effectCleanups.push(dispose)
+      return dispose
     },
     inject: (deps: string[], cb: (c: any) => void) => {
       if (deps.every((d) => services.has(d))) cb(injectionCtx())
       else pending.push({ deps, cb })
     },
-    effect: (fn: () => () => void) => { fn() },
-    tools: { register: (tool: any) => { tools.push(tool); return () => {} } },
+    effect: collectEffect,
+    tools: {
+      register: (tool: any) => {
+        tools.push(tool)
+        return () => {
+          const i = tools.indexOf(tool)
+          if (i >= 0) tools.splice(i, 1)
+        }
+      },
+    },
   }
   apply(ctx, { registryFile, credentialsDir })
   /** Minimal mock response that captures status + JSON body. */
@@ -95,9 +130,14 @@ export function setup(opts: { registryFile?: string, credentialsDir?: string } =
   }
   return {
     handle: handle!,
+    /** The mock plugin context — HMR tests drive registerAccessProvider/Broker through it. */
+    ctx,
     listeners,
     routes,
     tools,
+    effectCleanups,
+    /** Whether a service is still provided (post-disposal assertions). */
+    hasService: (key: string) => services.has(key),
     callRegisterAccess,
     credentialsDir,
     /** Drive the mention-candidate route; parses the JSON body. */

@@ -21,7 +21,9 @@
     "noUnusedParameters": false
   },
   "include": [
-    "src/index.ts"
+    "src/index.ts",
+    "src/types.ts",
+    "src/invariant.ts"
   ],
   "exclude": [
     "node_modules",

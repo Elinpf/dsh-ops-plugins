@@ -14,7 +14,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { treeNodeSchema, treeNodeJsonSchema } from '../src/index.ts'
-import { NODE_STATUSES } from '../src/types.ts'
+import { NODE_STATUSES } from '../src/node-status.ts'
 import type { TreeNode } from '../src/types.ts'
 
 /** The canonical field list — keyof TreeNode, spelled out so the failure

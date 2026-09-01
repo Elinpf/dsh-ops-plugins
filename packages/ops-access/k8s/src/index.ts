@@ -22,7 +22,12 @@ export const name = 'ops-access-k8s'
 
 export const inject: string[] = []
 
-export const Config = z.object({})
+export const Config = z.object({
+  /** Save-time probe: timeout per `kubectl auth can-i` call (ms). Slow clusters may need more. */
+  probeTimeoutMs: z.number().default(10000),
+  /** Namespace the can-i probe checks permissions in. */
+  probeNamespace: z.string().default('default'),
+})
 
 // ── Provider ─────────────────────────────────────────────────────────────────
 
@@ -88,11 +93,10 @@ export const provider: AccessProvider = {
  * read = can-i get pods, write = can-i create deployments. ro verifies when
  * reading works and writing is denied; rw verifies when both work.
  */
-/** Live verdicts for the operationally interesting faces (ticket 10); null = the check could not run. */
-export interface K8sProbeFacets {
-  servicesProxy: boolean | null
-  podsExec: boolean | null
-}
+// K8sProbeFacets lives in types.ts (types-only module); re-exported here so
+// existing `from './index.js'` type imports keep working.
+export type { K8sProbeFacets } from './types.js'
+import type { K8sProbeFacets } from './types.js'
 
 function fmtVerdict(v: boolean | null): string {
   return v === null ? 'unknown' : v ? 'yes' : 'no'
@@ -117,10 +121,10 @@ export function assessK8sTier(read: boolean, write: boolean, tier: 'ro' | 'rw', 
  * itself could not run (unreachable cluster, missing binary). stderr is
  * never surfaced — kubectl echoes the kubeconfig path in its errors.
  */
-function canI(kubeconfig: string, verb: string, resource: string): Promise<boolean | null> {
+function canI(kubeconfig: string, verb: string, resource: string, timeoutMs: number, namespace: string): Promise<boolean | null> {
   return new Promise((resolve) => {
-    execFile('kubectl', ['--kubeconfig', kubeconfig, 'auth', 'can-i', verb, resource, '-n', 'default'],
-      { timeout: 10000 },
+    execFile('kubectl', ['--kubeconfig', kubeconfig, 'auth', 'can-i', verb, resource, '-n', namespace],
+      { timeout: timeoutMs },
       (err, stdout) => {
         if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') { resolve(null); return }
         const answer = (stdout ?? '').trim().toLowerCase()
@@ -135,13 +139,13 @@ function canI(kubeconfig: string, verb: string, resource: string): Promise<boole
   })
 }
 
-async function probeK8s(fields: Record<string, unknown>, tier: 'ro' | 'rw') {
+async function probeK8s(fields: Record<string, unknown>, tier: 'ro' | 'rw', timeoutMs = 10000, namespace = 'default') {
   const kubeconfig = String(fields.kubeconfigPath ?? '')
   const [read, write, servicesProxy, podsExec] = await Promise.all([
-    canI(kubeconfig, 'get', 'pods'),
-    canI(kubeconfig, 'create', 'deployments'),
-    canI(kubeconfig, 'get', 'services/proxy'),
-    canI(kubeconfig, 'create', 'pods/exec'),
+    canI(kubeconfig, 'get', 'pods', timeoutMs, namespace),
+    canI(kubeconfig, 'create', 'deployments', timeoutMs, namespace),
+    canI(kubeconfig, 'get', 'services/proxy', timeoutMs, namespace),
+    canI(kubeconfig, 'create', 'pods/exec', timeoutMs, namespace),
   ])
   if (read === null || write === null) {
     return { status: 'unverifiable' as const, detail: 'kubectl auth can-i could not run (cluster unreachable or kubectl missing)' }
@@ -150,6 +154,9 @@ async function probeK8s(fields: Record<string, unknown>, tier: 'ro' | 'rw') {
 }
 // ── Plugin apply ─────────────────────────────────────────────────────────────
 
-export function apply(ctx: Context, _config: Record<string, never>): void {
-  registerAccessProvider(ctx, provider)
+export function apply(ctx: Context, config: { probeTimeoutMs: number, probeNamespace: string }): void {
+  registerAccessProvider(ctx, {
+    ...provider,
+    probe: (fields, tier) => probeK8s(fields, tier, config.probeTimeoutMs, config.probeNamespace),
+  })
 }

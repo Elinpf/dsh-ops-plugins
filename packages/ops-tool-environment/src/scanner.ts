@@ -88,6 +88,10 @@ export interface ScanClusterInput {
   fetchFn?: typeof fetch
   /** Scan timestamp; defaults to now (injectable for deterministic tests). */
   now?: Date
+  /** Per-kubectl-call timeout (ms); defaults to SCAN_TIMEOUT_MS. */
+  timeoutMs?: number
+  /** Prometheus scrape timeout (ms); defaults to the scrape's own 15s. */
+  prometheusTimeoutMs?: number
 }
 
 /** Replace every occurrence of the kubeconfig path with a display token. */
@@ -251,7 +255,7 @@ export async function scanCluster(input: ScanClusterInput): Promise<ClusterScan>
   const base = ['kubectl', `--kubeconfig=${input.kubeconfigPath}`]
   const run = async (args: string[]) => {
     try {
-      return await exec([...base, ...args], { timeoutMs: SCAN_TIMEOUT_MS })
+      return await exec([...base, ...args], { timeoutMs: input.timeoutMs ?? SCAN_TIMEOUT_MS })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       throw new ScanError(scrubKubeconfigPath(message, input.kubeconfigPath), input.cluster)
@@ -313,6 +317,7 @@ export async function scanCluster(input: ScanClusterInput): Promise<ClusterScan>
       services: serviceItems,
       spawn: input.spawn,
       fetchFn: input.fetchFn,
+      ...(input.prometheusTimeoutMs !== undefined ? { timeoutMs: input.prometheusTimeoutMs } : {}),
     })
   } catch {
     prometheus = undefined

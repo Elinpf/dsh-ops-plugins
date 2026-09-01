@@ -1,0 +1,4 @@
+title: "@deepseek-ai/dsh-ops-access-ceph"
+description:
+  zh: "运维模式 Ceph 凭证 provider — 校验 ceph.conf/keyring 条目并在保存时探测 ro/rw tier"
+  en: "Ceph credential provider for ops mode — validates ceph.conf/keyring entries and probes ro/rw tiers at save time"

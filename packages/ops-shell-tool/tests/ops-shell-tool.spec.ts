@@ -6,9 +6,28 @@
  */
 
 import { describe, expect, it } from 'vitest'
+import * as library from '../src/index.ts'
+import * as invariant from '../src/invariant.ts'
 import { registerProfiledShellTool, shellQuote } from '../src/index.ts'
 import type { ProfiledShellToolSpec } from '../src/index.ts'
 import type { AccessProfile } from '@deepseek-ai/dsh-ops-access'
+
+// ── Export shape ─────────────────────────────────────────────────────────────
+
+describe('export shape', () => {
+  it('main entry is a pure library: named exports, no default', () => {
+    expect('default' in library).toBe(false)
+    expect(typeof library.registerProfiledShellTool).toBe('function')
+    expect(typeof library.shellQuote).toBe('function')
+  })
+
+  it('invariant companion is a function plugin: named exports, no default', () => {
+    expect('default' in invariant).toBe(false)
+    expect(invariant.name).toBe('ops-shell-tool-invariant')
+    expect(invariant.inject).toEqual(['invariants'])
+    expect(typeof invariant.apply).toBe('function')
+  })
+})
 
 const SPEC: ProfiledShellToolSpec = {
   name: 'widget',
@@ -71,13 +90,18 @@ function setup(opts: {
       },
     },
     effect: (fn: () => () => void) => { effectCleanups.push(fn()) },
-    tools: { register: (t: any) => { tools.push(t); return () => {} } },
+    tools: {
+      register: (t: any) => {
+        tools.push(t)
+        return () => { const i = tools.indexOf(t); if (i >= 0) tools.splice(i, 1) }
+      },
+    },
   }
 
   registerProfiledShellTool(ctx, { ...SPEC, ...opts.spec })
   const tool = tools[0]
   const exec = (agent?: { id: string }) => ({ signal: new AbortController().signal, agent })
-  return { tools, tool, shellRequests, calls, effectCleanups, exec }
+  return { ctx, tools, tool, shellRequests, calls, effectCleanups, exec }
 }
 
 describe('registerProfiledShellTool', () => {
@@ -86,6 +110,16 @@ describe('registerProfiledShellTool', () => {
     expect(tools).toHaveLength(1)
     expect(tool.name).toBe('widget')
     expect(effectCleanups).toHaveLength(1)
+  })
+
+  it('HMR unload: running every effect disposer removes the registered tool', () => {
+    const h = setup()
+    expect(h.tools.map((t) => t.name)).toEqual(['widget'])
+    for (const dispose of h.effectCleanups) dispose()
+    expect(h.tools).toHaveLength(0)
+    // A fresh registration (the HMR reload) works cleanly after the unload.
+    registerProfiledShellTool(h.ctx, SPEC)
+    expect(h.tools.map((t) => t.name)).toEqual(['widget'])
   })
 
   it('declares exactly the target param and the command param', () => {

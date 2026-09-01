@@ -21,8 +21,27 @@ describe('export shape', () => {
     expect('default' in plugin).toBe(false)
     expect(plugin.name).toBe('ops-access-ssh')
     expect(plugin.inject).toEqual([])
+    expect(plugin.Config).toBeDefined()
     expect(typeof plugin.apply).toBe('function')
     expect(plugin.provider.kind).toBe('ssh')
+  })
+
+  it('invariant companion: named exports, no default, no-op install', async () => {
+    const mod = await import('../src/invariant.ts')
+    expect('default' in mod).toBe(false)
+    expect(mod.name).toBe('ops-access-ssh-invariant')
+    expect(mod.inject).toEqual(['invariants'])
+    const calls: Array<[string, () => void]> = []
+    await mod.apply({ invariants: { register: (pkg: string, install: () => void) => calls.push([pkg, install]) } })
+    expect(calls).toHaveLength(1)
+    expect(calls[0][0]).toBe('@deepseek-ai/dsh-ops-access-ssh')
+    expect(calls[0][1]()).toBeUndefined()
+  })
+
+  it('types subpath re-exports stay type-only (no runtime values leaked)', async () => {
+    const mod: Record<string, unknown> = await import('../src/types.ts')
+    expect('default' in mod).toBe(false)
+    expect(Object.keys(mod)).toHaveLength(0)
   })
 })
 
@@ -69,15 +88,19 @@ describe('process', () => {
 // ── Registration ─────────────────────────────────────────────────────────────
 
 describe('apply', () => {
-  it('defers through ctx.inject and registers once opsAccess arrives', () => {
+  // The register mock returns a REAL disposer: it removes the provider from
+  // the registry array, so HMR unload can be asserted end to end.
+  function makeCtx() {
     const registered: AccessProvider[] = []
-    let disposed = false
     const effectCleanups: Array<() => void> = []
     const pctx: any = {
       opsAccess: {
         register: (p: AccessProvider) => {
           registered.push(p)
-          return () => { disposed = true }
+          return () => {
+            const i = registered.indexOf(p)
+            if (i >= 0) registered.splice(i, 1)
+          }
         },
       },
       effect: (fn: () => () => void) => { effectCleanups.push(fn()) },
@@ -86,13 +109,24 @@ describe('apply', () => {
     const ctx: any = {
       inject: (deps: string[], cb: (c: any) => void) => { injectedDeps = deps; cb(pctx) },
     }
+    return { ctx, registered, effectCleanups, getInjectedDeps: () => injectedDeps }
+  }
 
-    plugin.apply(ctx, {})
-    expect(injectedDeps).toEqual(['opsAccess'])
-    expect(registered).toEqual([plugin.provider])
+  it('defers through ctx.inject and registers once opsAccess arrives', () => {
+    const { ctx, registered, effectCleanups, getInjectedDeps } = makeCtx()
+    plugin.apply(ctx, { validateTimeoutMs: 5000 })
+    expect(getInjectedDeps()).toEqual(['opsAccess'])
+    expect(registered).toHaveLength(1)
+    expect(registered[0].kind).toBe(plugin.provider.kind)
     expect(effectCleanups).toHaveLength(1)
-    effectCleanups[0]()
-    expect(disposed).toBe(true)
+  })
+
+  it('HMR unload: running every effect disposer removes the provider from the registry', () => {
+    const { ctx, registered, effectCleanups } = makeCtx()
+    plugin.apply(ctx, { validateTimeoutMs: 5000 })
+    expect(registered).toHaveLength(1)
+    for (const dispose of effectCleanups) dispose()
+    expect(registered).toHaveLength(0)
   })
 })
 

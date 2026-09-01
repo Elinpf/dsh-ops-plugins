@@ -1,13 +1,15 @@
 /**
  * ops-access-ui spec: host-half export shape (empty by design — client
- * discovery only), the client @ source driven through mock ctx + fetch, and
- * the settings.section credential-management page (registration + admin API
- * functions + degradation).
+ * discovery only), the client @ source driven through mock ctx + fetch, the
+ * settings.section credential-management page (registration + admin API
+ * functions + degradation), the invariant companion, and HMR unload (every
+ * effect disposer removes its registration surface).
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as host from '../src/index.ts'
 import * as client from '../src/client.ts'
+import * as invariant from '../src/invariant.ts'
 import type { AdminEntry, KindDescriptor } from '../src/client.ts'
 
 // ── Host half ────────────────────────────────────────────────────────────────
@@ -73,29 +75,42 @@ function setupClient(opts: { opsPanels?: boolean } = {}) {
   const sources: any[] = []
   const sections: any[] = []
   const panels: any[] = []
+  const effectCleanups: Array<() => void> = []
+  // Register mocks return REAL disposers (remove from the captured array) and
+  // effect mocks collect them, so the HMR-unload spec can verify every
+  // registration surface actually disappears — a no-op disposer hides leaks.
+  const removeFrom = <T>(arr: T[], item: T) => () => {
+    const i = arr.indexOf(item)
+    if (i >= 0) arr.splice(i, 1)
+  }
   const ctx: any = {
     get: (key: string) => {
       if (key === 'inputTriggers')
-        return { registerSource: (s: any) => { sources.push(s); return () => {} } }
+        return { registerSource: (s: any) => { sources.push(s); return removeFrom(sources, s) } }
       if (key === 'slots')
         return {
-          inject: (_slot: string, factory: () => unknown) => { factory(); return () => {} },
-          register: (opts: any, component: any) => { sections.push({ ...opts, component }); return () => {} },
+          inject: (_slot: string, factory: () => unknown) => factory(),
+          register: (opts: any, component: any) => {
+            const entry = { ...opts, component }
+            sections.push(entry)
+            return removeFrom(sections, entry)
+          },
         }
       return undefined
     },
     inject: (deps: string[], cb: (c: any) => void) => {
       if (deps[0] === 'opsPanels' && opts.opsPanels !== false) {
         cb({
-          opsPanels: { registerPanel: (def: any) => { panels.push(def); return () => {} } },
-          effect: (fn: () => () => void) => { fn() },
+          opsPanels: { registerPanel: (def: any) => { panels.push(def); return removeFrom(panels, def) } },
+          // cordis's inject-scoped context carries effect — mirror it.
+          effect: (fn: () => () => void) => { effectCleanups.push(fn()) },
         })
       }
     },
-    effect: (fn: () => () => void) => { fn() },
+    effect: (fn: () => () => void) => { effectCleanups.push(fn()) },
   }
   client.apply(ctx)
-  return { sources, source: sources[0], sections, panels }
+  return { sources, source: sources[0], sections, panels, effectCleanups }
 }
 
 // ── Client half: @ source ────────────────────────────────────────────────────
@@ -597,5 +612,63 @@ describe('mention probe annotation (review fix)', () => {
     const out = await source.candidates({ sessionId: 's1' }, { query: '', signal: undefined })
     expect(out[0].description).toBe('生产集群 · ro 已核验 · rw 核验失败')
     expect(out[1].description).toBeUndefined()
+  })
+})
+
+// ── HMR unload (disposer discipline) ─────────────────────────────────────────
+
+describe('HMR unload', () => {
+  it('host apply registers nothing — the discovery-only row has nothing to unload', () => {
+    const cleanups: Array<() => void> = []
+    host.apply({ effect: (fn: () => () => void) => cleanups.push(fn()) } as any, {})
+    expect(cleanups).toHaveLength(0)
+  })
+
+  it('client: running every effect disposer removes all five registration surfaces', () => {
+    const h = setupClient()
+    // Five surfaces: the @ source, the settings.section entry, two ops-panel
+    // panels, and the conversation.input.dock badge.
+    expect(h.sources).toHaveLength(1)
+    expect(h.sections.filter((s) => s.name === 'settings.section')).toHaveLength(1)
+    expect(h.panels).toHaveLength(2)
+    expect(h.sections.filter((s) => s.name === 'conversation.input.dock')).toHaveLength(1)
+
+    for (const cleanup of h.effectCleanups) cleanup()
+
+    expect(h.sources).toHaveLength(0)
+    expect(h.sections).toHaveLength(0)
+    expect(h.panels).toHaveLength(0)
+  })
+
+  it('client without opsPanels: disposers still remove the three unconditional surfaces', () => {
+    const h = setupClient({ opsPanels: false })
+    expect(h.sources).toHaveLength(1)
+    expect(h.sections.filter((s) => s.name === 'settings.section')).toHaveLength(1)
+    expect(h.panels).toHaveLength(0)
+
+    for (const cleanup of h.effectCleanups) cleanup()
+
+    expect(h.sources).toHaveLength(0)
+    expect(h.sections).toHaveLength(0)
+  })
+})
+
+// ── Invariant companion (no runtime invariant — pure browser carrier) ───────
+
+describe('invariant companion', () => {
+  it('is a no-default function plugin named ops-access-ui-invariant injecting invariants', () => {
+    expect(invariant.name).toBe('ops-access-ui-invariant')
+    expect(invariant.inject).toEqual(['invariants'])
+    expect('default' in invariant).toBe(false)
+  })
+
+  it('registers a no-op install under the package name', async () => {
+    const registered: Array<[string, () => void]> = []
+    await invariant.apply({
+      invariants: { register: (pkg: string, install: () => void) => { registered.push([pkg, install]) } },
+    })
+    expect(registered).toHaveLength(1)
+    expect(registered[0][0]).toBe('@deepseek-ai/dsh-ops-access-ui')
+    expect(() => registered[0][1]()).not.toThrow()
   })
 })

@@ -1,0 +1,4 @@
+title: "@deepseek-ai/dsh-ops-access-k8s"
+description:
+  zh: "ops-access 的 Kubernetes 凭证 provider — 校验 k8s 注册表条目并在保存时探测权限"
+  en: "Kubernetes credential provider for ops-access — validates k8s registry entries and probes permissions at save time"

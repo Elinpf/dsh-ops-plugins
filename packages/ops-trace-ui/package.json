@@ -13,11 +13,21 @@
     "./client": {
       "default": "./lib/client.js"
     },
+    "./invariant": {
+      "types": "./lib/invariant.d.ts",
+      "default": "./lib/invariant.js"
+    },
+    "./types": {
+      "types": "./lib/types.d.ts",
+      "default": "./lib/types.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
     "lib/index.js",
     "lib/client.js",
+    "lib/invariant.js",
+    "lib/types.js",
     "lib/**/*.d.ts",
     "cordis.patch.yml"
   ],
@@ -41,13 +51,16 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-invariants": "^0.0.1-rc.1",
     "@deepseek-ai/dsh-session-projection": "^0.0.1-rc.1",
     "react": "^18.2.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.0.1-rc.5",
     "@deepseek-ai/dsh-session-projection": "0.0.1-rc.1",
     "esbuild": "^0.24.0",
+    "react": "18.3.1",
     "typescript": "^5.4.0",
     "vitest": "^4.1.11"
   },

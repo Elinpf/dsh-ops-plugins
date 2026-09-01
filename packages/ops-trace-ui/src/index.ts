@@ -40,3 +40,4 @@ function apply(ctx: Context, _config: Record<string, never>): void {
 }
 
 export { Config, apply, inject, name }
+export type { DockUiState, TraceDockProps } from './types.js'

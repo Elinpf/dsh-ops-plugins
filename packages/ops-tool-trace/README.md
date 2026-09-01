@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-todo-tree
+# @deepseek-ai/dsh-ops-tool-trace
 
 An investigation tree tool for DeepSeek Harness ops mode — replaces `todo_write` with a diverge-converge tree of steps, milestones, dead ends, and a resolved terminal.
 
@@ -17,8 +17,8 @@ Agent-driven investigation tracking: the agent maintains a tree of investigation
 Add to `dsh-web-app` dependencies and reference in the ops preset's `agent.cordis.yml`:
 
 ```yaml
-- id: tool-ops-todo-tree
-  name: '@deepseek-ai/dsh-ops-todo-tree'
+- id: tool-ops-trace
+  name: '@deepseek-ai/dsh-ops-tool-trace'
 ```
 
 ## Model Experience

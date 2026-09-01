@@ -1,0 +1,4 @@
+title: "@deepseek-ai/dsh-ops-kubectl"
+description:
+  zh: "ops-access 能力缝的 kubectl 消费工具 — 解析 k8s profile 并经 ctx.shell 执行 kubectl;list_access 列出 profile 而不泄露凭据字段"
+  en: "kubectl tool consumer of the ops-access seam — resolves k8s profiles into kubeconfig paths and runs kubectl via ctx.shell; list_access surfaces registered profiles without secret fields"

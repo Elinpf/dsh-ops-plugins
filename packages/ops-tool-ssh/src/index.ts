@@ -16,6 +16,9 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { registerProfiledShellTool, shellQuote } from '@deepseek-ai/dsh-ops-shell-tool'
+import type { SshToolConfig } from './types'
+
+export type { SshToolConfig } from './types'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -25,12 +28,18 @@ export const inject = ['shell', 'tools']
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
-export const Config = z.object({})
+export const Config = z.object({
+  /** Per-call shell timeout for ssh runs (ms). */
+  timeoutMs: z.number().default(30000),
+  /** ssh -o ConnectTimeout value (seconds) — how long to wait for the TCP handshake. */
+  connectTimeoutSeconds: z.number().default(10),
+})
 
 // ── Plugin apply ─────────────────────────────────────────────────────────────
 
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, config: SshToolConfig): void {
   registerProfiledShellTool(ctx, {
+    timeoutMs: config.timeoutMs,
     name: 'ssh',
     kind: 'ssh',
     targetParam: 'host',
@@ -44,7 +53,7 @@ export function apply(ctx: Context): void {
       // BatchMode: never prompt (password/passphrase) — fail fast instead.
       // accept-new: trust a host key on first contact, refuse changed ones —
       // ops hosts are reached by name from the registry, not typed by hand.
-      const opts = ['-o BatchMode=yes', '-o ConnectTimeout=10', '-o StrictHostKeyChecking=accept-new']
+      const opts = ['-o BatchMode=yes', `-o ConnectTimeout=${config.connectTimeoutSeconds}`, '-o StrictHostKeyChecking=accept-new']
       // Only the key path gets a credential token; user@host/port stay inline.
       if (key !== undefined) opts.push(`-i ${ref('key')}`)
       if (port !== undefined) opts.push(`-p ${port}`)

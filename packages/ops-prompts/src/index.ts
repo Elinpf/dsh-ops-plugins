@@ -17,7 +17,11 @@ import z from '@deepseek-ai/schemastery'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { SkillRegistry } from '@deepseek-ai/dsh-skill'
 import { createBundledSkillsProvider } from './skills.js'
+// The Config interface is imported under an alias: re-exporting the same name
+// from types.ts would collide with the exported const Config below (TS2323).
+import type { Config as ConfigShape, MethodologyEntry, OpsPromptsHandle, ReminderEntry } from './types.js'
 export * from './skills.js'
+export type { MethodologyEntry, OpsPromptsHandle, ReminderEntry } from './types.js'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -27,37 +31,12 @@ export const inject = ['systemPrompt']
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
-export interface Config {
-  /** Whether dynamic reminders are enabled. */
-  reminderEnabled: boolean
-}
-
+// The Config interface lives in types.ts; only the runtime schema stays here.
+// A local type alias (not a re-export) keeps the familiar interface+const pair.
+export type Config = ConfigShape
 export const Config: z<Config> = z.object({
   reminderEnabled: z.boolean().default(true),
 })
-
-// ── Registration types ───────────────────────────────────────────────────────
-
-/** A registered methodology prompt section. */
-export interface MethodologyEntry {
-  name: string
-  order: number
-  text: string
-}
-
-/** A registered dynamic reminder rule. */
-export interface ReminderEntry {
-  name: string
-  check: (agent: any) => string | null
-}
-
-/** The ops prompt orchestration handle exposed via ctx.get('opsPrompts'). */
-export interface OpsPromptsHandle {
-  /** Register a static methodology prompt section. Returns a disposer. */
-  registerMethodology(opts: MethodologyEntry): () => void
-  /** Register a dynamic reminder rule evaluated at each agent/pre-step. Returns a disposer. */
-  registerReminder(opts: ReminderEntry): () => void
-}
 
 // ── Core ops methodology ─────────────────────────────────────────────────────
 
@@ -129,18 +108,22 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   // System prompt section that renders all registered methodology entries.
-  // Re-evaluated at each prompt assembly.
-  const systemPrompt = ctx.get('systemPrompt') as any | undefined
-  if (systemPrompt !== undefined) {
-    systemPrompt.section({
-      name: 'ops:methodology',
-      order: 250,
-      text: () => {
-        const entries = [...methodologies.values()].sort((a, b) => a.order - b.order)
-        return entries.map((e) => e.text).join('\n\n')
-      },
-    })
-  }
+  // Re-evaluated at each prompt assembly. systemPrompt is a REQUIRED inject:
+  // an absent service pends the fiber and apply never runs, so read it as a
+  // declared dependency — a ctx.get fallback branch would be dead code.
+  // The section disposer MUST go through ctx.effect: the service returns a
+  // disposer that fiber disposal/HMR would otherwise never run (leak).
+  const systemPrompt = (ctx as unknown as {
+    systemPrompt: { section(def: { name: string, order: number, text: () => string }): () => void }
+  }).systemPrompt
+  ctx.effect(() => systemPrompt.section({
+    name: 'ops:methodology',
+    order: 250,
+    text: () => {
+      const entries = [...methodologies.values()].sort((a, b) => a.order - b.order)
+      return entries.map((e) => e.text).join('\n\n')
+    },
+  }))
 
   // agent/pre-step listener: evaluate all registered reminder rules.
   // Non-null results are delivered through agent.inject — the message goes

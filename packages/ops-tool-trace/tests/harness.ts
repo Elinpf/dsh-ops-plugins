@@ -26,7 +26,6 @@ export function setup(opts: {
 } = {}) {
   const sessionId = `test-${++sessionCounter}`
   const tools: any[] = []
-  const toolDisposers: Array<() => void> = []
   const effectCleanups: Array<() => void> = []
   const registeredProjections: any[] = []
   const opsPrompts: CapturedOpsPrompts = { methodologies: [], reminders: new Map() }
@@ -38,7 +37,10 @@ export function setup(opts: {
           sessionProjections: {
             register: (def: any) => {
               registeredProjections.push(def)
-              return () => {}
+              return () => {
+                const i = registeredProjections.indexOf(def)
+                if (i >= 0) registeredProjections.splice(i, 1)
+              }
             },
             snapshot: () => ({ values: { trace: opts.projectionState ?? null } }),
           },
@@ -46,14 +48,19 @@ export function setup(opts: {
       }
       if (deps.includes('opsPrompts') && opts.withOpsPrompts !== false) {
         cb({
+          // cordis's inject-scoped context carries effect — mirror it.
+          effect: (fn: () => () => void) => { effectCleanups.push(fn()) },
           opsPrompts: {
             registerMethodology: (m: any) => {
               opsPrompts.methodologies.push(m)
-              return () => {}
+              return () => {
+                const i = opsPrompts.methodologies.indexOf(m)
+                if (i >= 0) opsPrompts.methodologies.splice(i, 1)
+              }
             },
             registerReminder: (r: any) => {
               opsPrompts.reminders.set(r.name, r.check)
-              return () => {}
+              return () => { opsPrompts.reminders.delete(r.name) }
             },
           },
         })
@@ -63,15 +70,21 @@ export function setup(opts: {
     tools: {
       register: (t: any) => {
         tools.push(t)
-        const d = () => {}
-        toolDisposers.push(d)
+        const d = () => {
+          const i = tools.indexOf(t)
+          if (i >= 0) tools.splice(i, 1)
+        }
+        // The real dsh-tools register() fiber-scopes the removal
+        // (this.layers.effect(this.ctx, ...)), so disposing the plugin fiber
+        // unregisters the tool without the plugin wrapping it in ctx.effect.
+        effectCleanups.push(d)
         return d
       },
     },
     get: (_name: string) => undefined,
   }
 
-  apply(ctx, {})
+  apply(ctx, { idleReminderGapSteps: 5, idleReminderBackoffCeilingSteps: 40, nestingReminderFlatSteps: 3 })
 
   const tool = tools[0]
   /** exec context; `events` drives currentTurn (turn/start) — empty means turn 0. */
@@ -82,6 +95,9 @@ export function setup(opts: {
     tool.execute(args, exec(events))
   const render = (args: Record<string, unknown>, value: TraceResult): string =>
     tool.output.render(args, value)[0].text
+  /** Simulate fiber disposal (HMR reload / preset unmount): run every
+   *  effect disposer the plugin collected, exactly once. */
+  const dispose = () => { for (const cleanup of effectCleanups.splice(0)) cleanup() }
 
-  return { tool, run, render, opsPrompts, registeredProjections, effectCleanups, sessionId }
+  return { tool, tools, run, render, opsPrompts, registeredProjections, effectCleanups, dispose, sessionId }
 }

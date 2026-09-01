@@ -138,6 +138,8 @@ describe('apply: optional skills registration', () => {
     const injected: Array<{ services: string[], fn: (pctx: any) => void }> = []
     const ctx: any = {
       provide: () => {},
+      // Declared required inject — present by definition when apply runs.
+      systemPrompt: { section: () => () => {} },
       get: (key: string) => key === 'skills' ? skills : undefined,
       inject: (services: string[], fn: (pctx: any) => void) => { injected.push({ services, fn }) },
       effect: (fn: () => (() => void) | void) => { const d = fn(); if (d) effects.push(d) },
@@ -154,7 +156,7 @@ describe('apply: optional skills registration', () => {
     const { effects, injected } = fakeCtx(registry)
     expect(factories).toHaveLength(1)
     expect(factories[0]().name).toBe(BUNDLED_SKILLS_PROVIDER)
-    expect(effects).toHaveLength(1) // registration is an effect (HMR-safe)
+    expect(effects).toHaveLength(2) // skills provider + methodology section are effects (HMR-safe)
     expect(injected).toHaveLength(0)
   })
 

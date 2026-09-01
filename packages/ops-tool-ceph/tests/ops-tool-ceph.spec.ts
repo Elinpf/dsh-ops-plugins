@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import * as mod from '../src/index.ts'
+import * as invariantMod from '../src/invariant.ts'
+import * as typesMod from '../src/types.ts'
 import { setup, DEFAULT_PROFILE } from './harness.ts'
 
 describe('export shape', () => {
@@ -9,6 +11,28 @@ describe('export shape', () => {
     expect(mod.Config).toBeDefined()
     expect(typeof mod.apply).toBe('function')
     expect((mod as any).default).toBeUndefined()
+  })
+
+  it('./invariant entry is a function plugin: named exports, no default', () => {
+    expect(invariantMod.name).toBe('ops-ceph-invariant')
+    expect(invariantMod.inject).toEqual(['invariants'])
+    expect(typeof invariantMod.apply).toBe('function')
+    expect((invariantMod as any).default).toBeUndefined()
+  })
+
+  it('./types entry carries zero runtime code', () => {
+    expect(Object.keys(typesMod)).toHaveLength(0)
+  })
+})
+
+describe('HMR unload', () => {
+  it('running every effect disposer unregisters the ceph tool', () => {
+    const h = setup()
+    expect(h.tools.some((t) => t.name === 'ceph')).toBe(true)
+    expect(h.effectCleanups.length).toBeGreaterThan(0)
+    for (const dispose of h.effectCleanups) dispose()
+    expect(h.tools.some((t) => t.name === 'ceph')).toBe(false)
+    expect(h.tools).toHaveLength(0)
   })
 })
 

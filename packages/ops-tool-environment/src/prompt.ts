@@ -31,12 +31,15 @@ export const name = 'ops-tool-environment-prompt'
 // ── Plugin apply ─────────────────────────────────────────────────────────────
 
 export function apply(ctx: Context): void {
-  const registerThroughHandle = (opsPrompts: OpsPromptsHandle): void => {
-    opsPrompts.registerMethodology({
+  // registerMethodology returns a disposer — route it through ctx.effect so
+  // the section leaves the ops-prompts registry when this plugin's fiber is
+  // disposed (HMR reload / preset unmount), not just on process exit.
+  const registerThroughHandle = (rctx: Context, opsPrompts: OpsPromptsHandle): void => {
+    rctx.effect(() => opsPrompts.registerMethodology({
       name: 'environment:usage',
       order: 250,
       text: STATIC_PROMPT,
-    })
+    }))
   }
 
   // The preset mounts the group's plugins concurrently, so a one-shot
@@ -46,10 +49,10 @@ export function apply(ctx: Context): void {
   // usage documentation.
   const immediate = ctx.get('opsPrompts')
   if (immediate !== undefined) {
-    registerThroughHandle(immediate)
+    registerThroughHandle(ctx, immediate)
   } else {
     ctx.inject(['opsPrompts'], (pctx: Context) => {
-      registerThroughHandle(pctx.opsPrompts!)
+      registerThroughHandle(pctx, pctx.opsPrompts!)
     })
   }
 }

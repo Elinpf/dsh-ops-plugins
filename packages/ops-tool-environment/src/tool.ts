@@ -84,6 +84,10 @@ export interface EnvironmentToolConfig {
   rulesFile: string
   /** Sections older than this are re-scanned on the next read (default 60). */
   ttlMinutes: number
+  /** Per-kubectl-call scan timeout (ms, default 30000). Slow clusters may need more. */
+  scanTimeoutMs: number
+  /** Prometheus scrape timeout (ms, default 15000). */
+  prometheusTimeoutMs: number
 }
 
 // ── Result shapes ────────────────────────────────────────────────────────────
@@ -337,6 +341,8 @@ export function createEnvironmentTool(
     const inventory = await refreshAll(targets, {
       file: config.inventoryFile,
       userRulesFile: config.rulesFile,
+      scanTimeoutMs: config.scanTimeoutMs,
+      prometheusTimeoutMs: config.prometheusTimeoutMs,
     })
     const results: RefreshResultEntry[] = [...skipped]
     for (const target of targets) {

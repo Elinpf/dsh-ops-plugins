@@ -14,6 +14,20 @@ describe('export shape', () => {
   })
 })
 
+describe('HMR unload', () => {
+  it('running every collected disposer removes the ssh tool from the registry', () => {
+    const h = setup()
+    expect(h.tools.map((t: any) => t.name)).toEqual(['ssh'])
+    expect(h.effectCleanups.length).toBeGreaterThan(0)
+    for (const dispose of h.effectCleanups) dispose()
+    expect(h.tools.find((t: any) => t.name === 'ssh')).toBeUndefined()
+    expect(h.tools).toHaveLength(0)
+    // Disposal is idempotent: a second pass is a no-op.
+    for (const dispose of h.effectCleanups) dispose()
+    expect(h.tools).toHaveLength(0)
+  })
+})
+
 describe('ssh', () => {
   it('happy path: resolves the profile, assembles the command, maps the result', async () => {
     const h = setup()

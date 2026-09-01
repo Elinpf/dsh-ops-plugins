@@ -6,23 +6,22 @@
 
 import { describe, it, expect } from 'vitest'
 import * as plugin from '../src/index.ts'
+import * as invariant from '../src/invariant.ts'
 
-function setup(opts: { reminderEnabled?: boolean, withSystemPrompt?: boolean } = {}) {
+function setup(opts: { reminderEnabled?: boolean } = {}) {
   const provided = new Map<string, unknown>()
   const sections: Array<{ name: string, order: number, text: unknown }> = []
-  const listeners: Array<{ event: string, fn: Function }> = []
 
   const ctx: any = {
     provide: (key: string, value: unknown) => { provided.set(key, value) },
-    get: (name: string) => {
-      if (name === 'systemPrompt' && opts.withSystemPrompt !== false) {
-        return { section: (s: any) => { sections.push(s); return () => {} } }
-      }
-      return undefined
-    },
+    // Declared required inject — present by definition when apply runs.
+    systemPrompt: { section: (s: any) => { sections.push(s); return () => {} } },
+    get: () => undefined,
     on: (event: string, fn: Function) => { listeners.push({ event, fn }); return () => {} },
+    effect: (fn: () => (() => void) | void) => { fn() },
     inject: () => {}, // no skills registry in these tests — the fallback must stay inert
   }
+  const listeners: Array<{ event: string, fn: Function }> = []
   plugin.apply(ctx, { reminderEnabled: opts.reminderEnabled ?? true })
 
   return {
@@ -41,6 +40,23 @@ describe('export shape', () => {
     expect(plugin.inject).toEqual(['systemPrompt'])
     expect(typeof plugin.apply).toBe('function')
     expect(plugin.Config).toBeDefined()
+  })
+
+  it('invariant companion is a function plugin too', () => {
+    expect('default' in invariant).toBe(false)
+    expect(invariant.name).toBe('ops-prompts-invariant')
+    expect(invariant.inject).toEqual(['invariants'])
+    expect(typeof invariant.apply).toBe('function')
+  })
+
+  it('re-exports the pure types from ./types (type-level compat)', async () => {
+    // Compile-time check: the interfaces must remain importable from the
+    // package root after moving to types.ts.
+    const entry: import('../src/types.ts').MethodologyEntry = { name: 'x', order: 1, text: 't' }
+    const handle: Pick<plugin.OpsPromptsHandle, 'registerMethodology'> = {
+      registerMethodology: (opts: plugin.MethodologyEntry) => { void opts; return () => {} },
+    }
+    expect(handle.registerMethodology(entry)).toBeInstanceOf(Function)
   })
 })
 
@@ -69,9 +85,10 @@ describe('methodology', () => {
     expect((sections[0].text as () => string)()).not.toContain('SECOND')
   })
 
-  it('registers no section when systemPrompt is unavailable', () => {
-    const { sections } = setup({ withSystemPrompt: false })
-    expect(sections).toHaveLength(0)
+  it('registers the methodology section through the declared systemPrompt inject', () => {
+    const { sections } = setup()
+    expect(sections).toHaveLength(1)
+    expect(sections[0].name).toBe('ops:methodology')
   })
 })
 

@@ -79,12 +79,16 @@ export function setup(opts: {
     tools: {
       register: (t: any) => {
         tools.push(t)
-        return () => {}
+        // Real disposer: removes the tool, so HMR-unload tests see the surface shrink.
+        return () => {
+          const i = tools.indexOf(t)
+          if (i !== -1) tools.splice(i, 1)
+        }
       },
     },
   }
 
-  apply(ctx, {})
+  apply(ctx, { timeoutMs: 30000 })
 
   const kubectl = tools.find((t) => t.name === 'kubectl')
   const listAccess = tools.find((t) => t.name === 'list_access')

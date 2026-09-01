@@ -1,0 +1,4 @@
+title: "@deepseek-ai/dsh-ops-trace-ui"
+description:
+  zh: "ops trace 的 host 面薄壳 — 注册共享 trace projection 并携带 web 面板 client bundle"
+  en: "Host-plane half of the ops trace feature — registers the shared trace projection and ships the web panel client bundle"

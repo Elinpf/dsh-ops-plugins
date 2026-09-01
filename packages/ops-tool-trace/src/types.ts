@@ -6,21 +6,11 @@
 
 // ── Node status (05 state machine) ──────────────────────────────────────────
 
-/**
- * The six node statuses from the state machine — the single source of truth
- * for the status set. The zod projection schema, the tool's output JSON
- * schema, and the status_filter enum all derive from this list.
- *
- * - `goal` — a stable target (milestone or final goal); uses dashed connectors
- * - `pending` — a step not yet started; uses thin dashed connectors
- * - `in_progress` — actively being worked on
- * - `done` — completed
- * - `dead_end` — proven unviable; NOT a terminal state (can re-explore)
- * - `resolved` — final goal achieved; terminal state
- */
-export const NODE_STATUSES = ['goal', 'pending', 'in_progress', 'done', 'dead_end', 'resolved'] as const
-
-export type NodeStatus = typeof NODE_STATUSES[number]
+// NODE_STATUSES and activeTree are runtime values — they live in node-status.ts
+// (this file is types-only). NodeStatus stays available here as a type re-export
+// so existing `from './types.js'` type imports keep working.
+export type { NodeStatus } from './node-status.js'
+import type { NodeStatus } from './node-status.js'
 
 // ── Tree node (projection state) ─────────────────────────────────────────────
 
@@ -66,16 +56,6 @@ export interface TreeState {
 export interface ForestState {
   /** All trees in chronological order. */
   trees: TreeState[]
-}
-
-/**
- * The active tree is the last unresolved one, or the last tree if all are resolved.
- */
-export function activeTree(forest: ForestState): TreeState | null {
-  for (let i = forest.trees.length - 1; i >= 0; i--) {
-    if (!forest.trees[i].resolved) return forest.trees[i]
-  }
-  return forest.trees.length > 0 ? forest.trees[forest.trees.length - 1] : null
 }
 
 // ── Session events (incremental, append-only) ────────────────────────────────

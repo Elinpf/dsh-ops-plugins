@@ -73,6 +73,10 @@ export interface RefreshOptions {
   userRulesFile?: string
   /** Timestamp source (tests). */
   now?: Date
+  /** Per-kubectl-call scan timeout (ms); defaults to the scanner's own 30s. */
+  scanTimeoutMs?: number
+  /** Prometheus scrape timeout (ms); defaults to the scrape's own 15s. */
+  prometheusTimeoutMs?: number
 }
 
 const byNsName = <T extends { namespace: string, name: string }>(a: T, b: T) =>
@@ -203,6 +207,8 @@ export async function refreshInventory(
         exec: opts.exec,
         spawn: opts.spawn,
         fetchFn: opts.fetchFn,
+        timeoutMs: opts.scanTimeoutMs,
+        prometheusTimeoutMs: opts.prometheusTimeoutMs,
         now,
       })
       clusters[target.cluster] = buildClusterInventory(scan, { userRulesFile: opts.userRulesFile })

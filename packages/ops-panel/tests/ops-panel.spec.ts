@@ -5,9 +5,34 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
+import * as nodePlugin from '../src/index.ts'
+import * as clientPlugin from '../src/client.ts'
 import { registerPanelCommand } from '../src/index.ts'
 import { createPanelCore, apply as applyClient } from '../src/client.ts'
 import type { OpsPanels, PanelDefinition } from '../src/types.ts'
+
+// ── Export shape ─────────────────────────────────────────────────────────────
+
+describe('export shape (node half)', () => {
+  it('is a function plugin: name/inject/Config/apply, no default export', () => {
+    expect(nodePlugin.name).toBe('ops-panel')
+    expect(nodePlugin.inject).toEqual([])
+    expect(nodePlugin.Config).toBeDefined()
+    expect(typeof nodePlugin.apply).toBe('function')
+    expect('default' in nodePlugin).toBe(false)
+    // Empty by design — the row exists for client-bundle discovery only.
+    expect(() => nodePlugin.apply({} as never)).not.toThrow()
+  })
+})
+
+describe('export shape (client half)', () => {
+  it('is a function plugin: name/inject/apply, no default export', () => {
+    expect(clientPlugin.name).toBe('ops-panel-client')
+    expect(clientPlugin.inject).toEqual(['slots'])
+    expect(typeof clientPlugin.apply).toBe('function')
+    expect('default' in clientPlugin).toBe(false)
+  })
+})
 
 // ── registerPanelCommand ─────────────────────────────────────────────────────
 
@@ -173,5 +198,72 @@ describe('opsPanels service face', () => {
     svc.registerPanel({ command: 'access', title: 't', component: () => null, available: (sid) => sid === 'ops' })
     expect(svc.open('other', 'access')).toBe(false)
     expect(svc.open('ops', 'access')).toBe(true)
+  })
+})
+
+// ── HMR unload (client half) ────────────────────────────────────────────────
+
+describe('HMR unload (client half)', () => {
+  /**
+   * Boot client apply with a fiber-faithful mock: every registration surface
+   * (provided service, event listener, slot entry) is tied to the fiber the
+   * way cordis ties them, and effect disposers are collected for replay.
+   */
+  function bootHmr() {
+    const effectCleanups: Array<() => void> = []
+    const provided = new Map<string, unknown>()
+    const listeners = new Map<string, Set<(...args: unknown[]) => void>>()
+    const slotEntries: Array<Record<string, unknown>> = []
+    const slots = {
+      inject(_slot: string, factory: () => unknown) {
+        const inner = factory() as (() => void) | undefined
+        return () => { inner?.() }
+      },
+      register(opts: Record<string, unknown>, component: unknown) {
+        const entry = { ...opts, component }
+        slotEntries.push(entry)
+        return () => { slotEntries.splice(slotEntries.indexOf(entry), 1) }
+      },
+    }
+    const ctx = {
+      provide(key: string, value: unknown) {
+        provided.set(key, value)
+        effectCleanups.push(() => { provided.delete(key) })
+      },
+      on(event: string, cb: (...args: unknown[]) => void) {
+        let set = listeners.get(event)
+        if (!set) listeners.set(event, (set = new Set()))
+        set.add(cb)
+        effectCleanups.push(() => { set.delete(cb) })
+      },
+      get: (key: string) => (key === 'slots' ? slots : undefined),
+      effect(fn: () => () => void) {
+        const dispose = fn()
+        effectCleanups.push(dispose)
+        return dispose
+      },
+    } as unknown as Context
+    applyClient(ctx)
+    return { effectCleanups, provided, listeners, slotEntries }
+  }
+
+  it('registers the service, the dispatcher, and the overlay shell on apply', () => {
+    const { provided, listeners, slotEntries } = bootHmr()
+    expect(provided.has('opsPanels')).toBe(true)
+    expect(listeners.get('command/executed')?.size).toBe(1)
+    expect(slotEntries).toHaveLength(1)
+    expect(slotEntries[0]).toMatchObject({ name: 'conversation.input.overlay', id: 'ops-panel' })
+  })
+
+  it('disposing every effect removes every registration surface', () => {
+    const { effectCleanups, provided, listeners, slotEntries } = bootHmr()
+    expect(effectCleanups.length).toBeGreaterThan(0)
+    for (const dispose of effectCleanups) dispose()
+    // The overlay shell entry is gone from the slot registry.
+    expect(slotEntries).toHaveLength(0)
+    // The single command/executed dispatcher is unlistened.
+    expect(listeners.get('command/executed')?.size ?? 0).toBe(0)
+    // The opsPanels service is unprovided.
+    expect(provided.has('opsPanels')).toBe(false)
   })
 })

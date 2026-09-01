@@ -17,7 +17,7 @@
  * @module @deepseek-ai/dsh-ops-tool-trace/reminders
  */
 
-import { activeTree } from './types.js'
+import { activeTree } from './node-status.js'
 import type { ForestState, TreeState } from './types.js'
 import type { SessionForestStore } from './session-forests.js'
 import { TRIGGER_NODE_QUESTION } from './doctrine.js'
@@ -121,7 +121,7 @@ export class ReminderLatch {
  * The idle rule: nudge when an active investigation hasn't updated trace in
  * 5+ steps. Silent when there is no tree or the tree is resolved.
  */
-export function createIdleRule(latch: ReminderLatch): (ctx: ReminderContext) => string | null {
+export function createIdleRule(latch: ReminderLatch, gapSteps = 5): (ctx: ReminderContext) => string | null {
   return (ctx) => {
     const tree = ctx.tree
     if (!tree || tree.resolved) return null
@@ -134,7 +134,7 @@ export function createIdleRule(latch: ReminderLatch): (ctx: ReminderContext) => 
     const firedAt = latch.firedAt(ctx.sessionId)
     if (firedAt !== undefined && ctx.lastTraceStep >= firedAt) latch.reset(ctx.sessionId)
     const gap = ctx.currentStep - ctx.lastTraceStep
-    if (gap < 5) return null
+    if (gap < gapSteps) return null
     if (!latch.shouldFire(ctx.sessionId, ctx.currentStep)) return null
     return `[REMINDER] 过去 ${gap} 步排查没有更新 trace。后续调查动作执行前先 add_step(写下要查什么), 拿到结果立即 complete 带 summary。迷失方向先 view。`
   }
@@ -148,7 +148,7 @@ export function createIdleRule(latch: ReminderLatch): (ctx: ReminderContext) => 
  * depth 1, step at depth 2; a step nested under a step lives at depth ≥ 3.
  * "Flat" = at least 3 nodes at depth 2 and nothing deeper.
  */
-export function createNestingRule(latch: ReminderLatch): (ctx: ReminderContext) => string | null {
+export function createNestingRule(latch: ReminderLatch, flatSteps = 3): (ctx: ReminderContext) => string | null {
   return (ctx) => {
     const tree = ctx.tree
     if (!tree || tree.resolved) return null
@@ -160,7 +160,7 @@ export function createNestingRule(latch: ReminderLatch): (ctx: ReminderContext) 
       if (d === 2) flatCount++
       else if (d >= 3) hasDeep = true
     }
-    if (hasDeep || flatCount < 3) return null
+    if (hasDeep || flatCount < flatSteps) return null
     if (!tree.nodes.some((n) => n.summary !== null)) return null
     // Version: tree generation (forest length) × flat-step count — grows when
     // a new tree starts or the flat count grows, so history replay never

@@ -17,6 +17,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { z as zod } from 'zod'
 import * as plugin from '../src/index.ts'
 import type { AccessProvider } from '../src/index.ts'
+import * as invariantPlugin from '../src/invariant.ts'
+import * as mentionModule from '../src/mention.ts'
+import * as typesModule from '../src/types.ts'
 import { setup } from './harness.ts'
 import { decodeAccessReferenceUri, formatAccessMention } from '../src/mention.ts'
 
@@ -49,6 +52,32 @@ describe('export shape', () => {
     expect(plugin.inject).toEqual(['tools'])
     expect(typeof plugin.apply).toBe('function')
     expect(plugin.Config).toBeDefined()
+  })
+
+  it('./types subpath is types-only: no runtime exports', () => {
+    expect('default' in typesModule).toBe(false)
+    expect(Object.keys(typesModule)).toEqual([])
+  })
+
+  it('./mention subpath: named exports, no default', () => {
+    expect('default' in mentionModule).toBe(false)
+    expect(mentionModule.ACCESS_REFERENCE_SCHEME).toBe('dsh-access:')
+    expect(typeof mentionModule.encodeAccessReferenceUri).toBe('function')
+    expect(typeof mentionModule.decodeAccessReferenceUri).toBe('function')
+    expect(typeof mentionModule.formatAccessMention).toBe('function')
+    expect(typeof mentionModule.parseAccessReferenceText).toBe('function')
+  })
+
+  it('./invariant companion: named exports, no default, registers with the invariants service', async () => {
+    expect('default' in invariantPlugin).toBe(false)
+    expect(invariantPlugin.name).toBe('ops-access-invariant')
+    expect(invariantPlugin.inject).toEqual(['invariants'])
+    expect(typeof invariantPlugin.apply).toBe('function')
+    const registrations: Array<[string, unknown]> = []
+    await invariantPlugin.apply({
+      invariants: { register: (pkg: string, install: unknown) => { registrations.push([pkg, install]) } },
+    })
+    expect(registrations).toEqual([['@deepseek-ai/dsh-ops-access', expect.any(Function)]])
   })
 })
 
@@ -870,13 +899,14 @@ describe('listAll', () => {
   it('schema failure → ok=false with error carrying the reason', async () => {
     const { handle, write } = setup()
     handle.register(testProvider)
-    write('test:\n  alpha:\n    ro:\n      endpoint: 5\n')
+    write('test:\n  alpha:\n    ro:\n      endpoint: 987654321\n')
     const entries = await handle.listAll()
     const alpha = entries.find((e) => e.kind === 'test' && e.name === 'alpha')!
     expect(alpha.tiers.ro.ok).toBe(false)
     expect(alpha.tiers.ro.error).toMatch(/endpoint/)
-    // Error never carries the raw field value.
-    expect(alpha.tiers.ro.error).not.toContain('5')
+    // Error never carries the raw field value. The sentinel is long enough
+    // that a random tmpdir path cannot accidentally contain it.
+    expect(alpha.tiers.ro.error).not.toContain('987654321')
   })
 
   it('same name in both tiers → merged into one row', async () => {
@@ -1547,5 +1577,46 @@ describe('capability probe', () => {
     write(VALID_REGISTRY.replace('endpoint: https://alpha.internal', 'endpoint: https://alpha.internal\n      probe: { status: bogus }'))
     entries = await handle.listAll()
     expect(entries.find((e) => e.name === 'alpha')?.tiers.ro.probe).toBeUndefined()
+  })
+})
+
+// ── HMR unload ───────────────────────────────────────────────────────────────
+
+describe('HMR unload', () => {
+  it('running every effect disposer removes the full registration surface', async () => {
+    const h = setup()
+    // The full surface is registered on apply.
+    expect(h.tools.map((t) => t.name)).toEqual(['register_access'])
+    expect(h.routes.map((r) => r.path).sort()).toEqual([
+      '/ops-access/admin/entry',
+      '/ops-access/admin/kinds',
+      '/ops-access/admin/list',
+      '/ops-access/list',
+    ])
+    expect(h.listeners.map((l) => l.event)).toEqual(['agent/pre-step'])
+    expect(h.hasService('opsAccess')).toBe(true)
+
+    // Provider + broker mount through the plugin's deferred-inject path —
+    // their registrations must ride the same effect lifecycle.
+    plugin.registerAccessProvider(h.ctx, testProvider)
+    plugin.registerAccessBroker(h.ctx, () => ({ deny: 'nope' }))
+    expect(h.handle.listKinds().map((k) => k.kind)).toEqual(['test'])
+    h.write(VALID_REGISTRY)
+    await expect(h.handle.resolve('test', 'alpha')).rejects.toThrow(/access denied/)
+
+    // Simulate fiber disposal / HMR unload.
+    for (const cleanup of h.effectCleanups.splice(0)) cleanup()
+
+    expect(h.tools).toHaveLength(0)
+    expect(h.routes).toHaveLength(0)
+    expect(h.listeners).toHaveLength(0)
+    expect(h.hasService('opsAccess')).toBe(false)
+    // The provider is gone from the seam's registry.
+    expect(h.handle.listKinds()).toHaveLength(0)
+    // The broker disposer ran: re-register the provider directly and resolve
+    // is back to broker-less ro behavior.
+    h.handle.register(testProvider)
+    const profile = await h.handle.resolve('test', 'alpha')
+    expect(profile.tier).toBe('ro')
   })
 })

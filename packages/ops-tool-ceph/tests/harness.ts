@@ -73,12 +73,16 @@ export function setup(opts: {
     tools: {
       register: (t: any) => {
         tools.push(t)
-        return () => {}
+        // Real disposer: unregister removes the tool, mirroring the runtime.
+        return () => {
+          const i = tools.indexOf(t)
+          if (i >= 0) tools.splice(i, 1)
+        }
       },
     },
   }
 
-  apply(ctx, {})
+  apply(ctx, { timeoutMs: 30000 })
 
   const ceph = tools.find((t) => t.name === 'ceph')
 

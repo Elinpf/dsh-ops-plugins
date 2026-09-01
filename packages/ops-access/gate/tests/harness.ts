@@ -11,6 +11,14 @@
  * harness's inject mirrors cordis's deferred semantics — an inject whose deps
  * are not yet provided pends and fires on provide, so mounting the gate before
  * core (opts.gateFirst) still lands the broker.
+ *
+ * Disposal mirrors cordis's fiber semantics so HMR unload can be tested: each
+ * plugin mounts against its own context facade with its own cleanup bucket —
+ * effect disposers are collected (`effectCleanups.push(fn())`), ctx.on
+ * listeners and ctx.provide services are tied to the fiber that created them,
+ * and the mock registries (tools/commands/routes) return disposers that
+ * really remove the registration. dispose() runs only the GATE's bucket, in
+ * reverse registration order, leaving core mounted.
  */
 
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
@@ -73,47 +81,100 @@ export function setup(opts: SetupOptions = {}) {
   // Deferred inject, mirroring cordis: an inject whose deps are not yet
   // provided pends and fires when they are. This is what makes gate-first
   // mounting work — the broker registration waits for core to provide
-  // opsAccess instead of silently never happening.
+  // opsAccess instead of silently never happening. The pending entry carries
+  // the registering fiber's bucket so effects created inside the deferred
+  // callback (the broker registration) dispose with that fiber.
   const services = new Map<string, any>()
-  const pending: Array<{ deps: string[], cb: (c: any) => void }> = []
-  const webServer = { register: (route: any) => { routes.push(route); return () => {} } }
+  const pending: Array<{ deps: string[], cb: (c: any) => void, bucket: Array<() => void> }> = []
+  const webServer = {
+    register: (route: any) => {
+      routes.push(route)
+      return () => {
+        const i = routes.indexOf(route)
+        if (i >= 0) routes.splice(i, 1)
+      }
+    },
+  }
   if (!opts.headless) services.set('webServer', webServer)
-  services.set('commands', { register: (def: any) => { commands.push(def); return () => {} } })
-  const injectionCtx: any = () => ({
+  services.set('commands', {
+    register: (def: any) => {
+      commands.push(def)
+      return () => {
+        const i = commands.indexOf(def)
+        if (i >= 0) commands.splice(i, 1)
+      }
+    },
+  })
+
+  /** Run an effect body and tie its disposer to the fiber's bucket. */
+  const collect = (bucket: Array<() => void>, fn: () => (() => void) | void) => {
+    const disposer = fn()
+    if (typeof disposer === 'function') bucket.push(disposer)
+    return disposer
+  }
+
+  const injectionCtx = (bucket: Array<() => void>): any => ({
     opsAccess: services.get('opsAccess'),
     webServer,
     commands: services.get('commands'),
     get: (key: string) => services.get(key),
-    effect: (fn: () => () => void) => { fn() },
+    effect: (fn: () => (() => void) | void) => collect(bucket, fn),
   })
+
   const flush = () => {
     for (let i = pending.length - 1; i >= 0; i--) {
       if (pending[i].deps.every((d) => services.has(d))) {
-        const { cb } = pending.splice(i, 1)[0]
-        cb(injectionCtx())
+        const { cb, bucket } = pending.splice(i, 1)[0]
+        cb(injectionCtx(bucket))
       }
     }
   }
-  const ctx: any = {
+
+  /** One context facade per mounted plugin — cordis scopes effects, listeners,
+   * and provides to the plugin fiber, so the mock must too. */
+  const makeCtx = (bucket: Array<() => void>): any => ({
     provide: (key: string, value: any) => {
       services.set(key, value)
       if (key === 'opsAccess') opsAccess = value
       if (key === 'opsAccessGate') opsAccessGate = value
+      bucket.push(() => { services.delete(key) })
       flush()
     },
     on: (event: string, listener: (...args: any[]) => unknown, options?: unknown) => {
-      listeners.push({ event, listener, options })
-      return () => {}
+      const entry = { event, listener, options }
+      listeners.push(entry)
+      // cordis ties a context's listeners to its fiber: disposal removes them
+      // even when the plugin dropped the returned disposer (the gate does).
+      const dispose = () => {
+        const i = listeners.indexOf(entry)
+        if (i >= 0) listeners.splice(i, 1)
+      }
+      bucket.push(dispose)
+      return dispose
     },
     inject: (deps: string[], cb: (c: any) => void) => {
-      if (deps.every((d) => services.has(d))) cb(injectionCtx())
-      else pending.push({ deps, cb })
+      if (deps.every((d) => services.has(d))) cb(injectionCtx(bucket))
+      else pending.push({ deps, cb, bucket })
     },
     get: (key: string) => services.get(key) ?? (key === 'opsAccess' ? opsAccess : undefined),
-    effect: (fn: () => () => void) => { fn() },
-    tools: { register: (tool: any) => { tools.push(tool); return () => {} } },
-  }
-  const mountGate = () => gateApply(ctx, {
+    effect: (fn: () => (() => void) | void) => collect(bucket, fn),
+    tools: {
+      register: (tool: any) => {
+        tools.push(tool)
+        return () => {
+          const i = tools.indexOf(tool)
+          if (i >= 0) tools.splice(i, 1)
+        }
+      },
+    },
+  })
+
+  const coreCleanups: Array<() => void> = []
+  const gateCleanups: Array<() => void> = []
+  const coreCtx = makeCtx(coreCleanups)
+  const gateCtx = makeCtx(gateCleanups)
+
+  const mountGate = () => gateApply(gateCtx, {
     approvalRequiredKinds: ['ssh'],
     defaultTtlMinutes: 30,
     maxTtlMinutes: 480,
@@ -123,7 +184,7 @@ export function setup(opts: SetupOptions = {}) {
     deniedFile: join(dir, 'denied.json'),
     ...opts.config,
   })
-  const mountCore = () => coreApply(ctx, { registryFile, credentialsDir: join(dir, 'credentials') })
+  const mountCore = () => coreApply(coreCtx, { registryFile, credentialsDir: join(dir, 'credentials') })
   if (opts.gateFirst) {
     mountGate()
     mountCore()
@@ -133,6 +194,15 @@ export function setup(opts: SetupOptions = {}) {
   }
   opsAccess!.register(testProvider)
   opsAccess!.register(sshProvider)
+
+  let disposed = false
+  /** Unload the gate fiber (HMR): run its collected disposers in reverse
+   * registration order, like cordis. Core stays mounted. */
+  const dispose = () => {
+    if (disposed) return
+    disposed = true
+    for (const fn of [...gateCleanups].reverse()) fn()
+  }
 
   /** The registered request_access tool's execute, driven directly. */
   async function callRequestAccess(args: Record<string, unknown>, exec: Record<string, unknown> = {}) {
@@ -172,6 +242,8 @@ export function setup(opts: SetupOptions = {}) {
     commands,
     callRoute,
     callRequestAccess,
+    dispose,
+    hasService: (key: string) => services.has(key),
     dir,
     registryFile,
     auditFile,

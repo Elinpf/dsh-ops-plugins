@@ -15,6 +15,11 @@ import { z as zod } from 'zod'
 import { execFile } from 'node:child_process'
 import type { AccessProvider } from '@deepseek-ai/dsh-ops-access'
 import { expandHome, registerAccessProvider } from '@deepseek-ai/dsh-ops-access'
+import type { CapAssessment, ProbeFailure, ProbeOutcome } from './types.js'
+
+// Pure types live in types.ts (zero runtime code); re-exported here so
+// existing `from './index.js'` type imports keep working.
+export type { CapAssessment, ProbeFailure, ProbeOutcome } from './types.js'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -22,7 +27,10 @@ export const name = 'ops-access-ceph'
 
 export const inject: string[] = []
 
-export const Config = z.object({})
+export const Config = z.object({
+  /** Save-time probe: timeout for the `ceph auth get` call (ms). Slow clusters may need more. */
+  probeTimeoutMs: z.number().default(10000),
+})
 
 // ── Provider ─────────────────────────────────────────────────────────────────
 
@@ -108,7 +116,7 @@ function capIsWritable(value: string): boolean {
  * librbd object-class reads, ticket 14); rw verifies when at least one cap
  * grants write.
  */
-export function assessCephCaps(caps: Record<string, string>, tier: 'ro' | 'rw'): { status: 'verified' | 'mismatch', detail?: string } {
+export function assessCephCaps(caps: Record<string, string>, tier: 'ro' | 'rw'): CapAssessment {
   const summary = Object.entries(caps).map(([d, v]) => d + '="' + v + '"').join(' ')
   if (Object.keys(caps).length === 0) return { status: 'mismatch', detail: 'auth get returned no caps lines' }
   if (tier === 'ro') {
@@ -128,20 +136,20 @@ export function assessCephCaps(caps: Record<string, string>, tier: 'ro' | 'rw'):
  * would have enough privilege for auth get and would have been caught by
  * the caps comparison.
  */
-export function cephProbeFailure(tier: 'ro' | 'rw', errText: string): { status: 'unverifiable', detail: string } {
+export function cephProbeFailure(tier: 'ro' | 'rw', errText: string): ProbeFailure {
   if (tier === 'ro' && /EACCES|access denied/i.test(errText)) {
     return { status: 'unverifiable', detail: 'entity cannot self-read its caps (normal for a tight ro entity — an over-privileged credential in this slot would have the privilege to auth get and would have been caught)' }
   }
   return { status: 'unverifiable', detail: 'ceph auth get could not run (cluster unreachable or ceph CLI missing)' }
 }
 
-async function probeCeph(fields: Record<string, unknown>, tier: 'ro' | 'rw') {
+async function probeCeph(fields: Record<string, unknown>, tier: 'ro' | 'rw', timeoutMs = 10000): Promise<ProbeOutcome> {
   const name = typeof fields.name === 'string' ? fields.name : 'client.admin'
   const conf = String(fields.conf ?? '')
   const keyring = String(fields.keyring ?? '')
   const result = await new Promise<{ output: string | null, errText: string }>((resolve) => {
     execFile('ceph', ['--conf', conf, '--keyring', keyring, '--name', name, 'auth', 'get', name],
-      { timeout: 10000 },
+      { timeout: timeoutMs },
       (err, stdout, stderr) => resolve(err
         ? { output: null, errText: String(stderr ?? '') + ' ' + String(err.message ?? '') }
         : { output: stdout, errText: '' }))
@@ -151,6 +159,9 @@ async function probeCeph(fields: Record<string, unknown>, tier: 'ro' | 'rw') {
 }
 // ── Plugin apply ─────────────────────────────────────────────────────────────
 
-export function apply(ctx: Context, _config: Record<string, never>): void {
-  registerAccessProvider(ctx, provider)
+export function apply(ctx: Context, config: { probeTimeoutMs: number }): void {
+  registerAccessProvider(ctx, {
+    ...provider,
+    probe: (fields, tier) => probeCeph(fields, tier, config.probeTimeoutMs),
+  })
 }

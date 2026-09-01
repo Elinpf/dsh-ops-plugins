@@ -74,12 +74,15 @@ export function setup(opts: {
     tools: {
       register: (t: any) => {
         tools.push(t)
-        return () => {}
+        return () => {
+          const i = tools.indexOf(t)
+          if (i >= 0) tools.splice(i, 1)
+        }
       },
     },
   }
 
-  apply(ctx, {})
+  apply(ctx, { timeoutMs: 30000, connectTimeoutSeconds: 10 })
 
   const ssh = tools.find((t) => t.name === 'ssh')
 

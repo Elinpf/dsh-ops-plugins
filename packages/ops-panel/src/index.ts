@@ -10,6 +10,7 @@
  * @module @deepseek-ai/dsh-ops-panel
  */
 
+import z from '@deepseek-ai/schemastery'
 import type { PanelCommandSpec } from './types.ts'
 
 export type { OpsPanels, PanelCommandSpec, PanelComponent, PanelContentProps, PanelDefinition } from './types.ts'
@@ -19,6 +20,11 @@ export type { OpsPanels, PanelCommandSpec, PanelComponent, PanelContentProps, Pa
 export const name = 'ops-panel'
 
 export const inject: string[] = []
+
+// ── Config ───────────────────────────────────────────────────────────────────
+
+/** No options: the row is a discovery-only shell, the helper takes its spec per call. */
+export const Config = z.object({})
 
 /** Empty by design: the row exists so the web resolver finds lib/client.js. */
 export function apply(_ctx: never): void {}

@@ -6,6 +6,8 @@ import { assessCephCaps, cephProbeFailure, parseCaps, provider } from '../src/in
 
 import { afterEach, describe, expect, it } from 'vitest'
 import * as plugin from '../src/index.ts'
+import * as invariant from '../src/invariant.ts'
+import * as types from '../src/types.ts'
 import type { AccessProvider } from '@deepseek-ai/dsh-ops-access'
 
 // ── Export shape ─────────────────────────────────────────────────────────────
@@ -15,8 +17,27 @@ describe('export shape', () => {
     expect('default' in plugin).toBe(false)
     expect(plugin.name).toBe('ops-access-ceph')
     expect(plugin.inject).toEqual([])
+    expect(plugin.Config).toBeDefined()
     expect(typeof plugin.apply).toBe('function')
     expect(plugin.provider.kind).toBe('ceph')
+  })
+
+  it('types subpath carries zero runtime code', () => {
+    expect('default' in types).toBe(false)
+    expect(Object.keys(types)).toEqual([])
+  })
+
+  it('invariant subpath is a function plugin: named exports, no default', () => {
+    expect('default' in invariant).toBe(false)
+    expect(invariant.name).toBe('ops-access-ceph-invariant')
+    expect(invariant.inject).toEqual(['invariants'])
+    expect(typeof invariant.apply).toBe('function')
+  })
+
+  it('invariant companion reserves package ownership, installing nothing', async () => {
+    const registered: string[] = []
+    await invariant.apply({ invariants: { register: (pkg: string) => { registered.push(pkg) } } })
+    expect(registered).toEqual(['@deepseek-ai/dsh-ops-access-ceph'])
   })
 })
 
@@ -65,31 +86,47 @@ describe('process', () => {
 
 // ── Registration ─────────────────────────────────────────────────────────────
 
+/**
+ * Mock of the mount path registerAccessProvider walks: ctx.inject defers to a
+ * parent context whose effect() collects disposers, and opsAccess.register
+ * returns a disposer that REALLY removes the provider from the registry.
+ */
+function makeMount() {
+  const registry = new Map<string, AccessProvider>()
+  const effectCleanups: Array<() => void> = []
+  const pctx: any = {
+    opsAccess: {
+      register: (p: AccessProvider) => {
+        registry.set(p.kind, p)
+        return () => { registry.delete(p.kind) }
+      },
+    },
+    effect: (fn: () => () => void) => { effectCleanups.push(fn()) },
+  }
+  let injectedDeps: string[] = []
+  const ctx: any = {
+    inject: (deps: string[], cb: (c: any) => void) => { injectedDeps = deps; cb(pctx) },
+  }
+  return { ctx, registry, effectCleanups, injectedDeps: () => injectedDeps }
+}
+
 describe('apply', () => {
   it('defers through ctx.inject and registers once opsAccess arrives', () => {
-    const registered: AccessProvider[] = []
-    let disposed = false
-    const effectCleanups: Array<() => void> = []
-    const pctx: any = {
-      opsAccess: {
-        register: (p: AccessProvider) => {
-          registered.push(p)
-          return () => { disposed = true }
-        },
-      },
-      effect: (fn: () => () => void) => { effectCleanups.push(fn()) },
-    }
-    let injectedDeps: string[] = []
-    const ctx: any = {
-      inject: (deps: string[], cb: (c: any) => void) => { injectedDeps = deps; cb(pctx) },
-    }
+    const m = makeMount()
+    plugin.apply(m.ctx, { probeTimeoutMs: 10000 })
+    expect(m.injectedDeps()).toEqual(['opsAccess'])
+    expect(m.registry.size).toBe(1)
+    expect(m.registry.get('ceph')?.kind).toBe(plugin.provider.kind)
+    expect(m.effectCleanups).toHaveLength(1)
+  })
 
-    plugin.apply(ctx, {})
-    expect(injectedDeps).toEqual(['opsAccess'])
-    expect(registered).toEqual([plugin.provider])
-    expect(effectCleanups).toHaveLength(1)
-    effectCleanups[0]()
-    expect(disposed).toBe(true)
+  it('HMR unload: running every effect disposer removes the provider from the registry', () => {
+    const m = makeMount()
+    plugin.apply(m.ctx, { probeTimeoutMs: 10000 })
+    expect(m.registry.has('ceph')).toBe(true)
+    for (const dispose of m.effectCleanups) dispose()
+    expect(m.registry.has('ceph')).toBe(false)
+    expect(m.registry.size).toBe(0)
   })
 })
 

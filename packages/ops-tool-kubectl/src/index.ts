@@ -21,6 +21,10 @@ import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { registerProfiledShellTool } from '@deepseek-ai/dsh-ops-shell-tool'
 import type { AdminEntry, AdminTierStatus, OpsAccess } from '@deepseek-ai/dsh-ops-access'
+import type { ListedProfile, ListAccessResult } from './types.js'
+
+// Pure types live in ./types.js; re-export so existing imports keep working.
+export type { ListedProfile, ListAccessResult } from './types.js'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -30,32 +34,13 @@ export const inject = ['shell', 'tools']
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
-export const Config = z.object({})
+export const Config = z.object({
+  /** Per-call shell timeout for kubectl runs (ms). Slow clusters may need more. */
+  timeoutMs: z.number().default(30000),
+})
 
-// ── list_access types ────────────────────────────────────────────────────────
+// ── list_access helpers ──────────────────────────────────────────────────────
 
-/** One list_access entry: envelope fields + tier readiness, never `fields`. */
-interface ListedProfile {
-  name: string
-  displayName?: string
-  description?: string
-  environment?: string
-  /** Whether the ro tier resolves (the agent's default working level). */
-  ro: boolean
-  /** Whether the rw tier resolves (grant-gated; source for ro derivation). */
-  rw: boolean
-  /** Capability-probe annotation per ok tier (ticket 10), e.g. 'ro 已核验 / rw 声明未核验'. */
-  probe?: string
-}
-
-interface ListAccessResult {
-  groups: Array<{ kind: string, profiles: ListedProfile[] }>
-  total: number
-  /** Present when called with help: true — the registry management doc. */
-  help?: string
-}
-
-/** Strip an admin entry down to envelope + tier readiness — `fields` never crosses into tool output. */
 /** Compact probe label for one tier: verified / failed / unverifiable / unprobed. */
 function probeLabel(status: AdminTierStatus): string {
   if (status.probe === undefined) return '声明未核验'
@@ -76,8 +61,9 @@ function toListedProfile(e: AdminEntry): ListedProfile {
 
 // ── Plugin apply ─────────────────────────────────────────────────────────────
 
-export function apply(ctx: Context, _config: Record<string, never>): void {
+export function apply(ctx: Context, config: { timeoutMs: number }): void {
   registerProfiledShellTool(ctx, {
+    timeoutMs: config.timeoutMs,
     name: 'kubectl',
     kind: 'k8s',
     targetParam: 'cluster',
