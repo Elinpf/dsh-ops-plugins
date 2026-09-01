@@ -1,6 +1,6 @@
 /**
  * Bundled skills provider spec: native frontmatter parsing, directory
- * listing, provider get/list behavior, the real bundled remediation skill,
+ * listing, provider get/list behavior, the real bundled change skill,
  * and the apply-time optional registration against a fake skills registry.
  */
 
@@ -29,9 +29,9 @@ afterEach(async () => {
 
 describe('parseSkillFrontmatter', () => {
   it('parses name/description/whenToUse and disable-model-invocation', () => {
-    const fm = parseSkillFrontmatter('---\nname: remediation\ndescription: 四阶段纪律\nwhenToUse: 需要 rw 修复时\ndisable-model-invocation: true\n---\nbody')
+    const fm = parseSkillFrontmatter('---\nname: change\ndescription: 四阶段纪律\nwhenToUse: 需要 rw 修复时\ndisable-model-invocation: true\n---\nbody')
     expect(fm).toEqual({
-      name: 'remediation',
+      name: 'change',
       description: '四阶段纪律',
       whenToUse: '需要 rw 修复时',
       disableModelInvocation: true,
@@ -110,19 +110,19 @@ describe('createBundledSkillsProvider', () => {
 })
 
 describe('the real bundled skills directory', () => {
-  it('offers the remediation skill with routing description and whenToUse', async () => {
+  it('offers the change skill with routing description and whenToUse', async () => {
     const provider = createBundledSkillsProvider()
     const candidates = await provider.list({} as any)
-    const remediation = candidates.find(c => c.name === 'remediation')
-    expect(remediation).toBeDefined()
-    expect(remediation!.description).toContain('rw 修复')
-    expect(remediation!.description).toContain('spawn')
-    expect(remediation!.whenToUse).toContain('rw')
-    expect(remediation!.path).toBe(join(bundledSkillsDir(), 'remediation.md'))
-    // 修复是重操作:人显式 /remediation 触发,模型 catalog 与 skill 工具都看不到它
-    expect(remediation!.invocation).toEqual({ modelInvocable: false, userInvocable: true })
+    const change = candidates.find(c => c.name === 'change')
+    expect(change).toBeDefined()
+    expect(change!.description).toContain('rw 修复')
+    expect(change!.description).toContain('spawn')
+    expect(change!.whenToUse).toContain('rw')
+    expect(change!.path).toBe(join(bundledSkillsDir(), 'change.md'))
+    // 修复是重操作:人显式 /change 触发,模型 catalog 与 skill 工具都看不到它
+    expect(change!.invocation).toEqual({ modelInvocable: false, userInvocable: true })
 
-    const definition = await provider.get(remediation!, {} as any)
+    const definition = await provider.get(change!, {} as any)
     for (const section of ['触发条件', '四阶段', '方案模板', '验证清单', 'spawn 纪律', 'rw 申请纪律', '失败模式']) {
       expect(definition.content).toContain(section)
     }

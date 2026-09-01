@@ -1,6 +1,6 @@
 ---
-name: remediation
-description: 调查收口后需要 rw 修复时使用的四阶段纪律——出方案/验证/人审/执行；验证与执行必须 spawn 干净上下文的子 agent，方案必须五要素齐全。修复是重操作，只能由人用 /remediation 显式启动。
+name: change
+description: 变更纪律——调查收口后需要 rw 修复时使用的四阶段流程：出方案/验证/人审/执行；验证与执行必须 spawn 干净上下文的子 agent，方案必须五要素齐全。变更是重操作，只能由人用 /change 显式启动。
 whenToUse: trace 调查树收口、需要 rw 权限做修复变更时（人来判断，不由 agent 自动触发）
 disable-model-invocation: true
 ---
@@ -11,7 +11,7 @@ disable-model-invocation: true
 
 ## 触发条件
 
-- 启动：由人在消息首行输入 `/remediation` 显式启动——通常是在 trace 调查收口（goal 有定论）且修复需要 rw 权限之后。本 skill 不在模型 catalog 中，agent 不会也无法自动加载它
+- 启动：由人在消息首行输入 `/change` 显式启动——通常是在 trace 调查收口（goal 有定论）且修复需要 rw 权限之后。本 skill 不在模型 catalog 中，agent 不会也无法自动加载它
 - 不启动：只读排查、信息收集、状态确认——这些用 kubectl/environment 工具直接做
 
 ## 四阶段 workflow

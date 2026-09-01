@@ -740,7 +740,7 @@ describe('lineage', () => {
     h.writeRegistry(REGISTRY)
     const { result, req } = await requestAndDecide(
       h,
-      { action: 'request', profile: 'test/prod', reason: 'remediation executor', ttlMinutes: 5 },
+      { action: 'request', profile: 'test/prod', reason: 'change executor', ttlMinutes: 5 },
       { agent: CHILD_SESSION },
       { approved: true, ttlMinutes: 5 },
     )
