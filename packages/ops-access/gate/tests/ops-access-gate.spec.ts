@@ -660,6 +660,50 @@ describe('audit log', () => {
   })
 })
 
+// ── Lineage (血缘归因) ────────────────────────────────────────────────────────
+
+/** An agent shaped like a spawned sub-agent: its session header names the dispatcher. */
+const CHILD_SESSION = { id: 'sess-child', session: { header: { parentSession: 'sess-parent' } } }
+
+describe('lineage', () => {
+  it('a sub-agent rw issue is audited with its parent session', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    h.gate.authorize(futureGrant('sess-child', 'test', 'prod'))
+    await h.opsAccess.resolve('test', 'prod', CHILD_SESSION)
+    const lines = h.readAudit().filter((l) => l.event === 'rw-issue')
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toMatchObject({ session: 'sess-child', parentSession: 'sess-parent' })
+  })
+
+  it('a root-session rw issue carries no parentSession key', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    h.gate.authorize(futureGrant('sess-a', 'test', 'prod'))
+    await h.opsAccess.resolve('test', 'prod', SESSION_A)
+    const line = h.readAudit().find((l) => l.event === 'rw-issue')
+    expect(line).toBeDefined()
+    expect('parentSession' in line!).toBe(false)
+  })
+
+  it('a sub-agent request shows its dispatcher in the pending queue and the audit trail', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    const { result, req } = await requestAndDecide(
+      h,
+      { action: 'request', profile: 'test/prod', reason: 'remediation executor', ttlMinutes: 5 },
+      { agent: CHILD_SESSION },
+      { approved: true, ttlMinutes: 5 },
+    )
+    expect(result.ok).toBe(true)
+    expect(req.parentSession).toBe('sess-parent')
+    const grantRequest = h.readAudit().find((l) => l.event === 'grant-request')
+    const grant = h.readAudit().find((l) => l.event === 'grant')
+    expect(grantRequest).toMatchObject({ session: 'sess-child', parentSession: 'sess-parent' })
+    expect(grant).toMatchObject({ session: 'sess-child', parentSession: 'sess-parent' })
+  })
+})
+
 // ── Deferred mounting (cordis inject semantics) ─────────────────────────────
 
 describe('deferred mounting', () => {

@@ -201,6 +201,8 @@ interface PanelGrant {
 interface PanelPendingRequest {
   id: string
   session: string
+  /** The dispatching session, when the requester is a spawned sub-agent (血缘). */
+  parentSession?: string
   kind: string
   name: string
   requestedTtlMinutes: number
@@ -1294,7 +1296,8 @@ function AccessPanel({ sessionId }: AccessPanelProps): any {
         const chosen = ttlChoice[req.id] ?? defaultTtlChoice(ttlOptions, req.requestedTtlMinutes)
         return h('div', { key: req.id, className: 'ops-access-panel-request' },
           h('div', { className: 'ops-access-panel-row-title' }, req.kind + '/' + req.name,
-            h('span', { className: 'ops-access-panel-badge' }, '申请 ' + req.requestedTtlMinutes + ' 分钟')),
+            h('span', { className: 'ops-access-panel-badge' }, '申请 ' + req.requestedTtlMinutes + ' 分钟'),
+            req.parentSession !== undefined && h('span', { className: 'ops-access-panel-badge' }, '子会话申请 · 父会话 ' + req.parentSession)),
           h('div', { className: 'ops-access-panel-reason' }, req.reason),
           h('div', { className: 'ops-access-panel-actions' },
             ttlRow(chosen, (ttl) => setTtlChoice({ ...ttlChoice, [req.id]: ttl })),

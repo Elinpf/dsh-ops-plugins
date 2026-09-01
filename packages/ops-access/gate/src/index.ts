@@ -129,6 +129,8 @@ declare module '@deepseek-ai/cordis' {
 export interface PendingRequest {
   readonly id: string
   readonly session: string
+  /** The dispatching session, when the requester is a spawned sub-agent (血缘). */
+  readonly parentSession?: string
   readonly kind: string
   readonly name: string
   readonly requestedTtlMinutes: number
@@ -215,6 +217,8 @@ interface AuditEvent {
   event: 'grant' | 'expire' | 'revoke' | 'rw-issue' | 'gated-issue' | 'ledger-reset' | 'grant-request' | 'request-decide'
   /** Absent on ledger-reset, which is process-scoped, not session-scoped. */
   session?: string
+  /** The dispatching session, when the caller is a spawned sub-agent (血缘归因). */
+  parentSession?: string
   kind?: string
   name?: string
   reason?: string
@@ -342,6 +346,17 @@ function parseProfile(raw: unknown): { kind: string, profileName: string } | und
   return { kind: raw.slice(0, slash), profileName: raw.slice(slash + 1) }
 }
 
+/**
+ * Structural read of the caller's dispatching session (sub-agent lineage).
+ * dsh records it on the session header as `parentSession`; AccessAgent stays
+ * narrow ({ id }) on purpose, so the gate reads the rest structurally and
+ * tolerates runtimes that expose nothing.
+ */
+function parentSessionOf(agent: unknown): string | undefined {
+  const header = (agent as { session?: { header?: { parentSession?: unknown } } } | undefined)?.session?.header
+  return typeof header?.parentSession === 'string' && header.parentSession !== '' ? header.parentSession : undefined
+}
+
 // ── Plugin apply ─────────────────────────────────────────────────────────────
 
 export function apply(ctx: Context, config: Config): void {
@@ -400,13 +415,13 @@ export function apply(ctx: Context, config: Config): void {
     // the grant is a timed pass to use it at all.
     if (config.approvalRequiredKinds.includes(kind)) {
       if (authorized) {
-        audit({ event: 'gated-issue', session: agent.id, kind, name: profileName })
+        audit({ event: 'gated-issue', session: agent.id, parentSession: parentSessionOf(agent), kind, name: profileName })
         return 'ro'
       }
       return { deny: kind + ' has no read-only tier; request timed access via the ' + REQUEST_ACCESS + ' tool (profile "' + kind + '/' + profileName + '", with a reason)' }
     }
     if (authorized) {
-      audit({ event: 'rw-issue', session: agent.id, kind, name: profileName })
+      audit({ event: 'rw-issue', session: agent.id, parentSession: parentSessionOf(agent), kind, name: profileName })
       return 'rw'
     }
     return 'ro'
@@ -725,10 +740,13 @@ export function apply(ctx: Context, config: Config): void {
       const requested = typeof args.ttlMinutes === 'number' ? args.ttlMinutes : config.defaultTtlMinutes
       const ttl = Math.min(Math.max(1, Math.round(requested)), config.maxTtlMinutes)
 
-      // Park the request for a human decision in the access panel.
-      audit({ event: 'grant-request', session: agent.id, kind, name: profileName, reason, requestedTtlMinutes: ttl })
+      // Park the request for a human decision in the access panel. The
+      // dispatching session rides along (血缘): the approver sees when a
+      // request comes from a spawned sub-agent, and whose it is.
+      const parentSession = parentSessionOf(agent)
+      audit({ event: 'grant-request', session: agent.id, parentSession, kind, name: profileName, reason, requestedTtlMinutes: ttl })
       const { req, decision } = pending.add(
-        { session: agent.id, kind, name: profileName, requestedTtlMinutes: ttl, reason },
+        { session: agent.id, parentSession, kind, name: profileName, requestedTtlMinutes: ttl, reason },
         config.pendingRequestTimeoutMinutes,
       )
       // A dead tool call (turn aborted) settles the request as cancelled.
@@ -755,6 +773,7 @@ export function apply(ctx: Context, config: Config): void {
       audit({
         event: 'grant',
         session: agent.id,
+        parentSession,
         kind,
         name: profileName,
         reason,
