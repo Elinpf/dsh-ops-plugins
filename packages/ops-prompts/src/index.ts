@@ -15,6 +15,9 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { SkillRegistry } from '@deepseek-ai/dsh-skill'
+import { createBundledSkillsProvider } from './skills.js'
+export * from './skills.js'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -105,6 +108,25 @@ export function apply(ctx: Context, config: Config): void {
     order: 250,
     text: CORE_METHODOLOGY,
   })
+
+  // Bundled ops skills: ship this package's skills/ directory into dsh's
+  // native skill subsystem (catalog via candidates, bodies pulled on demand
+  // through the `skill` tool). The skills registry lives in the host
+  // composition — resolve with the usual get-first / inject-fallback race
+  // discipline, and tolerate its absence (this package then works as a pure
+  // prompt channel).
+  const registerBundledSkills = (rctx: Context, registry: SkillRegistry): void => {
+    rctx.effect(() => registry.registerProvider(() =>
+      createBundledSkillsProvider(undefined, m => rctx.logger('ops-prompts').warn(m))))
+  }
+  const immediateSkills = ctx.get('skills')
+  if (immediateSkills !== undefined) {
+    registerBundledSkills(ctx, immediateSkills)
+  } else {
+    ctx.inject(['skills'], (pctx: Context) => {
+      registerBundledSkills(pctx, pctx.skills)
+    })
+  }
 
   // System prompt section that renders all registered methodology entries.
   // Re-evaluated at each prompt assembly.

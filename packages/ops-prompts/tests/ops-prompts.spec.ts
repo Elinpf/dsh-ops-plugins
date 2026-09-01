@@ -21,6 +21,7 @@ function setup(opts: { reminderEnabled?: boolean, withSystemPrompt?: boolean } =
       return undefined
     },
     on: (event: string, fn: Function) => { listeners.push({ event, fn }); return () => {} },
+    inject: () => {}, // no skills registry in these tests — the fallback must stay inert
   }
   plugin.apply(ctx, { reminderEnabled: opts.reminderEnabled ?? true })
 
