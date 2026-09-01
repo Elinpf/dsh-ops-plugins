@@ -119,6 +119,8 @@ describe('the real bundled skills directory', () => {
     expect(remediation!.description).toContain('spawn')
     expect(remediation!.whenToUse).toContain('rw')
     expect(remediation!.path).toBe(join(bundledSkillsDir(), 'remediation.md'))
+    // 修复是重操作:人显式 /remediation 触发,模型 catalog 与 skill 工具都看不到它
+    expect(remediation!.invocation).toEqual({ modelInvocable: false, userInvocable: true })
 
     const definition = await provider.get(remediation!, {} as any)
     for (const section of ['触发条件', '四阶段', '方案模板', '验证清单', 'spawn 纪律', 'rw 申请纪律', '失败模式']) {

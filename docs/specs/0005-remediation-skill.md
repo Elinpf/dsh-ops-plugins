@@ -20,7 +20,7 @@
 
 ## 实现决策
 
-- **触发**：调查树收口、需要 rw 修复时
+- **触发**：修复是重操作，**只能由人显式启动**——frontmatter 带 `disable-model-invocation: true`，skill 不进模型 catalog、`skill` 工具也拉不到；唯一入口是用户消息首行 `/remediation`（dsh 原生用户触发通道）。典型时机：trace 调查树收口、确认修复需要 rw 之后
 - **机制事实**（已调研，dsh 源码证据）：spawn = 干净上下文（继承 preset 方法论段落——正好，trace 教义不丢）；子 agent 结果可回传、可持续对话（修订送验在原子会话追问，不重派生）；rw 授权**不**随派生传递（子 session id 是新随机 UUID，授权账本按 session id 分键）——这是 B/A 之争的根源
 - **rw 授权**：探索期 B（子 agent 自己申请，面板显示随机 UUID 归因难看但可用）；验证价值后做 **A**（审计门血缘传递：子 meta 里有 `parentSession` 可循，人批一次、约束只沿 spawn 血缘传一层、rw 代发照落审计）
 - **纪律守不住的部分再固化成插件代码**——skill 先行，代码兜底

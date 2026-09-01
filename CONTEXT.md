@@ -201,7 +201,7 @@ trace 核心规矩的文案，**唯一事实源是 `src/doctrine.ts`**。工具�
 
 ### ops 专属 skill
 
-面向运维场景的纪律性方法论，按 skill 结构组织：**catalog 常驻 name+description（写成触发路由文案），正文经 `skill` 工具按需拉取**——走 dsh 原生 skill 子系统，不另建通道。载体是纯文本 Markdown + 原生 frontmatter（`name`/`description` 必填，`whenToUse` 可选）。两个来源：ops-prompts 以 **bundled skill provider**（`ops-prompts-bundled`）提供仓库版 skill（包内 `skills/` 目录，remediation 住这里）；用户/团队 skill 走 `skill-filesystem` 的原生目录分级。**纯提示词 skill 是文本文件，不是包**——被打包成插件的只有和工具耦合的 skill（trace 那种 doctrine 常量被代码多处引用的）。现有成员：trace（结构化排查，包内）、environment（环境认知，包内 prompt 半）、remediation（修复变更，文本 skill，spec 0005)。纪律守不住的部分才固化成插件代码——skill 先行，代码兜底。
+面向运维场景的纪律性方法论，按 skill 结构组织：**catalog 常驻 name+description（写成触发路由文案），正文经 `skill` 工具按需拉取**——走 dsh 原生 skill 子系统，不另建通道。载体是纯文本 Markdown + 原生 frontmatter（`name`/`description` 必填，`whenToUse` 可选；重操作 skill 用 `disable-model-invocation: true` 退出模型 catalog，只留用户 `/name` 显式触发——remediation 就是这个姿态）。两个来源：ops-prompts 以 **bundled skill provider**（`ops-prompts-bundled`）提供仓库版 skill（包内 `skills/` 目录，remediation 住这里）；用户/团队 skill 走 `skill-filesystem` 的原生目录分级。**纯提示词 skill 是文本文件，不是包**——被打包成插件的只有和工具耦合的 skill（trace 那种 doctrine 常量被代码多处引用的）。现有成员：trace（结构化排查，包内）、environment（环境认知，包内 prompt 半）、remediation（修复变更，文本 skill，spec 0005)。纪律守不住的部分才固化成插件代码——skill 先行，代码兜底。
 
 ### 提醒规则与锁存器 (Reminder / ReminderLatch)
 
