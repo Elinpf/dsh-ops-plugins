@@ -337,6 +337,17 @@ function pendingAccessCount(session: { runningCalls?: readonly SnapshotRunningCa
   return session.runningCalls.filter((c) => c.name === 'request_access').length
 }
 
+/**
+ * Count one session's DELEGATED pending requests from an access-requests
+ * response (which lists own + delegated): a sub-agent's parked request_access
+ * lives in the sub-session, so the parent's runningCalls never sees it — the
+ * badge polls for these instead (血缘).
+ */
+function delegatedAccessCount(requests: readonly { session?: string, parentSession?: string }[] | null | undefined, sessionId: string): number {
+  if (!Array.isArray(requests)) return 0
+  return requests.filter((r) => r.parentSession === sessionId).length
+}
+
 /** Dock badge props: the InputZone owner share plus the framework sessionId. */
 interface AccessBadgeProps {
   sessionId?: string
@@ -347,17 +358,34 @@ interface AccessBadgeProps {
 
 /**
  * Red-dot alert in the input dock while request_access calls await a human
- * decision: renders nothing on an empty pending set (decided/timed-out
- * requests leave runningCalls, extinguishing the badge on their own);
- * clicking opens the access panel's approval deck.
+ * decision. Own-session requests come off the runtime snapshot (instant,
+ * zero polling); delegated sub-session requests are polled from the gate
+ * every 4s (the route lists own + delegated — we count only delegated here
+ * to avoid double-counting the snapshot). Renders nothing on an empty
+ * pending set; clicking opens the access panel's approval deck.
  */
 function AccessBadge(props: AccessBadgeProps): unknown {
-  const count = pendingAccessCount(props.session)
-  if (count === 0 || props.sessionId === undefined) return null
+  const own = pendingAccessCount(props.session)
+  const [delegated, setDelegated] = useState(0)
   const sid = props.sessionId
+  useEffect(() => {
+    if (sid === undefined) return
+    let alive = true
+    const poll = async () => {
+      const data = await fetchPanelRequests(sid)
+      if (alive && data !== null) setDelegated(delegatedAccessCount(data.requests, sid))
+    }
+    void poll()
+    const timer = setInterval(() => { void poll() }, 4000)
+    return () => { alive = false; clearInterval(timer) }
+  }, [sid])
+  const count = own + delegated
+  if (count === 0 || sid === undefined) return null
   return h('button', {
     className: 'ops-access-badge',
-    title: '有待审批的提权申请 — 点击打开授权面板',
+    title: delegated > 0
+      ? '有待审批的提权申请（含委派子会话）— 点击打开授权面板'
+      : '有待审批的提权申请 — 点击打开授权面板',
     onClick: () => props.openPanel(sid),
   },
     h('span', { className: 'ops-access-badge-dot' }),
@@ -1839,7 +1867,7 @@ export { apply, inject, name }
 export {
   apiFetchList, apiFetchResult, fetchAdminList, fetchKinds, submitEntry, deleteEntry, AdminSection,
   fetchPanelGrants, fetchPanelRequests, fetchPanelOverview, groupBySession, postPanelGrant, postPanelExtend, postPanelRevoke, postPanelRevokeAll, postPanelDecide, postPanelDeny, postPanelUndeny,
-  AccessPanel, AccessBadge, pendingAccessCount, defaultTtlChoice, liveGrantFor,
+  AccessPanel, AccessBadge, pendingAccessCount, delegatedAccessCount, defaultTtlChoice, liveGrantFor,
 }
 /** @internal */
 export type { AdminEntry, AdminTierStatus, KindDescriptor, SubmitEntryBody, ApiResult, PanelGrant, PanelPendingRequest, PanelDenied, OverviewGrant }

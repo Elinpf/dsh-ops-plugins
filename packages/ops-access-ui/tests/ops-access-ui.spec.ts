@@ -527,6 +527,26 @@ describe('pendingAccessCount', () => {
   })
 })
 
+describe('delegatedAccessCount', () => {
+  it('counts only requests delegated BY this session — own requests are the snapshot\'s job', () => {
+    const sid = 'sess-parent'
+    expect(client.delegatedAccessCount(undefined, sid)).toBe(0)
+    expect(client.delegatedAccessCount(null, sid)).toBe(0)
+    expect(client.delegatedAccessCount([], sid)).toBe(0)
+    // Own request (no parentSession): not counted here — runningCalls covers it.
+    expect(client.delegatedAccessCount([{ session: sid }], sid)).toBe(0)
+    // Another session's delegated child: not this session's business.
+    expect(client.delegatedAccessCount([{ session: 'sess-x', parentSession: 'sess-other' }], sid)).toBe(0)
+    // This session's delegated children: counted.
+    expect(client.delegatedAccessCount([{ session: 'sess-c1', parentSession: sid }], sid)).toBe(1)
+    expect(client.delegatedAccessCount([
+      { session: 'sess-c1', parentSession: sid },
+      { session: 'sess-c2', parentSession: sid },
+      { session: sid },
+    ], sid)).toBe(2)
+  })
+})
+
 // ── Cross-session overview (ticket 13) ───────────────────────────────────────
 
 describe('cross-session overview panel', () => {
@@ -538,6 +558,7 @@ describe('cross-session overview panel', () => {
         grants: [{ session: 'sess-b', kind: 'k8s', name: 'prod', expiresAt: 1, reason: 'r', approvedBy: 'panel', remainingMinutes: 9 }],
         requests: [{ id: 'gr-1', session: 'sess-a', kind: 'ssh', name: 'box', requestedTtlMinutes: 30, reason: 'why', createdAt: 1, decidesAt: 2 }],
         denied: [{ kind: 'ceph', name: 'main', deniedAt: 1, reason: 'freeze', deniedBy: 'panel' }],
+        ttlOptions: [5, 10, 30],
       }),
     })))
     const data = await client.fetchPanelOverview()
@@ -545,6 +566,7 @@ describe('cross-session overview panel', () => {
     expect(data?.grants[0].session).toBe('sess-b')
     expect(data?.requests[0].id).toBe('gr-1')
     expect(data?.denied[0].reason).toBe('freeze')
+    expect(data?.ttlOptions).toEqual([5, 10, 30])
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 404 })))
     expect(await client.fetchPanelOverview()).toBeNull()
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline') }))
