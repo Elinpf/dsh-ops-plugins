@@ -183,3 +183,16 @@ describe('capability probe', () => {
     expect(JSON.stringify(res)).not.toContain('/nonexistent')
   }, 20000)
 })
+
+describe('cap parser edge cases (review fix)', () => {
+  it('combined permission bundles carrying w (rwx, wx) count as writable', () => {
+    expect(assessCephCaps({ osd: 'allow rwx' }, 'ro').status).toBe('mismatch')
+    expect(assessCephCaps({ osd: 'allow wx' }, 'ro').status).toBe('mismatch')
+    expect(assessCephCaps({ osd: 'allow rwx' }, 'rw')).toEqual({ status: 'verified' })
+  })
+  it('pool qualifiers do not change the verdict; the allow keyword never counts as w', () => {
+    expect(assessCephCaps({ osd: 'allow rw pool=foo' }, 'ro').status).toBe('mismatch')
+    expect(assessCephCaps({ osd: 'allow r pool=foo' }, 'ro')).toEqual({ status: 'verified' })
+    expect(assessCephCaps({ osd: 'allow rx' }, 'ro')).toEqual({ status: 'verified' })
+  })
+})

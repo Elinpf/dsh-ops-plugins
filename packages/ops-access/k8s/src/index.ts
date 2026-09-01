@@ -88,14 +88,28 @@ export const provider: AccessProvider = {
  * read = can-i get pods, write = can-i create deployments. ro verifies when
  * reading works and writing is denied; rw verifies when both work.
  */
-export function assessK8sTier(read: boolean, write: boolean, tier: 'ro' | 'rw'): { status: 'verified' | 'mismatch', detail?: string } {
+/** Live verdicts for the operationally interesting faces (ticket 10); null = the check could not run. */
+export interface K8sProbeFacets {
+  servicesProxy: boolean | null
+  podsExec: boolean | null
+}
+
+function fmtVerdict(v: boolean | null): string {
+  return v === null ? 'unknown' : v ? 'yes' : 'no'
+}
+
+export function assessK8sTier(read: boolean, write: boolean, tier: 'ro' | 'rw', facets?: K8sProbeFacets): { status: 'verified' | 'mismatch', detail?: string } {
+  // Facets ANNOTATE, never gate: subresource can-i verdicts can be wrong
+  // (the ticket-14 pods/portforward quirk), so they ride along as facts.
+  const facetNote = facets === undefined ? undefined : 'facets: services/proxy=' + fmtVerdict(facets.servicesProxy) + ', pods/exec=' + fmtVerdict(facets.podsExec)
+  const join = (base?: string): string | undefined => [base, facetNote].filter(Boolean).join(' · ') || undefined
   if (tier === 'ro') {
-    if (read && !write) return { status: 'verified' }
-    if (write) return { status: 'mismatch', detail: 'claims ro but can-i create deployments = yes — an over-privileged credential sits in the ro slot' }
-    return { status: 'mismatch', detail: 'claims ro but can-i get pods = no — the credential cannot even read' }
+    if (read && !write) return { status: 'verified', ...(facetNote === undefined ? {} : { detail: facetNote }) }
+    if (write) return { status: 'mismatch', detail: join('claims ro but can-i create deployments = yes — an over-privileged credential sits in the ro slot') }
+    return { status: 'mismatch', detail: join('claims ro but can-i get pods = no — the credential cannot even read') }
   }
-  if (read && write) return { status: 'verified' }
-  return { status: 'mismatch', detail: 'claims rw but can-i says: get pods=' + (read ? 'yes' : 'no') + ', create deployments=' + (write ? 'yes' : 'no') }
+  if (read && write) return { status: 'verified', ...(facetNote === undefined ? {} : { detail: facetNote }) }
+  return { status: 'mismatch', detail: join('claims rw but can-i says: get pods=' + (read ? 'yes' : 'no') + ', create deployments=' + (write ? 'yes' : 'no')) }
 }
 
 /**
@@ -113,22 +127,26 @@ function canI(kubeconfig: string, verb: string, resource: string): Promise<boole
         if (answer.startsWith('yes')) { resolve(true); return }
         if (answer.startsWith('no')) { resolve(false); return }
         // kubectl exits 1 with the verdict on stdout for 'no', but a
-        // connection failure produces no verdict at all.
-        resolve(answer === '' ? null : answer.startsWith('yes'))
+        // connection failure produces no verdict at all. Any answer that
+        // is not a clean yes/no verdict means the check itself failed —
+        // unverifiable, never a silent 'no' (review fix).
+        resolve(null)
       })
   })
 }
 
 async function probeK8s(fields: Record<string, unknown>, tier: 'ro' | 'rw') {
   const kubeconfig = String(fields.kubeconfigPath ?? '')
-  const [read, write] = await Promise.all([
+  const [read, write, servicesProxy, podsExec] = await Promise.all([
     canI(kubeconfig, 'get', 'pods'),
     canI(kubeconfig, 'create', 'deployments'),
+    canI(kubeconfig, 'get', 'services/proxy'),
+    canI(kubeconfig, 'create', 'pods/exec'),
   ])
   if (read === null || write === null) {
     return { status: 'unverifiable' as const, detail: 'kubectl auth can-i could not run (cluster unreachable or kubectl missing)' }
   }
-  return assessK8sTier(read, write, tier)
+  return assessK8sTier(read, write, tier, { servicesProxy, podsExec })
 }
 // ── Plugin apply ─────────────────────────────────────────────────────────────
 

@@ -50,7 +50,19 @@ interface AccessMentionCandidate {
   /** Tier readiness — entries with only an rw tier still appear (ro derivable). */
   ro: boolean
   rw: boolean
+  /** Per-tier probe verdicts for ok tiers, when the provider probes (ticket 10). */
+  probe?: { ro?: string, rw?: string }
   mention: string
+}
+
+/** Compact probe annotation for the @ menu (ticket 10 review fix), e.g. 'ro 已核验 · rw 核验失败'. */
+function mentionProbeText(c: AccessMentionCandidate): string | undefined {
+  if (c.probe === undefined) return undefined
+  const label = (s: string): string => s === 'verified' ? '已核验' : s === 'mismatch' ? '核验失败' : '无法核验'
+  const bits: string[] = []
+  if (c.probe.ro !== undefined) bits.push('ro ' + label(c.probe.ro))
+  if (c.probe.rw !== undefined) bits.push('rw ' + label(c.probe.rw))
+  return bits.length > 0 ? bits.join(' · ') : undefined
 }
 
 // ── Admin wire shapes (mirrors the admin routes in ops-access core) ─────────
@@ -1684,14 +1696,18 @@ function apply(ctx: Context): void {
         } catch {
           return []
         }
-        return list.map((c): InputTriggerCandidate => ({
-          name: `${c.kind}/${c.name}`,
+        return list.map((c): InputTriggerCandidate => {
           // Badge rw-only entries: the agent cannot read them yet, but the
           // rw→ro derivation flow starts from picking exactly these.
-          description: c.ro ? c.description : [c.description, 'ro 未注册（可由 rw 派生）'].filter(Boolean).join(' — '),
-          hint: c.environment,
-          value: c.mention,
-        }))
+          const base = c.ro ? c.description : [c.description, 'ro 未注册（可由 rw 派生）'].filter(Boolean).join(' — ')
+          const probe = mentionProbeText(c)
+          return {
+            name: `${c.kind}/${c.name}`,
+            description: [base, probe].filter(Boolean).join(' · ') || undefined,
+            hint: c.environment,
+            value: c.mention,
+          }
+        })
       },
       onPick({ candidate }) {
         const mention = candidate.value

@@ -1047,6 +1047,14 @@ export function apply(ctx: Context, config: Config): void {
         // Tier readiness flags ride along so the picker can badge them;
         // fields never cross (listAll is envelope + status only).
         const entries = await handle.listAll()
+        // Probe verdicts ride along for ok tiers (ticket 10 review fix: the
+        // @ menu is one of the three display surfaces the ticket names).
+        const probeOf2 = (tiers: AdminEntry['tiers']): { ro?: string, rw?: string } | undefined => {
+          const out: { ro?: string, rw?: string } = {}
+          if (tiers.ro.ok && tiers.ro.probe !== undefined) out.ro = tiers.ro.probe.status
+          if (tiers.rw.ok && tiers.rw.probe !== undefined) out.rw = tiers.rw.probe.status
+          return Object.keys(out).length > 0 ? out : undefined
+        }
         const candidates = entries
           .filter((e) => needle === ''
             || `${e.kind}/${e.name}`.toLocaleLowerCase().includes(needle)
@@ -1060,6 +1068,7 @@ export function apply(ctx: Context, config: Config): void {
             ...e.envelope.environment === undefined ? {} : { environment: e.envelope.environment },
             ro: e.tiers.ro.ok,
             rw: e.tiers.rw.ok,
+            ...(() => { const p = probeOf2(e.tiers); return p === undefined ? {} : { probe: p } })(),
             mention: formatAccessMention({ kind: e.kind, name: e.name }),
           }))
         res.writeHead(200, { 'content-type': 'application/json' })

@@ -210,3 +210,24 @@ describe('capability probe', () => {
     expect(JSON.stringify(res)).not.toContain('/nonexistent')
   }, 20000)
 })
+
+describe('probe facets (review fix)', () => {
+  it('facets annotate a verified result without gating it', () => {
+    const r = assessK8sTier(true, false, 'ro', { servicesProxy: true, podsExec: false })
+    expect(r.status).toBe('verified')
+    expect(r.detail).toBe('facets: services/proxy=yes, pods/exec=no')
+  })
+  it('unknown facets are annotated as unknown, never silently dropped', () => {
+    const r = assessK8sTier(true, true, 'rw', { servicesProxy: null, podsExec: null })
+    expect(r.status).toBe('verified')
+    expect(r.detail).toBe('facets: services/proxy=unknown, pods/exec=unknown')
+  })
+  it('facets ride along on mismatches too', () => {
+    const r = assessK8sTier(true, true, 'ro', { servicesProxy: false, podsExec: true })
+    expect(r.status).toBe('mismatch')
+    expect(r.detail).toContain('pods/exec=yes')
+  })
+  it('no facets argument keeps the bare verified shape (backwards compatible)', () => {
+    expect(assessK8sTier(true, false, 'ro')).toEqual({ status: 'verified' })
+  })
+})

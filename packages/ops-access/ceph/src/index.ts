@@ -90,10 +90,16 @@ export function parseCaps(output: string): Record<string, string> {
   return caps
 }
 
-/** A cap value grants write when its tokens include w, rw, or *. */
+/**
+ * A cap value grants write when any permission token carries the w flag.
+ * Tokens after 'allow' are permission bundles (r/w/x in any order — 'w',
+ * 'rw', 'rwx', 'wx' are ALL writable) or '*'; qualifiers like 'pool=foo'
+ * never grant write by themselves. NB: the keyword 'allow' itself
+ * contains a 'w' — match permission-bundle tokens, never the keyword
+ * (review fix: the exact-token version missed 'rwx'/'wx').
+ */
 function capIsWritable(value: string): boolean {
-  const tokens = value.split(/\s+/)
-  return tokens.includes('w') || tokens.includes('rw') || tokens.includes('*')
+  return value.split(/\s+/).some((t) => t === '*' || (/^[rwx]+$/.test(t) && t.includes('w')))
 }
 
 /**

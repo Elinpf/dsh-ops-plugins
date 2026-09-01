@@ -1163,7 +1163,20 @@ describe('existing routes unchanged', () => {
     const json = JSON.stringify(body)
     expect(json).not.toContain('endpoint')
   })
-})
+  it('GET /ops-access/list carries probe verdicts for ok tiers, omits the rest', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    h.write(VALID_REGISTRY.replace('endpoint: https://alpha.internal',
+      'endpoint: https://alpha.internal\n      probe: { status: verified, probedAt: "2026-08-28T00:00:00Z" }'))
+    const { status, body } = await h.listRoute()
+    expect(status).toBe(200)
+    const alpha = body.find((c: { name: string }) => c.name === 'alpha')
+    expect(alpha.probe).toEqual({ ro: 'verified' })
+    const beta = body.find((c: { name: string }) => c.name === 'beta')
+    expect(beta.probe).toBeUndefined()
+    expect(JSON.stringify(body)).not.toContain('endpoint')
+  })
+});
 
 // ── register_access tool ─────────────────────────────────────────────────────
 
@@ -1531,7 +1544,7 @@ describe('capability probe', () => {
     await handle.writeEntry('test', 'alpha', 'ro', { endpoint: 'https://alpha.internal' })
     let entries = await handle.listAll()
     expect(entries.find((e) => e.name === 'alpha')?.tiers.ro.probe).toBeUndefined()
-    write(VALID_REGISTRY.replace('endpoint: https://alpha.internal', 'endpoint: https://alpha.internal\n        probe: { status: bogus }'))
+    write(VALID_REGISTRY.replace('endpoint: https://alpha.internal', 'endpoint: https://alpha.internal\n      probe: { status: bogus }'))
     entries = await handle.listAll()
     expect(entries.find((e) => e.name === 'alpha')?.tiers.ro.probe).toBeUndefined()
   })

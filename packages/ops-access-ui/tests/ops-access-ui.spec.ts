@@ -561,3 +561,19 @@ describe('cross-session overview panel', () => {
     expect(client.groupBySession([])).toEqual([])
   })
 })
+
+describe('mention probe annotation (review fix)', () => {
+  it('candidates: probe verdicts annotate the description', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => [
+        { kind: 'k8s', name: 'prod', description: '生产集群', ro: true, rw: true, mention: '@[k8s/prod](dsh-access:AAAA)', probe: { ro: 'verified', rw: 'mismatch' } },
+        { kind: 'ceph', name: 'main', ro: true, rw: false, mention: '@[ceph/main](dsh-access:BBBB)' },
+      ],
+    })))
+    const { source } = setupClient()
+    const out = await source.candidates({ sessionId: 's1' }, { query: '', signal: undefined })
+    expect(out[0].description).toBe('生产集群 · ro 已核验 · rw 核验失败')
+    expect(out[1].description).toBeUndefined()
+  })
+})
