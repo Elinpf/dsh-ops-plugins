@@ -698,7 +698,8 @@ export function apply(ctx: Context, config: Config): void {
     }))
 
     // GET /ops-access/grants/all — every session's live grants + parked requests + lockdowns (ticket 13's overview).
-    // Read-only; revocation reuses the existing per-session routes.
+    // Revocation reuses the per-session routes; request decisions reuse the decide route.
+    // The TTL choices ride along so the overview can approve with an adjusted lifetime.
     wctx.effect(() => ws.webServer.register({
       kind: 'exact',
       path: '/ops-access/grants/all',
@@ -709,7 +710,7 @@ export function apply(ctx: Context, config: Config): void {
             ...g,
             remainingMinutes: Math.max(0, Math.round((g.expiresAt - Date.now()) / 60000)),
           }))
-          sendJson(res, 200, { ok: true, grants, requests: pending.list(), denied: gate.listDenied() })
+          sendJson(res, 200, { ok: true, grants, requests: pending.list(), denied: gate.listDenied(), ttlOptions: config.grantTtlOptions })
         } catch (err) {
           sendJsonError(res, 500, err)
         }
@@ -792,6 +793,9 @@ export function apply(ctx: Context, config: Config): void {
     }))
 
     // GET /ops-access/access-requests?session=<id> — pending requests (polled).
+    // Returns the session's own requests PLUS its delegated children's: a
+    // sub-agent's parked request rides the sub-session id, but the operator
+    // working in the parent session must see and decide it there (血缘).
     // POST /ops-access/access-requests — unused; requests come from the tool.
     wctx.effect(() => ws.webServer.register({
       kind: 'exact',
@@ -801,7 +805,9 @@ export function apply(ctx: Context, config: Config): void {
           if (req.method !== 'GET') { sendJsonError(res, 405, new Error('method not allowed')); return }
           const session = new URL(req.url, 'http://localhost').searchParams.get('session') ?? ''
           if (session === '') { sendJsonError(res, 400, new Error('session query parameter is required')); return }
-          sendJson(res, 200, { ok: true, requests: pending.list(session) })
+          const own = pending.list(session)
+          const delegated = pending.list().filter((r) => r.parentSession === session)
+          sendJson(res, 200, { ok: true, requests: [...own, ...delegated] })
         } catch (err) {
           sendJsonError(res, 500, err)
         }

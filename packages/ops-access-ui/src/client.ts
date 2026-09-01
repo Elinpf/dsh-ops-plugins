@@ -1536,15 +1536,16 @@ function AccessPanel({ sessionId }: AccessPanelProps): any {
 interface OverviewGrant extends PanelGrant { session: string }
 
 /** Fetch the cross-session overview: every session's grants + parked requests + lockdowns. Null on failure. */
-async function fetchPanelOverview(signal?: AbortSignal): Promise<{ grants: OverviewGrant[], requests: PanelPendingRequest[], denied: PanelDenied[] } | null> {
+async function fetchPanelOverview(signal?: AbortSignal): Promise<{ grants: OverviewGrant[], requests: PanelPendingRequest[], denied: PanelDenied[], ttlOptions: number[] } | null> {
   try {
     const res = await fetch('/ops-access/grants/all', { signal })
     if (!res.ok) return null
-    const data = await res.json() as { grants?: OverviewGrant[], requests?: PanelPendingRequest[], denied?: PanelDenied[] }
+    const data = await res.json() as { grants?: OverviewGrant[], requests?: PanelPendingRequest[], denied?: PanelDenied[], ttlOptions?: number[] }
     return {
       grants: Array.isArray(data.grants) ? data.grants : [],
       requests: Array.isArray(data.requests) ? data.requests : [],
       denied: Array.isArray(data.denied) ? data.denied : [],
+      ttlOptions: Array.isArray(data.ttlOptions) && data.ttlOptions.length > 0 ? data.ttlOptions : [5, 10, 30],
     }
   } catch {
     return null
@@ -1566,6 +1567,8 @@ function AccessOverviewPanel(_props: AccessPanelProps): any {
   const [grants, setGrants] = useState<OverviewGrant[]>([])
   const [requests, setRequests] = useState<PanelPendingRequest[]>([])
   const [denied, setDenied] = useState<PanelDenied[]>([])
+  const [ttlOptions, setTtlOptions] = useState<number[]>([5, 10, 30])
+  const [ttlChoice, setTtlChoice] = useState<Record<string, number>>({})
   const [confirmKey, setConfirmKey] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
 
@@ -1575,6 +1578,7 @@ function AccessOverviewPanel(_props: AccessPanelProps): any {
       setGrants(data.grants)
       setRequests(data.requests)
       setDenied(data.denied)
+      setTtlOptions(data.ttlOptions)
     }
   }, [])
 
@@ -1653,10 +1657,36 @@ function AccessOverviewPanel(_props: AccessPanelProps): any {
     h('div', { className: 'ops-access-panel-section' },
       h('div', { className: 'ops-access-panel-heading' }, '待决申请（全部会话）'),
       requests.length === 0 && h('div', { className: 'ops-access-panel-empty' }, '无待决申请'),
-      requests.map((r) => h('div', { key: r.id, className: 'ops-access-panel-row' },
-        h('span', { className: 'ops-access-panel-row-title' }, r.kind + '/' + r.name),
-        h('span', { className: 'ops-access-panel-row-detail' }, r.session + ' · 请求 ' + r.requestedTtlMinutes + ' 分钟 · ' + r.reason),
-      )),
+      requests.map((r) => {
+        const chosen = ttlChoice[r.id] ?? defaultTtlChoice(ttlOptions, r.requestedTtlMinutes)
+        return h('div', { key: r.id, className: 'ops-access-panel-request' },
+          h('div', { className: 'ops-access-panel-row-title' }, r.kind + '/' + r.name,
+            h('span', { className: 'ops-access-panel-badge' }, '申请 ' + r.requestedTtlMinutes + ' 分钟'),
+            r.parentSession !== undefined
+              ? h('span', { className: 'ops-access-panel-badge' }, '子会话申请 · 父会话 ' + r.parentSession)
+              : h('span', { className: 'ops-access-panel-badge' }, r.session)),
+          h('div', { className: 'ops-access-panel-reason' }, r.reason),
+          h('div', { className: 'ops-access-panel-actions' },
+            h('span', { className: 'ops-access-panel-ttl-row' },
+              ttlOptions.map((ttl) =>
+                h('button', {
+                  key: ttl,
+                  className: 'ops-access-panel-btn ttl' + (ttl === chosen ? ' selected' : ''),
+                  onClick: () => setTtlChoice({ ...ttlChoice, [r.id]: ttl }),
+                }, ttl + ' 分钟'),
+              ),
+            ),
+            h('button', {
+              className: 'ops-access-panel-btn primary',
+              onClick: () => void run(() => postPanelDecide(r.id, true, chosen), '已批准 ' + r.kind + '/' + r.name + '（' + chosen + ' 分钟）'),
+            }, '批准'),
+            h('button', {
+              className: 'ops-access-panel-btn',
+              onClick: () => void run(() => postPanelDecide(r.id, false), '已拒绝 ' + r.kind + '/' + r.name),
+            }, '拒绝'),
+          ),
+        )
+      }),
     ),
 
     h('div', { className: 'ops-access-panel-section' },

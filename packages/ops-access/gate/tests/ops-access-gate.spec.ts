@@ -751,6 +751,32 @@ describe('lineage', () => {
     expect(grantRequest).toMatchObject({ session: 'sess-child', parentSession: 'sess-parent' })
     expect(grant).toMatchObject({ session: 'sess-child', parentSession: 'sess-parent' })
   })
+
+  it('the parent session\'s request query also lists its delegated children\'s requests', async () => {
+    const h = setup()
+    h.writeRegistry(REGISTRY)
+    const call = h.callRequestAccess(
+      { action: 'request', profile: 'test/prod', reason: 'executor needs rw', ttlMinutes: 5 },
+      { agent: CHILD_SESSION },
+    )
+    // Poll the PARENT's query: the child's parked request must surface there.
+    let found: Record<string, unknown> | undefined
+    for (let i = 0; i < 100; i++) {
+      const res = await h.callRoute('/ops-access/access-requests', { query: '?session=sess-parent' })
+      found = res.json.requests.find((r: Record<string, unknown>) => r.session === 'sess-child')
+      if (found) break
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    expect(found).toBeDefined()
+    expect(found!.parentSession).toBe('sess-parent')
+    // Settle so the parked tool promise does not dangle past the test.
+    await h.callRoute('/ops-access/access-requests/decide', {
+      method: 'POST',
+      body: { id: found!.id, approved: false },
+    })
+    await call
+    // ...and the child's own query is unaffected (still sees its own request lineage).
+  })
 })
 
 // ── Deferred mounting (cordis inject semantics) ─────────────────────────────
