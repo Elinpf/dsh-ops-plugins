@@ -120,20 +120,34 @@ export function assessCephCaps(caps: Record<string, string>, tier: 'ro' | 'rw'):
   return { status: 'mismatch', detail: 'claims rw but no cap grants write — ' + summary }
 }
 
+/**
+ * Classify an auth-get failure (unit-tested directly). stderr is classified
+ * by substring, never surfaced: ceph error messages can carry file paths.
+ * A tight ro entity CANNOT self-read the auth database (EACCES) — that is
+ * normal, and safe: an over-privileged credential sitting in the ro slot
+ * would have enough privilege for auth get and would have been caught by
+ * the caps comparison.
+ */
+export function cephProbeFailure(tier: 'ro' | 'rw', errText: string): { status: 'unverifiable', detail: string } {
+  if (tier === 'ro' && /EACCES|access denied/i.test(errText)) {
+    return { status: 'unverifiable', detail: 'entity cannot self-read its caps (normal for a tight ro entity — an over-privileged credential in this slot would have the privilege to auth get and would have been caught)' }
+  }
+  return { status: 'unverifiable', detail: 'ceph auth get could not run (cluster unreachable or ceph CLI missing)' }
+}
+
 async function probeCeph(fields: Record<string, unknown>, tier: 'ro' | 'rw') {
   const name = typeof fields.name === 'string' ? fields.name : 'client.admin'
   const conf = String(fields.conf ?? '')
   const keyring = String(fields.keyring ?? '')
-  const output = await new Promise<string | null>((resolve) => {
+  const result = await new Promise<{ output: string | null, errText: string }>((resolve) => {
     execFile('ceph', ['--conf', conf, '--keyring', keyring, '--name', name, 'auth', 'get', name],
       { timeout: 10000 },
-      // stderr stays unsurfaced: ceph error messages can carry file paths.
-      (err, stdout) => resolve(err ? null : stdout))
+      (err, stdout, stderr) => resolve(err
+        ? { output: null, errText: String(stderr ?? '') + ' ' + String(err.message ?? '') }
+        : { output: stdout, errText: '' }))
   })
-  if (output === null) {
-    return { status: 'unverifiable' as const, detail: 'ceph auth get could not run (cluster unreachable or ceph CLI missing)' }
-  }
-  return assessCephCaps(parseCaps(output), tier)
+  if (result.output === null) return cephProbeFailure(tier, result.errText)
+  return assessCephCaps(parseCaps(result.output), tier)
 }
 // ── Plugin apply ─────────────────────────────────────────────────────────────
 

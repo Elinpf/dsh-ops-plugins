@@ -1,4 +1,4 @@
-import { assessCephCaps, parseCaps, provider } from '../src/index.ts'
+import { assessCephCaps, cephProbeFailure, parseCaps, provider } from '../src/index.ts'
 /**
  * Unit spec for ops-access-ceph: schema accept/reject, `~` expansion in
  * process, and registration/disposal through a mock opsAccess context.
@@ -194,5 +194,19 @@ describe('cap parser edge cases (review fix)', () => {
     expect(assessCephCaps({ osd: 'allow rw pool=foo' }, 'ro').status).toBe('mismatch')
     expect(assessCephCaps({ osd: 'allow r pool=foo' }, 'ro')).toEqual({ status: 'verified' })
     expect(assessCephCaps({ osd: 'allow rx' }, 'ro')).toEqual({ status: 'verified' })
+  })
+})
+
+describe('cephProbeFailure classification (live-cluster finding)', () => {
+  it('a tight ro entity failing auth get with EACCES gets the self-explanatory unverifiable', () => {
+    const r = cephProbeFailure('ro', 'Error EACCES: access denied')
+    expect(r.status).toBe('unverifiable')
+    expect(r.detail).toContain('normal for a tight ro entity')
+  })
+  it('rw tier or non-EACCES failures get the generic message; stderr never surfaces', () => {
+    const rw = cephProbeFailure('rw', 'Error EACCES: access denied')
+    expect(rw.detail).toBe('ceph auth get could not run (cluster unreachable or ceph CLI missing)')
+    const ro = cephProbeFailure('ro', 'rados connect timeout')
+    expect(ro.detail).toBe('ceph auth get could not run (cluster unreachable or ceph CLI missing)')
   })
 })
