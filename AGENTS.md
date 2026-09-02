@@ -96,6 +96,7 @@ Operational facts about this pipeline (all verified 2026-09-02, 0.1.0/0.1.1 rele
 - The repo setting **Settings → Actions → General → Workflow permissions → "Allow GitHub Actions to create and approve pull requests"** must stay enabled, or the changesets action fails with "GitHub Actions is not permitted to create or approve pull requests" when opening the version PR.
 - A bypass-2FA granular token may **publish and deprecate but not unpublish** — cleanup of accidentally published packages needs a web login or a classic token.
 - A brand-new npm package's tarball is fetchable immediately, but its metadata document 404s for several minutes (registry read-path lag) — do not re-publish or diagnose a 404 on a fresh package as failure.
+- A new scoped package MUST carry `publishConfig.access: "public"` — without it npm defaults the publish to private and the release workflow fails with E402 "You must sign up for private packages" *after* the other packages already published (hit on `@elinpf/dsh-ops` 0.1.4, fixed in 0.1.5). `pnpm -r publish` runs in topological order, so a leaf-meta-package failure leaves the suite published but the meta package missing — recover by fixing the manifest and cutting a new patch, there is no local npm auth on this machine.
 - Merging the version PR deletes `changeset-release/master` mid-run and kills the PR-branch `check` run (failure with no jobs/logs) — benign; the push-side `check` on master is the real verdict.
 
 ## General notes
