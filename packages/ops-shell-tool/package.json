@@ -1,6 +1,6 @@
 {
   "name": "@elinpf/dsh-ops-shell-tool",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Shared factory for ops-access consumer tools: standard shell result shape, output schema, render, and the resolve-per-call execute template.",
   "type": "module",
   "main": "lib/index.js",
@@ -34,7 +34,7 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@elinpf/dsh-ops-access": "^0.1.2",
+    "@elinpf/dsh-ops-access": "^0.1.3",
     "@deepseek-ai/dsh-shell": "^0.1.0-rc.8",
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.8"
   },

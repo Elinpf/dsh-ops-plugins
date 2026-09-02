@@ -1,5 +1,11 @@
 # @elinpf/dsh-ops-tool-trace
 
+## 0.1.3
+
+### Patch Changes
+
+- @elinpf/dsh-ops-prompts@0.1.3
+
 ## 0.1.2
 
 ### Patch Changes

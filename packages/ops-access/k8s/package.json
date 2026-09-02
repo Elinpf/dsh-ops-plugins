@@ -1,6 +1,6 @@
 {
   "name": "@elinpf/dsh-ops-access-k8s",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Ops access provider for Kubernetes — validates k8s registry entries and expands kubeconfig paths.",
   "type": "module",
   "main": "lib/index.js",
@@ -46,7 +46,7 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-invariants": "^0.1.0-rc.8",
-    "@elinpf/dsh-ops-access": "^0.1.2"
+    "@elinpf/dsh-ops-access": "^0.1.3"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",

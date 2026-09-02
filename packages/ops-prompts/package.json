@@ -1,6 +1,6 @@
 {
   "name": "@elinpf/dsh-ops-prompts",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Ops prompt orchestration center — methodology prompts and dynamic reminders for ops preset.",
   "type": "module",
   "main": "lib/index.js",
