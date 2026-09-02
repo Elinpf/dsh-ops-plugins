@@ -25,11 +25,7 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "lib/index.js",
-    "lib/invariant.js",
-    "lib/types.js",
-    "lib/tree-layout.js",
-    "lib/**/*.d.ts",
+    "lib",
     "cordis.patch.yml"
   ],
   "dsh": {
