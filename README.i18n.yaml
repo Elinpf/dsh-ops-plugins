@@ -1,0 +1,4 @@
+title: "dsh-ops-plugins"
+description:
+  zh: "面向运维场景的 DeepSeek Harness 插件集 — 凭证代理、shell 工具、调查树、环境清单"
+  en: "Ops-scenario plugin suite for DeepSeek Harness — credential brokering, shell tools, investigation tree, environment inventory"
