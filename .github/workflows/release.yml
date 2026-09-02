@@ -37,3 +37,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # pnpm/npm 只认 NODE_AUTH_TOKEN（setup-node 的 registry-url 写出的 .npmrc 用它占位）
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
