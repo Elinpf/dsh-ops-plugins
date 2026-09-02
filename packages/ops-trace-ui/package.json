@@ -1,6 +1,6 @@
 {
   "name": "@elinpf/dsh-ops-trace-ui",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Host-plane half of the ops trace feature — registers the shared trace session projection and ships the web panel client bundle. The tool itself lives in @elinpf/dsh-ops-tool-trace (preset plane).",
   "type": "module",
   "main": "lib/index.js",

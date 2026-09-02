@@ -1,6 +1,6 @@
 {
   "name": "@elinpf/dsh-ops-access",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Ops access capability seam — owns the YAML credential registry and exposes ctx.opsAccess (resolve/list/register) to provider plugins.",
   "type": "module",
   "main": "lib/index.js",

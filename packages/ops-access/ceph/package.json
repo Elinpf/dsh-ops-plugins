@@ -1,6 +1,6 @@
 {
   "name": "@elinpf/dsh-ops-access-ceph",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Ops access provider for Ceph — validates ceph registry entries and expands conf/keyring paths.",
   "type": "module",
   "main": "lib/index.js",
@@ -45,7 +45,7 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-invariants": "^0.0.1-rc.1",
-    "@elinpf/dsh-ops-access": "^0.1.1"
+    "@elinpf/dsh-ops-access": "^0.1.2"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",

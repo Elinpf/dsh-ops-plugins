@@ -1,6 +1,6 @@
 {
   "name": "@elinpf/dsh-ops-access-gate",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Ops access gate — per-session credential brokering. Owns an in-process grant ledger keyed by agent.id and registers a pure-decision broker (ro/rw) into the ops-access seam. Never touches credential fields.",
   "type": "module",
   "main": "lib/index.js",
@@ -47,7 +47,7 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-invariants": "^0.0.1-rc.1",
-    "@elinpf/dsh-ops-access": "^0.1.1"
+    "@elinpf/dsh-ops-access": "^0.1.2"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
