@@ -1,5 +1,12 @@
 # @elinpf/dsh-ops-access-gate
 
+## 0.1.4
+
+### Patch Changes
+
+- @elinpf/dsh-ops-access@0.1.4
+  - @elinpf/dsh-ops-panel@0.1.4
+
 ## 0.1.3
 
 ### Patch Changes

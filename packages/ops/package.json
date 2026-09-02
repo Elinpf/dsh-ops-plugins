@@ -1,6 +1,6 @@
 {
   "name": "@elinpf/dsh-ops",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Single-package deployment unit for the dsh-ops plugin suite: host-plane rows plus the ops agent preset, over the granular @elinpf/dsh-ops-* packages.",
   "type": "module",
   "license": "MIT",

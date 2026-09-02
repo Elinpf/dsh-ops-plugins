@@ -1,5 +1,11 @@
 # @elinpf/dsh-ops-tool-ssh
 
+## 0.1.4
+
+### Patch Changes
+
+- @elinpf/dsh-ops-shell-tool@0.1.4
+
 ## 0.1.3
 
 ### Patch Changes
