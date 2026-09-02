@@ -1,6 +1,6 @@
 {
   "name": "@elinpf/dsh-ops-access-ssh",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Ops access provider for SSH — validates ssh registry entries and expands key paths.",
   "type": "module",
   "main": "lib/index.js",
@@ -44,7 +44,7 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@elinpf/dsh-ops-access": "^0.1.4"
+    "@elinpf/dsh-ops-access": "^0.1.5"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
