@@ -1,3 +1,5 @@
 # @elinpf/dsh-ops-panel
 
+## 0.1.2
+
 ## 0.1.1

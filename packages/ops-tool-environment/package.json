@@ -1,6 +1,6 @@
 {
   "name": "@elinpf/dsh-ops-tool-environment",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Environment inventory for ops mode — read-only scanner that maps registered k8s clusters (workloads, services, middleware instances, best-effort relation edges) into ~/.dsh-ops/environment.yaml, plus the model-facing environment tool (overview/show/refresh). Deterministic code only, zero LLM.",
   "type": "module",
   "main": "lib/index.js",
@@ -38,8 +38,8 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@elinpf/dsh-ops-access": "^0.1.1",
-    "@elinpf/dsh-ops-prompts": "^0.1.1",
+    "@elinpf/dsh-ops-access": "^0.1.2",
+    "@elinpf/dsh-ops-prompts": "^0.1.2",
     "@deepseek-ai/dsh-tools": "^0.0.1-rc.1"
   },
   "devDependencies": {

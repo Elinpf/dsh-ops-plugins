@@ -1,5 +1,12 @@
 # @elinpf/dsh-ops-tool-kubectl
 
+## 0.1.2
+
+### Patch Changes
+
+- @elinpf/dsh-ops-access@0.1.2
+  - @elinpf/dsh-ops-shell-tool@0.1.2
+
 ## 0.1.1
 
 ### Patch Changes
