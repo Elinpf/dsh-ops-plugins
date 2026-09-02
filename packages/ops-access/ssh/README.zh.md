@@ -1,10 +1,10 @@
-# @deepseek-ai/dsh-ops-access-ssh
+# @elinpf/dsh-ops-access-ssh
 
 ops access 接缝的 SSH 凭据 provider — 校验 `ssh` registry 条目(`{ host, user, key?, port? }`)并为 ssh 消费端工具展开密钥路径。
 
 ## 功能
 
-`@deepseek-ai/dsh-ops-access`(core) 下的三个 provider 插件之一。core 拥有 YAML 凭据 registry(`~/.dsh-ops/access.yaml`)和 `ctx.opsAccess` 服务;本包通过 `registerAccessProvider` 只贡献一个凭据种类 `ssh`:
+`@elinpf/dsh-ops-access`(core) 下的三个 provider 插件之一。core 拥有 YAML 凭据 registry(`~/.dsh-ops/access.yaml`)和 `ctx.opsAccess` 服务;本包通过 `registerAccessProvider` 只贡献一个凭据种类 `ssh`:
 
 - **条目 schema**(zod):`host`、`user`,可选 `key`(私钥路径),可选 `port`
 - **字段处理**:展开 key 路径中的 `~`,让 `ssh -i` 拿到绝对路径
@@ -23,7 +23,7 @@ ops access 接缝的 SSH 凭据 provider — 校验 `ssh` registry 条目(`{ hos
 
 ```yaml
 - id: ops-access-ssh
-  name: '@deepseek-ai/dsh-ops-access-ssh'
+  name: '@elinpf/dsh-ops-access-ssh'
 ```
 
 ## 配置项

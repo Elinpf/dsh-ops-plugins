@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-shell-tool
+# @elinpf/dsh-ops-shell-tool
 
 ops-access 消费方工具共享的工厂：统一的 shell 结果形状 `{ exitCode, stdout, stderr, command, error? }`、输出 schema 与 render、以及按调用解析（resolve-per-call）的 execute 模板。
 

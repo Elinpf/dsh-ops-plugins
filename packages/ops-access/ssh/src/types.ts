@@ -1,7 +1,7 @@
 /**
  * Type definitions for the ops-access SSH provider.
  *
- * @module @deepseek-ai/dsh-ops-access-ssh
+ * @module @elinpf/dsh-ops-access-ssh
  */
 
 /**

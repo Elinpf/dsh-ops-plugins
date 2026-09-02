@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-prompts
+# @elinpf/dsh-ops-prompts
 
 DeepSeek Harness 的 ops 提示词编排中心 — 其他 ops 插件通过这一个渠道注册方法论 section(静态系统提示词文本)和动态 reminder(pre-step 检查函数,注入临时提示词)。
 

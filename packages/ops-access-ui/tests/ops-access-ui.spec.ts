@@ -668,7 +668,7 @@ describe('invariant companion', () => {
       invariants: { register: (pkg: string, install: () => void) => { registered.push([pkg, install]) } },
     })
     expect(registered).toHaveLength(1)
-    expect(registered[0][0]).toBe('@deepseek-ai/dsh-ops-access-ui')
+    expect(registered[0][0]).toBe('@elinpf/dsh-ops-access-ui')
     expect(() => registered[0][1]()).not.toThrow()
   })
 })

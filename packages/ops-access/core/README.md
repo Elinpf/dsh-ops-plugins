@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-access
+# @elinpf/dsh-ops-access
 
 The ops access capability seam — owns the YAML credential registry (default `~/.dsh-ops/access.yaml`) and exposes `ctx.opsAccess` (resolve / list / register) to provider plugins and consumer tools.
 
@@ -22,7 +22,7 @@ The ops access capability seam — owns the YAML credential registry (default `~
 
 ```yaml
 - id: ops-access
-  name: '@deepseek-ai/dsh-ops-access'
+  name: '@elinpf/dsh-ops-access'
   registryFile: ~/.dsh-ops/access.yaml   # default
   credentialsDir: ~/.dsh-ops/credentials # default; managed credential content files (0600)
 ```

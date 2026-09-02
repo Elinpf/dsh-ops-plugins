@@ -18,7 +18,7 @@
  *     - pattern: 'my-internal-mq'   # case-insensitive regex
  *       type: mqtt
  *
- * @module @deepseek-ai/dsh-ops-tool-environment
+ * @module @elinpf/dsh-ops-tool-environment
  */
 
 import { readFileSync } from 'node:fs'

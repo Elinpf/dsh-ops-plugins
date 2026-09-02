@@ -16,7 +16,7 @@
 import { build } from 'esbuild'
 
 // The package name — must match package.json "name"
-const PACKAGE_ID = '@deepseek-ai/dsh-ops-trace-ui'
+const PACKAGE_ID = '@elinpf/dsh-ops-trace-ui'
 
 // Baseline modules the browser shell seeds into the module table.
 // These stay external; the factory's `require` resolves them at runtime.

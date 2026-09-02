@@ -6,7 +6,7 @@
 import { build } from 'esbuild'
 
 // The package name — must match package.json "name"
-const PACKAGE_ID = '@deepseek-ai/dsh-ops-panel'
+const PACKAGE_ID = '@elinpf/dsh-ops-panel'
 
 // Baseline modules the browser shell seeds into the module table.
 const EXTERNALS = [

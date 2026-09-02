@@ -20,12 +20,12 @@
  * used to spawn kubectl and never surface in results — every error string
  * crossing into tool output is scrubbed.
  *
- * @module @deepseek-ai/dsh-ops-tool-environment
+ * @module @elinpf/dsh-ops-tool-environment
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { OpsAccess } from '@deepseek-ai/dsh-ops-access'
+import type { OpsAccess } from '@elinpf/dsh-ops-access'
 import { readInventory, refreshInventory } from './inventory.js'
 import { HELP_TEXT, TOOL_DESCRIPTION } from './doctrine.js'
 import type { EnvironmentInventory, InventorySection, RefreshTarget } from './inventory.js'

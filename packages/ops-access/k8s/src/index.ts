@@ -5,7 +5,7 @@
  * kubeconfig path, exposing it as `kubeconfigPath`. Registers into the
  * ops-access capability seam (ctx.opsAccess).
  *
- * @module @deepseek-ai/dsh-ops-access-k8s
+ * @module @elinpf/dsh-ops-access-k8s
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -13,8 +13,8 @@ import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import { parse as parseYaml } from 'yaml'
 import { execFile } from 'node:child_process'
-import type { AccessProvider } from '@deepseek-ai/dsh-ops-access'
-import { expandHome, registerAccessProvider } from '@deepseek-ai/dsh-ops-access'
+import type { AccessProvider } from '@elinpf/dsh-ops-access'
+import { expandHome, registerAccessProvider } from '@elinpf/dsh-ops-access'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 

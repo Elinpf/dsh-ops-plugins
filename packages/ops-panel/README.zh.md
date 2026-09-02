@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-panel
+# @elinpf/dsh-ops-panel
 
 DeepSeek Harness 运维插件的面板缝 — 会话作用域对话框的公共机制，由斜杠命令触发（ADR-0004）。
 
@@ -21,7 +21,7 @@ DeepSeek Harness 运维插件的面板缝 — 会话作用域对话框的公共�
 
 ```yaml
 - id: ops-panel
-  name: '@deepseek-ai/dsh-ops-panel'
+  name: '@elinpf/dsh-ops-panel'
 ```
 
 ## 已知限制

@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-panel
+# @elinpf/dsh-ops-panel
 
 The panel seam for DeepSeek Harness ops plugins — one shared mechanism for session-scoped overlay dialogs triggered by slash commands (ADR-0004).
 
@@ -21,7 +21,7 @@ Add to the app dependencies and reference in `cordis.patch.yml` (host plane):
 
 ```yaml
 - id: ops-panel
-  name: '@deepseek-ai/dsh-ops-panel'
+  name: '@elinpf/dsh-ops-panel'
 ```
 
 Consumers register from their own client halves:

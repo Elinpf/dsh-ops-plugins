@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-trace-ui
+# @elinpf/dsh-ops-trace-ui
 
 The host-plane half of the ops trace feature — registers the shared `trace` session projection and ships the web panel client bundle (the investigation-tree panel above the composer).
 
@@ -6,10 +6,10 @@ The host-plane half of the ops trace feature — registers the shared `trace` se
 
 One thin shell, two halves:
 
-- **Host half** (`src/index.ts`): registers the shared `trace` projection into `ctx.sessionProjections`, deferred through `ctx.inject` so the loader never orders this row against the registry. The projection definition is imported **verbatim** from `@deepseek-ai/dsh-ops-tool-trace` — reference identity, not a copy — so key/schema/fold/stateVersion can never drift between the tool half and the panel half.
+- **Host half** (`src/index.ts`): registers the shared `trace` projection into `ctx.sessionProjections`, deferred through `ctx.inject` so the loader never orders this row against the registry. The projection definition is imported **verbatim** from `@elinpf/dsh-ops-tool-trace` — reference identity, not a copy — so key/schema/fold/stateVersion can never drift between the tool half and the panel half.
 - **Client half** (`src/client.ts`, esbuild-bundled to `lib/client.js`): registers a `conversation.input.dock` entry (`id: 'ops-tree'`) that renders a collapsible investigation-tree panel, structurally identical to todo_write's TodoPanel. Reads the `trace` projection via `useProjection`; degrades to rendering nothing when the registry is absent.
 
-Registers no tools and no prompt sections — the `trace` tool and its methodology live in `@deepseek-ai/dsh-ops-tool-trace`, mounted preset-plane.
+Registers no tools and no prompt sections — the `trace` tool and its methodology live in `@elinpf/dsh-ops-tool-trace`, mounted preset-plane.
 
 ## Design notes
 
@@ -22,7 +22,7 @@ Registers no tools and no prompt sections — the `trace` tool and its methodolo
 
 ```yaml
 - id: ops-trace-ui
-  name: '@deepseek-ai/dsh-ops-trace-ui'
+  name: '@elinpf/dsh-ops-trace-ui'
 ```
 
 No config keys — `Config` is an empty schemastery object.

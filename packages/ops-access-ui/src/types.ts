@@ -1,5 +1,5 @@
 /**
- * Pure wire types for @deepseek-ai/dsh-ops-access-ui.
+ * Pure wire types for @elinpf/dsh-ops-access-ui.
  *
  * These mirror the HTTP routes served by the ops-access core package
  * (preset plane): the @-mention list route, the admin routes, and the
@@ -7,7 +7,7 @@
  * the client half imports them (erased at bundle time) and re-exports the
  * public group for compatibility.
  *
- * @module @deepseek-ai/dsh-ops-access-ui/types
+ * @module @elinpf/dsh-ops-access-ui/types
  */
 
 // ── @-mention wire shape (mirrors GET /ops-access/list in ops-access core) ──

@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest'
 import * as plugin from '../src/index.ts'
-import type { AdminEntry } from '@deepseek-ai/dsh-ops-access'
+import type { AdminEntry } from '@elinpf/dsh-ops-access'
 import { setup, DEFAULT_KUBECONFIG, DEFAULT_PROFILE } from './harness.ts'
 
 // ── Export shape ─────────────────────────────────────────────────────────────
@@ -31,7 +31,7 @@ describe('export shape', () => {
     // apply reserves package ownership on the invariants service.
     const registered: string[] = []
     await invariant.apply({ invariants: { register: (pkg: string) => { registered.push(pkg) } } } as any)
-    expect(registered).toEqual(['@deepseek-ai/dsh-ops-kubectl'])
+    expect(registered).toEqual(['@elinpf/dsh-ops-kubectl'])
   })
 
   it('types subpath is types-only: zero runtime exports', async () => {

@@ -11,7 +11,7 @@
  * from the bundled directory, bodies are read from disk relative to this
  * module (same ../skills layout from src/ in tests and lib/ at runtime).
  *
- * @module @deepseek-ai/dsh-ops-prompts
+ * @module @elinpf/dsh-ops-prompts
  */
 
 import { readdir, readFile } from 'node:fs/promises'

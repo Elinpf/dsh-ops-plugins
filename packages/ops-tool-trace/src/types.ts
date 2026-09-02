@@ -1,7 +1,7 @@
 /**
  * Type definitions for the ops-trace plugin.
  *
- * @module @deepseek-ai/dsh-ops-tool-trace
+ * @module @elinpf/dsh-ops-tool-trace
  */
 
 // ── Node status (05 state machine) ──────────────────────────────────────────

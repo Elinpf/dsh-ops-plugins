@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-prompts
+# @elinpf/dsh-ops-prompts
 
 Ops prompt orchestration center for DeepSeek Harness — one channel through which other ops plugins register methodology sections (static system-prompt text) and dynamic reminders (pre-step checks that inject ephemeral prompts).
 

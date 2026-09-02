@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-access
+# @elinpf/dsh-ops-access
 
 运维访问能力缝（capability seam）— 持有 YAML 凭据注册表（默认 `~/.dsh-ops/access.yaml`），向 provider 插件和消费工具暴露 `ctx.opsAccess`（resolve / list / register）。
 
@@ -22,7 +22,7 @@
 
 ```yaml
 - id: ops-access
-  name: '@deepseek-ai/dsh-ops-access'
+  name: '@elinpf/dsh-ops-access'
   registryFile: ~/.dsh-ops/access.yaml   # 默认值
   credentialsDir: ~/.dsh-ops/credentials # 默认值；托管凭据内容文件（0600）
 ```

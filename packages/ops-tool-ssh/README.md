@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-tool-ssh
+# @elinpf/dsh-ops-tool-ssh
 
 The `ssh` tool for DeepSeek Harness ops mode — runs a command on a remote host over SSH, using a registered ssh access profile (key, port, user@host injected automatically).
 
@@ -12,7 +12,7 @@ A consumer of the ops-access credential seam: the model calls `ssh` with a profi
 
 ## Design
 
-This package is deliberately thin. All shared machinery — result shape `{ exitCode, stdout, stderr, command, error? }`, output schema, render, and the resolve-per-call execute template (30 s default timeout) — lives in `@deepseek-ai/dsh-ops-shell-tool`. A consumer tool only supplies four identity pieces: tool name, resolved credential kind, profile-arg name, and `buildCommand`. The ops-access seam is resolved per call through `ctx.get('opsAccess')`, never a static inject (the preset mounts the group concurrently — a static inject deadlocks the loader).
+This package is deliberately thin. All shared machinery — result shape `{ exitCode, stdout, stderr, command, error? }`, output schema, render, and the resolve-per-call execute template (30 s default timeout) — lives in `@elinpf/dsh-ops-shell-tool`. A consumer tool only supplies four identity pieces: tool name, resolved credential kind, profile-arg name, and `buildCommand`. The ops-access seam is resolved per call through `ctx.get('opsAccess')`, never a static inject (the preset mounts the group concurrently — a static inject deadlocks the loader).
 
 - `src/index.ts` — the plugin (function plugin: `name`/`inject`/`Config`/`apply`, no default export). Registration goes through `ctx.effect`, so fiber disposal/HMR unloads the tool.
 - `src/types.ts` — pure types (no runtime values).
@@ -22,7 +22,7 @@ This package is deliberately thin. All shared machinery — result shape `{ exit
 
 ```yaml
 - id: ops-tool-ssh
-  name: '@deepseek-ai/dsh-ops-tool-ssh'
+  name: '@elinpf/dsh-ops-tool-ssh'
   timeoutMs: 30000            # per-call shell timeout (ms)
   connectTimeoutSeconds: 10   # ssh -o ConnectTimeout (TCP handshake wait)
 ```

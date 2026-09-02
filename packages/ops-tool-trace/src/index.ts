@@ -4,7 +4,7 @@
  * Agent-driven, append-only event log, tree + unique resolved convergence terminal.
  * See `.scratch/ops-trace/research/` for the full design.
  *
- * @module @deepseek-ai/dsh-ops-tool-trace
+ * @module @elinpf/dsh-ops-tool-trace
  */
 
 import z from '@deepseek-ai/schemastery'
@@ -15,7 +15,7 @@ import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 // ── Types (import type so they erase at runtime) ─────────────────────────────
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { OpsPromptsHandle } from '@deepseek-ai/dsh-ops-prompts'
+import type { OpsPromptsHandle } from '@elinpf/dsh-ops-prompts'
 
 // ── Module augmentation: declare the opsPrompts service on Context ──────────
 

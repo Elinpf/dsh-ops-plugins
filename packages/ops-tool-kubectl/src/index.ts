@@ -6,21 +6,21 @@
  * - `kubectl` — resolves a `k8s` profile and runs the command via ctx.shell,
  *   injecting the profile's --kubeconfig path. All shared machinery (result
  *   shape, output schema, render, execute template) lives in
- *   @deepseek-ai/dsh-ops-shell-tool.
+ *   @elinpf/dsh-ops-shell-tool.
  * - `list_access` — groups `ctx.opsAccess.listAll()` by kind. Envelope fields
  *   plus per-tier readiness only (kind/name/displayName/description/environment,
  *   ro/rw flags); profile `fields` (paths, connection params) never appear in
  *   this tool's output. listAll (not list) so rw-only entries — awaiting ro
  *   derivation — are visible to the agent.
  *
- * @module @deepseek-ai/dsh-ops-kubectl
+ * @module @elinpf/dsh-ops-kubectl
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { registerProfiledShellTool } from '@deepseek-ai/dsh-ops-shell-tool'
-import type { AdminEntry, AdminTierStatus, OpsAccess } from '@deepseek-ai/dsh-ops-access'
+import { registerProfiledShellTool } from '@elinpf/dsh-ops-shell-tool'
+import type { AdminEntry, AdminTierStatus, OpsAccess } from '@elinpf/dsh-ops-access'
 import type { ListedProfile, ListAccessResult } from './types.js'
 
 // Pure types live in ./types.js; re-export so existing imports keep working.

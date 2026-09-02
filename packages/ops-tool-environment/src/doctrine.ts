@@ -4,7 +4,7 @@
  * progressive-disclosure doctrine, only the one-liner lives in the system
  * prompt; the model pulls HELP_TEXT on demand via action=help.
  *
- * @module @deepseek-ai/dsh-ops-tool-environment
+ * @module @elinpf/dsh-ops-tool-environment
  */
 
 export const HELP_POINTER = 'Call environment action=help for full usage.'

@@ -1,7 +1,7 @@
 {
-  "name": "@deepseek-ai/dsh-ops-access-ui",
+  "name": "@elinpf/dsh-ops-access-ui",
   "version": "0.1.0",
-  "description": "Browser half carrier for @-mentioning ops-access profiles: the host row exists only for client-bundle discovery; candidates come from GET /ops-access/list served by @deepseek-ai/dsh-ops-access, and mention expansion (agent/pre-step) lives there too.",
+  "description": "Browser half carrier for @-mentioning ops-access profiles: the host row exists only for client-bundle discovery; candidates come from GET /ops-access/list served by @elinpf/dsh-ops-access, and mention expansion (agent/pre-step) lives there too.",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -61,5 +61,8 @@
     "@deepseek-ai/dsh-client-ui-input-trigger": "0.0.1-rc.3",
     "react": "18.3.1"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
 }

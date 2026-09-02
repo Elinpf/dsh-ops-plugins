@@ -25,7 +25,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
 import * as host from '../src/index.ts'
 import * as client from '../src/client.ts'
 import * as invariant from '../src/invariant.ts'
-import { traceProjection } from '@deepseek-ai/dsh-ops-tool-trace'
+import { traceProjection } from '@elinpf/dsh-ops-tool-trace'
 
 // ── Host half ────────────────────────────────────────────────────────────────
 
@@ -176,7 +176,7 @@ describe('invariant companion', () => {
       invariants: { register: (pkg: string, install: () => void) => { registered.push({ pkg, install }) } },
     })
     expect(registered).toHaveLength(1)
-    expect(registered[0].pkg).toBe('@deepseek-ai/dsh-ops-trace-ui')
+    expect(registered[0].pkg).toBe('@elinpf/dsh-ops-trace-ui')
     // The install is intentionally a no-op — the reason lives in its JSDoc.
     expect(() => registered[0].install()).not.toThrow()
   })

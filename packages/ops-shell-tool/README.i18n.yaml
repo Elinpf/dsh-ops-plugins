@@ -1,4 +1,4 @@
-title: "@deepseek-ai/dsh-ops-shell-tool"
+title: "@elinpf/dsh-ops-shell-tool"
 description:
   zh: "ops-access 消费方工具共享的工厂：统一结果形状、输出 schema、按调用解析的 execute 模板"
   en: "Shared factory for ops-access consumer tools: standard result shape, output schema, resolve-per-call execute template"

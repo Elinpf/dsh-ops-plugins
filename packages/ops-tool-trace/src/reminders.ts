@@ -14,7 +14,7 @@
  * abstraction: a monotonic per-session version with a minimum gap and a
  * fire cap.
  *
- * @module @deepseek-ai/dsh-ops-tool-trace/reminders
+ * @module @elinpf/dsh-ops-tool-trace/reminders
  */
 
 import { activeTree } from './node-status.js'

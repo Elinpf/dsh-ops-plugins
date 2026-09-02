@@ -1,6 +1,6 @@
-# @deepseek-ai/dsh-ops-access-ui
+# @elinpf/dsh-ops-access-ui
 
-`@`-提及 ops-access 凭证档案的浏览器半包：host 行仅为 client bundle 发现而存在；候选数据、admin 路由和 mention 展开都在 `@deepseek-ai/dsh-ops-access`（preset 面）。
+`@`-提及 ops-access 凭证档案的浏览器半包：host 行仅为 client bundle 发现而存在；候选数据、admin 路由和 mention 展开都在 `@elinpf/dsh-ops-access`（preset 面）。
 
 ## 功能
 
@@ -11,7 +11,7 @@
 - **两个 ops-panel 页面**：`access`（访问授权：带 TTL 选择的批准/拒绝待决申请、授予/延长/收回本会话授权、封禁/解封）和 `access-all`（授权总览：跨会话同套操作）。
 - **输入坞红点徽标**：待决 `request_access` 计数 —— 本会话部分直接读运行时快照（零轮询），委派子会话的申请每 4 秒轮询；点击打开审批面板。
 
-所有数据走 `@deepseek-ai/dsh-ops-access`（preset 面，贴着数据）提供的纯 HTTP 路由。路由 404（ops preset 未挂载）或网络失败时，每个面都优雅降级 —— 空列表、内联提示，绝不白屏。
+所有数据走 `@elinpf/dsh-ops-access`（preset 面，贴着数据）提供的纯 HTTP 路由。路由 404（ops preset 未挂载）或网络失败时，每个面都优雅降级 —— 空列表、内联提示，绝不白屏。
 
 ## 设计要点
 

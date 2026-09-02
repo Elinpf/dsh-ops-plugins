@@ -1,5 +1,5 @@
 {
-  "name": "@deepseek-ai/dsh-ops-access-gate",
+  "name": "@elinpf/dsh-ops-access-gate",
   "version": "0.1.0",
   "description": "Ops access gate — per-session credential brokering. Owns an in-process grant ledger keyed by agent.id and registers a pure-decision broker (ro/rw) into the ops-access seam. Never touches credential fields.",
   "type": "module",
@@ -40,25 +40,28 @@
   },
   "dependencies": {
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-ops-panel": "workspace:^0.1.0",
+    "@elinpf/dsh-ops-panel": "workspace:^",
     "@deepseek-ai/dsh-tools": "^0.0.1-rc.1",
     "@deepseek-ai/schemastery": "^3.18.1"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-invariants": "^0.0.1-rc.1",
-    "@deepseek-ai/dsh-ops-access": "^0.1.0"
+    "@elinpf/dsh-ops-access": "^0.1.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
     "@deepseek-ai/dsh-llm": "0.1.0-rc.8",
-    "@deepseek-ai/dsh-ops-access": "workspace:*",
-    "@deepseek-ai/dsh-ops-panel": "workspace:*",
+    "@elinpf/dsh-ops-access": "workspace:*",
+    "@elinpf/dsh-ops-panel": "workspace:*",
     "@deepseek-ai/dsh-tools": "0.0.1-rc.1",
     "@types/node": "^22.0.0",
     "typescript": "^5.4.0",
     "vitest": "^4.1.11",
     "zod": "^4.4.3"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
 }

@@ -3,7 +3,7 @@
  *
  * Types only — no runtime values live here.
  *
- * @module @deepseek-ai/dsh-ops-tool-ssh
+ * @module @elinpf/dsh-ops-tool-ssh
  */
 
 /**

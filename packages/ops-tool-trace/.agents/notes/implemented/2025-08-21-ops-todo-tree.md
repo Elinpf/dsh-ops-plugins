@@ -8,7 +8,7 @@ The ops preset used the standard `todo_write` tool — a flat list that doesn't 
 
 ## Decision
 
-Built `@deepseek-ai/dsh-ops-todo-tree` — a single-package dual-half plugin that replaces `todo_write` in the ops preset:
+Built `@elinpf/dsh-ops-todo-tree` — a single-package dual-half plugin that replaces `todo_write` in the ops preset:
 
 - **Host half** (`src/index.ts`): registers the `todo_tree` model tool (8 actions), a `sessionProjections` unit (incremental fold, key `todo_tree`), and a system prompt section.
 - **Client half** (`src/client.ts`): registers a `conversation.view` tab ("调查树") that renders a git-graph-style flat list with SVG lane lines, branch connectors, status glyphs, and expandable rows.

@@ -9,7 +9,7 @@
  * It also registers its own core ops methodology prompt and the agent/pre-step
  * listener that evaluates all registered reminder rules.
  *
- * @module @deepseek-ai/dsh-ops-prompts
+ * @module @elinpf/dsh-ops-prompts
  */
 
 import type { Context } from '@deepseek-ai/cordis'

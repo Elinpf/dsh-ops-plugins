@@ -9,11 +9,11 @@
  * invisible across groups. Mount this row inside the ops-orchestration
  * group; see ops-preset.yml.
  *
- * @module @deepseek-ai/dsh-ops-tool-environment/prompt
+ * @module @elinpf/dsh-ops-tool-environment/prompt
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { OpsPromptsHandle } from '@deepseek-ai/dsh-ops-prompts'
+import type { OpsPromptsHandle } from '@elinpf/dsh-ops-prompts'
 import { STATIC_PROMPT } from './doctrine.js'
 
 // ── Module augmentation: declare the opsPrompts service on Context ──────────

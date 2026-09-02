@@ -93,7 +93,7 @@ describe('export shape', () => {
     const registered: Array<{ pkg: string, install: () => void }> = []
     await invariantEntry.apply({ invariants: { register: (pkg: string, install: () => void) => registered.push({ pkg, install }) } })
     expect(registered).toHaveLength(1)
-    expect(registered[0].pkg).toBe('@deepseek-ai/dsh-ops-access-gate')
+    expect(registered[0].pkg).toBe('@elinpf/dsh-ops-access-gate')
     expect(registered[0].install()).toBeUndefined()
   })
 })

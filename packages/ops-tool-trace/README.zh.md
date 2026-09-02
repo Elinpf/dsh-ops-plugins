@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-tool-trace
+# @elinpf/dsh-ops-tool-trace
 
 运维模式调查树工具 — 用扩散-收敛树替代 `todo_write`，记录步骤、里程碑、死胡同和已解决终端。
 
@@ -18,7 +18,7 @@ Agent 驱动的调查跟踪：agent 通过 `todo_tree` 模型工具维护调查�
 
 ```yaml
 - id: tool-ops-trace
-  name: '@deepseek-ai/dsh-ops-tool-trace'
+  name: '@elinpf/dsh-ops-tool-trace'
 ```
 
 ## 模型体验

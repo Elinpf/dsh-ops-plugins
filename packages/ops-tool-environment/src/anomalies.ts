@@ -18,7 +18,7 @@
  *   distinguish "selector matches nothing" from "pods exist but are not
  *   ready / not in the scanned set".
  *
- * @module @deepseek-ai/dsh-ops-tool-environment
+ * @module @elinpf/dsh-ops-tool-environment
  */
 
 import type {

@@ -13,7 +13,7 @@
  * a one-liner, the system prompt carries the minimal core, and HELP_TEXT is
  * the full reference. Progressive disclosure is the point; duplication is not.
  *
- * @module @deepseek-ai/dsh-ops-tool-trace/doctrine
+ * @module @elinpf/dsh-ops-tool-trace/doctrine
  */
 
 // ── Canonical sentences ──────────────────────────────────────────────────────

@@ -47,7 +47,7 @@ ops 模式下，agent 默认拿着 `access.yaml` 里登记的全部凭证的全�
 
 ## Implementation Decisions
 
-- **新包 `ops-access-gate`**（preset 平面，npm 名 `@deepseek-ai/dsh-ops-access-gate`），收在 `packages/ops-access/` 大文件夹旁边或其中（动工时按现有布局惯例定）。core（ops-access/core）保持 dumb。
+- **新包 `ops-access-gate`**（preset 平面，npm 名 `@elinpf/dsh-ops-access-gate`），收在 `packages/ops-access/` 大文件夹旁边或其中（动工时按现有布局惯例定）。core（ops-access/core）保持 dumb。
 - **rw 凭证也归 core 管**：~~core 的 Config 增加 `rwRegistryFile`~~（ADR-0003 已合并双文件）——ro/rw 是条目内的 tier 子字段，同一注册表文件、同一套 provider schema 校验、同样现读现校验不缓存。**校验与读取逻辑零复制**——就是 core 现有机器读同一个文件的不同 tier。
 - **broker 是纯决策函数，门不碰凭证内容**：core 暴露 broker 挂点，门注册一个 `(kind, name, agent) => 'ro' | 'rw' | 拒绝` 的决策函数；core 依据决定从自己管的对应文件发档案。**门的世界里只有 kind、profile 名、session id、TTL——策略层从头到尾看不见凭证字段**，延续"秘密不过服务的手"的纪律。注册走 `registerAccessBroker(ctx, broker)` 帮手（与 `registerAccessProvider` 同款 `ctx.inject` 延迟挂载，防 loader 死锁）；无 broker 时 resolve 行为与今天完全一致。
 - **凭证代发点在 resolve**：ops-shell-tool 的 execute 把 `exec.agent` 传入 resolve 链路（工具工厂一处改动）；core 的 resolve 增加可选的 agent 上下文参数。broker 决定 'rw' → 从 rw 文件发；'ro' 或无 broker → 从 access.yaml 发；拒绝 → 报错并提示走 request_access（ssh kind 无授权走这条路）。

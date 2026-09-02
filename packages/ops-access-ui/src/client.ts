@@ -18,12 +18,12 @@
  * A pick inserts a ReferenceInsert whose ref is the ready-made
  * `@[kind/name](dsh-access:...)` mention from the route; the codec is the
  * identity — the full mention travels in the submitted text and the
- * preset-plane agent/pre-step listener (in @deepseek-ai/dsh-ops-access)
+ * preset-plane agent/pre-step listener (in @elinpf/dsh-ops-access)
  * expands it.
  *
  * Bundled by esbuild into lib/client.js in the ModuleLoader lazy-CJS format.
  *
- * @module @deepseek-ai/dsh-ops-access-ui/client
+ * @module @elinpf/dsh-ops-access-ui/client
  */
 
 import { createElement as h, useState, useEffect, useCallback } from 'react'

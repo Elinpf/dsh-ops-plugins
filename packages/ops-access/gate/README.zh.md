@@ -1,10 +1,10 @@
-# @deepseek-ai/dsh-ops-access-gate
+# @elinpf/dsh-ops-access-gate
 
 DeepSeek Harness 运维模式的按会话凭据代理（credential brokering）与人工审批 — 拥有授权台账，在每次凭据解析时裁决 ro/rw/deny。
 
 ## 功能
 
-闸门位于 ops-access 注册表（`@deepseek-ai/dsh-ops-access`）与每一次凭据解析之间：它向该 seam 注册一个**纯决策 broker**——调用会话持有该档案的未过期授权时答 `rw`，否则答 `ro`；无授权访问审批必需类型（ssh）或档案被运维封禁时答 `deny`。
+闸门位于 ops-access 注册表（`@elinpf/dsh-ops-access`）与每一次凭据解析之间：它向该 seam 注册一个**纯决策 broker**——调用会话持有该档案的未过期授权时答 `rw`，否则答 `ro`；无授权访问审批必需类型（ssh）或档案被运维封禁时答 `deny`。
 
 - **`request_access` 工具** — 模型申请限时授权；调用驻留在待决请求队列中，直到人在授权面板里裁决；结果报告实际授予的 TTL（人可下调）。
 - **授权面板后端** — 9 条 HTTP 路由（`/ops-access/grants*`、`/ops-access/access-requests*`、`/ops-access/deny|undeny`）加 `/access`、`/access-all` 两个斜杠命令。面板授权与请求授权同形同寿命。

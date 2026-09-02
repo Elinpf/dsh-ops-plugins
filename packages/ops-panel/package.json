@@ -1,5 +1,5 @@
 {
-  "name": "@deepseek-ai/dsh-ops-panel",
+  "name": "@elinpf/dsh-ops-panel",
   "version": "0.1.0",
   "description": "Panel seam for ops plugins — a slash-command-triggered, session-scoped dialog shell. Provides the ctx.opsPanels client registry (single command/executed dispatcher + overlay shell) and the node-side registerPanelCommand helper. The first consumer is the access-grant panel (ADR-0004).",
   "type": "module",
@@ -51,5 +51,8 @@
     "typescript": "^5.4.0",
     "vitest": "^4.1.11"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
 }

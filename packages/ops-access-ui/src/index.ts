@@ -10,7 +10,7 @@
  * preset-realm service from here would require stateful dsh internals that
  * dual-instance under an external package's node_modules.
  *
- * @module @deepseek-ai/dsh-ops-access-ui
+ * @module @elinpf/dsh-ops-access-ui
  */
 
 import type { Context } from '@deepseek-ai/cordis'

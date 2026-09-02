@@ -10,7 +10,7 @@ import * as library from '../src/index.ts'
 import * as invariant from '../src/invariant.ts'
 import { registerProfiledShellTool, shellQuote } from '../src/index.ts'
 import type { ProfiledShellToolSpec } from '../src/index.ts'
-import type { AccessProfile } from '@deepseek-ai/dsh-ops-access'
+import type { AccessProfile } from '@elinpf/dsh-ops-access'
 
 // ── Export shape ─────────────────────────────────────────────────────────────
 

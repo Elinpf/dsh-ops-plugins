@@ -24,17 +24,17 @@
  * `stderrNoise` — regexes for known-noise stderr lines (e.g. ceph's
  * missing-default-keyring chatter) the factory drops after scrubbing.
  *
- * @module @deepseek-ai/dsh-ops-shell-tool
+ * @module @elinpf/dsh-ops-shell-tool
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { OpsAccess } from '@deepseek-ai/dsh-ops-access'
+import type { OpsAccess } from '@elinpf/dsh-ops-access'
 // Type-only import: pulls in the `ctx.shell: ShellExecutor` augmentation and
 // the ShellExecRequest/ShellRunResult shapes we run against.
 import type { ShellExecRequest } from '@deepseek-ai/dsh-shell'
 // Pure types live in types.ts; re-exported here so existing
-// `from '@deepseek-ai/dsh-ops-shell-tool'` type imports keep working.
+// `from '@elinpf/dsh-ops-shell-tool'` type imports keep working.
 import type { CredentialRef, ProfiledShellToolSpec, ShellToolExec, ShellToolResult } from './types.js'
 export type { CredentialRef, ProfiledShellToolSpec, ShellToolExec, ShellToolResult } from './types.js'
 

@@ -1,10 +1,10 @@
-# @deepseek-ai/dsh-ops-access-gate
+# @elinpf/dsh-ops-access-gate
 
 Per-session credential brokering with human approval for DeepSeek Harness ops mode — owns the authorization ledger and decides ro/rw/deny on every credential resolve.
 
 ## What it does
 
-The gate sits between the ops-access registry (`@deepseek-ai/dsh-ops-access`) and every credential resolve: it registers a **pure-decision broker** into that seam that answers `rw` when the calling session holds an unexpired grant for the profile, `ro` otherwise, and `deny` for approval-required kinds (ssh) without a grant or for operator-locked profiles.
+The gate sits between the ops-access registry (`@elinpf/dsh-ops-access`) and every credential resolve: it registers a **pure-decision broker** into that seam that answers `rw` when the calling session holds an unexpired grant for the profile, `ro` otherwise, and `deny` for approval-required kinds (ssh) without a grant or for operator-locked profiles.
 
 - **`request_access` tool** — the model asks for a time-limited grant; the call parks in a pending-request queue until a human decides it in the access panel, and the result reports the TTL actually granted (the human may dial it down).
 - **Access panel backend** — 9 HTTP routes (`/ops-access/grants*`, `/ops-access/access-requests*`, `/ops-access/deny|undeny`) plus the `/access` and `/access-all` slash commands. Panel grants are identical in shape and lifetime to request grants.

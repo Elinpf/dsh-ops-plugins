@@ -5,7 +5,7 @@
  * dock's UI-state shape from here; the host entry re-exports both so the
  * package has one types home (also reachable via the ./types subpath).
  *
- * @module @deepseek-ai/dsh-ops-trace-ui/types
+ * @module @elinpf/dsh-ops-trace-ui/types
  */
 
 /**

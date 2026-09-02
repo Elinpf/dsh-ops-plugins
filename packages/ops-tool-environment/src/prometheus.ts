@@ -18,7 +18,7 @@
  * path — success, error, or timeout. The kubeconfig path appears only in
  * the child's argv, never in returned data.
  *
- * @module @deepseek-ai/dsh-ops-tool-environment
+ * @module @elinpf/dsh-ops-tool-environment
  */
 
 import { spawn } from 'node:child_process'

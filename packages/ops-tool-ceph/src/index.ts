@@ -8,14 +8,14 @@
  * subcommands (`ceph rbd ls` is a mon-side 'no valid command found', which
  * once sent an agent chasing a phantom permissions problem, 2026-08-27).
  * All shared machinery (result shape, output schema, render, execute
- * template) lives in @deepseek-ai/dsh-ops-shell-tool.
+ * template) lives in @elinpf/dsh-ops-shell-tool.
  *
- * @module @deepseek-ai/dsh-ops-tool-ceph
+ * @module @elinpf/dsh-ops-tool-ceph
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { registerProfiledShellTool } from '@deepseek-ai/dsh-ops-shell-tool'
+import { registerProfiledShellTool } from '@elinpf/dsh-ops-shell-tool'
 import type { CephToolConfig } from './types.js'
 
 export type { CephToolConfig } from './types.js'

@@ -13,7 +13,7 @@
  * happen on explicit refresh, or on a read whose oldest section is past
  * the TTL.
  *
- * @module @deepseek-ai/dsh-ops-tool-environment
+ * @module @elinpf/dsh-ops-tool-environment
  */
 
 import type { Context } from '@deepseek-ai/cordis'

@@ -1,6 +1,6 @@
-# @deepseek-ai/dsh-ops-access-ui
+# @elinpf/dsh-ops-access-ui
 
-Browser half carrier for @-mentioning ops-access credential profiles: the host row exists only for client-bundle discovery; candidate data, admin routes, and mention expansion all live in `@deepseek-ai/dsh-ops-access`.
+Browser half carrier for @-mentioning ops-access credential profiles: the host row exists only for client-bundle discovery; candidate data, admin routes, and mention expansion all live in `@elinpf/dsh-ops-access`.
 
 ## What it does
 
@@ -11,7 +11,7 @@ Ships the web client bundle (`dsh.client.platform: "web"`, esbuild → `lib/clie
 - **Two ops-panel pages** — `access` (访问授权: approve/reject pending `request_access` calls with a TTL picker, grant/extend/revoke this session's grants, deny/undeny lockdowns) and `access-all` (授权总览: the same across all sessions).
 - **Input-dock badge** — red-dot count of parked `request_access` calls: own-session count comes off the runtime snapshot (zero polling), delegated sub-session requests poll every 4 s; clicking opens the approval deck.
 
-All data flows over plain HTTP routes served by `@deepseek-ai/dsh-ops-access` (preset plane, next to the data). A 404 (ops preset not mounted) or a network failure degrades every surface gracefully — empty lists, inline messages, never a white screen.
+All data flows over plain HTTP routes served by `@elinpf/dsh-ops-access` (preset plane, next to the data). A 404 (ops preset not mounted) or a network failure degrades every surface gracefully — empty lists, inline messages, never a white screen.
 
 ## Design notes
 

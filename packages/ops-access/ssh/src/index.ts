@@ -8,14 +8,14 @@
  * content is normalized to end with exactly one newline and deep-parsed at
  * save time (ssh-keygen -y) — both classic paste losses (2026-08-27).
  *
- * @module @deepseek-ai/dsh-ops-access-ssh
+ * @module @elinpf/dsh-ops-access-ssh
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
-import type { AccessProvider } from '@deepseek-ai/dsh-ops-access'
-import { expandHome, registerAccessProvider } from '@deepseek-ai/dsh-ops-access'
+import type { AccessProvider } from '@elinpf/dsh-ops-access'
+import { expandHome, registerAccessProvider } from '@elinpf/dsh-ops-access'
 import type { SshEntry, SshProviderConfig } from './types.js'
 
 export type { SshEntry, SshProviderConfig } from './types.js'

@@ -16,7 +16,7 @@
  *   `valueFrom` contributes reference names (configMapKeyRef/secretKeyRef),
  *   never resolved values.
  *
- * @module @deepseek-ai/dsh-ops-tool-environment
+ * @module @elinpf/dsh-ops-tool-environment
  */
 
 import { spawn } from 'node:child_process'

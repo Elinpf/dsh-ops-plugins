@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-tool-ceph
+# @elinpf/dsh-ops-tool-ceph
 
 DeepSeek Harness 运维模式下的 `ceph` 工具 — 通过 ops-access 接缝按名字解析 Ceph 集群档案(profile),经由 `ctx.shell` 对集群执行 `ceph` / `rbd` / `rados` 命令,凭证路径自动注入。
 
@@ -8,7 +8,7 @@ DeepSeek Harness 运维模式下的 `ceph` 工具 — 通过 ops-access 接缝�
 
 ## 设计要点
 
-- **薄消费者,共享机制。** 本包只提供四件身份要素:工具名、解析类型(`ceph`)、档案参数名(`cluster`)、`buildCommand`。其余全部(结果形态、输出 schema、渲染、逐次解析的执行模板、超时与信号死亡归一化)都在 `@deepseek-ai/dsh-ops-shell-tool`,保证三个消费工具(`kubectl` / `ceph` / `ssh`)不会各自漂移。
+- **薄消费者,共享机制。** 本包只提供四件身份要素:工具名、解析类型(`ceph`)、档案参数名(`cluster`)、`buildCommand`。其余全部(结果形态、输出 schema、渲染、逐次解析的执行模板、超时与信号死亡归一化)都在 `@elinpf/dsh-ops-shell-tool`,保证三个消费工具(`kubectl` / `ceph` / `ssh`)不会各自漂移。
 - **首词选二进制。** `rbd` 和 `rados` 是独立二进制,不是 ceph 子命令 — `ceph rbd ls` 只会在 mon 侧报 "no valid command found"。按命令首词在白名单 `[ceph, rbd, rados]` 中选择;裸词视为 ceph 子命令。
 - **边界错误优于误导错误。** 跑在宿主机本地的 ceph 生态二进制(`mount.ceph`、`ceph-fuse`、`ceph-volume`、`rbd-nbd` 等)明确不包装;这类调用直接报清晰错误并指向 `ssh` 工具,而不是让 mon 的误导性报错带偏排查。
 - **stderr 噪音过滤。** 两条已知的" /etc/ceph 下找不到 keyring "警告(凭证都经注入的 `--keyring` 到达,纯属噪音)按精确模式剔除;其余 stderr 行原样透传。

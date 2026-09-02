@@ -1,5 +1,5 @@
 {
-  "name": "@deepseek-ai/dsh-ops-access-ceph",
+  "name": "@elinpf/dsh-ops-access-ceph",
   "version": "0.1.0",
   "description": "Ops access provider for Ceph — validates ceph registry entries and expands conf/keyring paths.",
   "type": "module",
@@ -45,14 +45,17 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-invariants": "^0.0.1-rc.1",
-    "@deepseek-ai/dsh-ops-access": "^0.1.0"
+    "@elinpf/dsh-ops-access": "^0.1.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
-    "@deepseek-ai/dsh-ops-access": "workspace:*",
+    "@elinpf/dsh-ops-access": "workspace:*",
     "typescript": "^5.4.0",
     "vitest": "^4.1.11",
     "@types/node": "^22.0.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
 }

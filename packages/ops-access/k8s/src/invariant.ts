@@ -1,10 +1,10 @@
 /**
- * Invariant companion for @deepseek-ai/dsh-ops-access-k8s.
+ * Invariant companion for @elinpf/dsh-ops-access-k8s.
  *
- * @module @deepseek-ai/dsh-ops-access-k8s/invariant
+ * @module @elinpf/dsh-ops-access-k8s/invariant
  */
 
-const PACKAGE_NAME = '@deepseek-ai/dsh-ops-access-k8s'
+const PACKAGE_NAME = '@elinpf/dsh-ops-access-k8s'
 
 /** Cordis companion plugin name. */
 const name = 'ops-access-k8s-invariant'
@@ -17,7 +17,7 @@ const inject = ['invariants']
  * durable shape of its own. It contributes one credential-kind validator
  * (schema + field processing + save-time probe) to the ops-access registry;
  * the registry file on disk is owned — and re-validated on every resolve —
- * by @deepseek-ai/dsh-ops-access.
+ * by @elinpf/dsh-ops-access.
  */
 const install = (): void => {}
 

@@ -1,5 +1,5 @@
 {
-  "name": "@deepseek-ai/dsh-ops-tool-ssh",
+  "name": "@elinpf/dsh-ops-tool-ssh",
   "version": "0.1.0",
   "description": "ssh tool consumer of the ops-access seam — resolves ssh profiles and runs commands via ctx.shell, injecting credential paths automatically.",
   "type": "module",
@@ -40,18 +40,21 @@
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",
-    "@deepseek-ai/dsh-ops-shell-tool": "workspace:^0.1.0"
+    "@elinpf/dsh-ops-shell-tool": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
-    "@deepseek-ai/dsh-ops-access": "workspace:*",
+    "@elinpf/dsh-ops-access": "workspace:*",
     "@deepseek-ai/dsh-shell": "0.0.1-rc.5",
     "@deepseek-ai/dsh-tools": "0.0.1-rc.1",
     "typescript": "^5.4.0",
     "vitest": "^4.1.11"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
 }

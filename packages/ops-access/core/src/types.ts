@@ -5,7 +5,7 @@
  * `registerAccessProvider`/`registerAccessBroker`, the plugin itself) lives
  * in index.ts.
  *
- * @module @deepseek-ai/dsh-ops-access/types
+ * @module @elinpf/dsh-ops-access/types
  */
 
 import type { ZodType } from 'zod'

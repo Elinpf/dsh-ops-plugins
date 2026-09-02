@@ -250,16 +250,16 @@
     opsPrompts: true
   config:
     - id: ops-prompts
-      name: '@deepseek-ai/dsh-ops-prompts'
+      name: '@elinpf/dsh-ops-prompts'
 
     - id: tool-ops-trace
-      name: '@deepseek-ai/dsh-ops-tool-trace'
+      name: '@elinpf/dsh-ops-tool-trace'
 
     # Prompt half of the environment inventory: registers the one-line
     # methodology section through opsPrompts (this realm). The tool half
     # sits in ops-access-registry — it needs opsAccess, not opsPrompts.
     - id: tool-ops-environment-prompt
-      name: '@deepseek-ai/dsh-ops-tool-environment/prompt'
+      name: '@elinpf/dsh-ops-tool-environment/prompt'
 
 
 # The `web` service and its search provider stay in the host composition; only
@@ -281,16 +281,16 @@
     opsAccessGate: true
   config:
     - id: ops-access
-      name: '@deepseek-ai/dsh-ops-access'
+      name: '@elinpf/dsh-ops-access'
 
     - id: ops-access-k8s
-      name: '@deepseek-ai/dsh-ops-access-k8s'
+      name: '@elinpf/dsh-ops-access-k8s'
 
     - id: ops-access-ceph
-      name: '@deepseek-ai/dsh-ops-access-ceph'
+      name: '@elinpf/dsh-ops-access-ceph'
 
     - id: ops-access-ssh
-      name: '@deepseek-ai/dsh-ops-access-ssh'
+      name: '@elinpf/dsh-ops-access-ssh'
 
     # The access gate: per-session credential brokering with human approval.
     # Sits in this realm so its deferred `ctx.inject(['opsAccess'])` broker
@@ -305,19 +305,19 @@
     # registry (its `inject`). Without this row mounted, resolve is byte-for-byte
     # the pre-gate ro behavior.
     - id: ops-access-gate
-      name: '@deepseek-ai/dsh-ops-access-gate'
+      name: '@elinpf/dsh-ops-access-gate'
 
     - id: ops-tool-kubectl
-      name: '@deepseek-ai/dsh-ops-kubectl'
+      name: '@elinpf/dsh-ops-kubectl'
 
     - id: ops-tool-ceph
-      name: '@deepseek-ai/dsh-ops-tool-ceph'
+      name: '@elinpf/dsh-ops-tool-ceph'
 
     - id: ops-tool-ssh
-      name: '@deepseek-ai/dsh-ops-tool-ssh'
+      name: '@elinpf/dsh-ops-tool-ssh'
 
     # Environment inventory tool: overview/show/refresh over the scanned
     # cluster map. Needs THIS realm's opsAccess (resolves k8s ro profiles);
     # its prompt half lives in the ops-orchestration group.
     - id: ops-tool-environment
-      name: '@deepseek-ai/dsh-ops-tool-environment'
+      name: '@elinpf/dsh-ops-tool-environment'

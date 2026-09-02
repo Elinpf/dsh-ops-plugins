@@ -3,7 +3,7 @@
  * types-only). The zod projection schema, the tool's output JSON schema, and
  * the status_filter enum all derive from NODE_STATUSES — one source of truth.
  *
- * @module @deepseek-ai/dsh-ops-tool-trace
+ * @module @elinpf/dsh-ops-tool-trace
  */
 
 import type { ForestState, TreeState } from './types.js'

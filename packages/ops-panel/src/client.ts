@@ -10,7 +10,7 @@
  * Service, not library: bundled per consumer would mean N registries, N
  * listeners, and N shells colliding (the dual-module-instance lesson).
  *
- * @module @deepseek-ai/dsh-ops-panel/client
+ * @module @elinpf/dsh-ops-panel/client
  */
 
 import { createElement as h, useEffect } from 'react'

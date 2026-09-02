@@ -6,7 +6,7 @@
  */
 
 import { apply } from '../src/index.ts'
-import type { AccessProfile } from '@deepseek-ai/dsh-ops-access'
+import type { AccessProfile } from '@elinpf/dsh-ops-access'
 
 export const DEFAULT_PROFILE: AccessProfile = {
   kind: 'ssh',

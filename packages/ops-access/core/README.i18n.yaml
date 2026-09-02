@@ -1,4 +1,4 @@
-title: "@deepseek-ai/dsh-ops-access"
+title: "@elinpf/dsh-ops-access"
 description:
   zh: "运维访问能力缝 — 持有 YAML 凭据注册表并暴露 ctx.opsAccess"
   en: "Ops access capability seam — owns the YAML credential registry and exposes ctx.opsAccess"

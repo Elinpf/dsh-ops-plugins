@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-access-ceph
+# @elinpf/dsh-ops-access-ceph
 
 运维模式 Ceph 凭证 provider — 校验 `ceph` 注册表条目(ceph.conf + keyring)、展开路径,并在保存时用集群真实 cephx caps 探测声称的 ro/rw tier。
 
@@ -30,7 +30,7 @@ ops preset 的 `agent.cordis.yml` 中的 provider 行:
 
 ```yaml
 - id: ops-access-ceph
-  name: '@deepseek-ai/dsh-ops-access-ceph'
+  name: '@elinpf/dsh-ops-access-ceph'
 ```
 
 注册走 `registerAccessProvider`(延迟 `ctx.inject` + effect 生命周期,HMR 可卸载)— 绝不静态 `inject` `opsAccess`,那会死锁加载器。

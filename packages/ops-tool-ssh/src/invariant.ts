@@ -1,10 +1,10 @@
 /**
- * Invariant companion for @deepseek-ai/dsh-ops-tool-ssh.
+ * Invariant companion for @elinpf/dsh-ops-tool-ssh.
  *
- * @module @deepseek-ai/dsh-ops-tool-ssh/invariant
+ * @module @elinpf/dsh-ops-tool-ssh/invariant
  */
 
-const PACKAGE_NAME = '@deepseek-ai/dsh-ops-tool-ssh'
+const PACKAGE_NAME = '@elinpf/dsh-ops-tool-ssh'
 
 /** Cordis companion plugin name. */
 const name = 'ops-tool-ssh-invariant'

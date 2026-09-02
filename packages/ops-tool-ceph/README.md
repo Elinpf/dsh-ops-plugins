@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-tool-ceph
+# @elinpf/dsh-ops-tool-ceph
 
 The `ceph` tool for DeepSeek Harness ops mode — resolves a named Ceph cluster profile through the ops-access seam and runs `ceph` / `rbd` / `rados` against it via `ctx.shell`, injecting the credential paths automatically.
 
@@ -8,7 +8,7 @@ The model calls `ceph` with a `cluster` (profile name) and a `command`. The tool
 
 ## Design notes
 
-- **Thin consumer, shared machinery.** This package supplies only four identity pieces — tool name, resolved kind (`ceph`), profile-arg name (`cluster`), and `buildCommand`. Everything else (result shape, output schema, render, resolve-per-call execute template, timeout and signal-death normalization) lives in `@deepseek-ai/dsh-ops-shell-tool`, so the three consumer tools (`kubectl` / `ceph` / `ssh`) cannot drift apart.
+- **Thin consumer, shared machinery.** This package supplies only four identity pieces — tool name, resolved kind (`ceph`), profile-arg name (`cluster`), and `buildCommand`. Everything else (result shape, output schema, render, resolve-per-call execute template, timeout and signal-death normalization) lives in `@elinpf/dsh-ops-shell-tool`, so the three consumer tools (`kubectl` / `ceph` / `ssh`) cannot drift apart.
 - **First word picks the binary.** `rbd` and `rados` are SEPARATE binaries, not ceph subcommands — `ceph rbd ls` is a mon-side "no valid command found". The command's first word selects from the allowlist `[ceph, rbd, rados]`; a bare word is treated as a ceph subcommand.
 - **Boundary errors over misleading ones.** Host-local ceph-ecosystem binaries (`mount.ceph`, `ceph-fuse`, `ceph-volume`, `rbd-nbd`, …) are explicitly NOT wrapped; such a call fails with a clear message pointing at the `ssh` tool instead of the mon's confusing error.
 - **stderr noise filtering.** The two known "no keyring under /etc/ceph" warnings (pure noise when credentials arrive via injected `--keyring`) are matched exactly and dropped; every other stderr line passes through verbatim.

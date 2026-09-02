@@ -12,7 +12,7 @@ import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
 import * as plugin from '../src/index.ts'
-import type { AccessProvider } from '@deepseek-ai/dsh-ops-access'
+import type { AccessProvider } from '@elinpf/dsh-ops-access'
 
 // ── Export shape ─────────────────────────────────────────────────────────────
 
@@ -34,7 +34,7 @@ describe('export shape', () => {
     const calls: Array<[string, () => void]> = []
     await mod.apply({ invariants: { register: (pkg: string, install: () => void) => calls.push([pkg, install]) } })
     expect(calls).toHaveLength(1)
-    expect(calls[0][0]).toBe('@deepseek-ai/dsh-ops-access-ssh')
+    expect(calls[0][0]).toBe('@elinpf/dsh-ops-access-ssh')
     expect(calls[0][1]()).toBeUndefined()
   })
 

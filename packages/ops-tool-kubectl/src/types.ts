@@ -1,10 +1,10 @@
 /**
- * Type definitions for @deepseek-ai/dsh-ops-kubectl.
+ * Type definitions for @elinpf/dsh-ops-kubectl.
  *
  * Types-only module — no runtime values. Re-exported from the plugin entry
  * so existing imports keep working.
  *
- * @module @deepseek-ai/dsh-ops-kubectl/types
+ * @module @elinpf/dsh-ops-kubectl/types
  */
 
 // ── list_access types ────────────────────────────────────────────────────────

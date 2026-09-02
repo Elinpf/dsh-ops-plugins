@@ -3,7 +3,7 @@
  *
  * Types only — no runtime values live here.
  *
- * @module @deepseek-ai/dsh-ops-access-k8s/types
+ * @module @elinpf/dsh-ops-access-k8s/types
  */
 
 /** Live verdicts for the operationally interesting faces (ticket 10); null = the check could not run. */

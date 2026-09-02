@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import * as mod from '../src/index.ts'
-import { shellQuote } from '@deepseek-ai/dsh-ops-shell-tool'
+import { shellQuote } from '@elinpf/dsh-ops-shell-tool'
 import { setup, DEFAULT_PROFILE } from './harness.ts'
-import type { AccessProfile } from '@deepseek-ai/dsh-ops-access'
+import type { AccessProfile } from '@elinpf/dsh-ops-access'
 
 describe('export shape', () => {
   it('is a function plugin: named exports, no default', () => {

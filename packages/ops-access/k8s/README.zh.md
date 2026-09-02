@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-access-k8s
+# @elinpf/dsh-ops-access-k8s
 
 ops-access 能力缝的 Kubernetes 凭证种类 provider — 校验 `k8s` 注册表条目、展开 kubeconfig 路径，并在保存时探测真实权限。
 
@@ -21,7 +21,7 @@ ops-access 能力缝的 Kubernetes 凭证种类 provider — 校验 `k8s` 注册
 
 ```yaml
 - id: ops-access-k8s
-  name: '@deepseek-ai/dsh-ops-access-k8s'
+  name: '@elinpf/dsh-ops-access-k8s'
 ```
 
 | 键 | 默认值 | 含义 |

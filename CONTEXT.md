@@ -36,7 +36,7 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 
 凭证体系按 dsh 的能力缝拆成三层，全部收在 `packages/ops-access/` 大文件夹里（分层一眼可见）：
 
-- **定义包 ops-access/core**（npm 名 `@deepseek-ai/dsh-ops-access`，不变）— 拥有 `ctx.opsAccess` 服务和登记文件，定义词汇类型
+- **定义包 ops-access/core**（npm 名 `@elinpf/dsh-ops-access`，不变）— 拥有 `ctx.opsAccess` 服务和登记文件，定义词汇类型
 - **提供方 ops-access/{k8s,ceph,ssh}** — 每种凭证类型一个：该类型的 zod schema、字段加工（如 `~` 展开）、可选的 `validateContent` 保存时内容校验。apply 里只调定义包的 `registerAccessProvider(ctx, provider)` 帮手注册——不要手写 `ctx.inject(['opsAccess'], ...)`（静态 inject 兄弟行服务会让 loader 死锁，帮手内含这段防护）
 - **保存时内容校验 (validateContent)** — provider 可选钩子，文件类字段的粘贴内容**落盘前**做结构性校验（k8s：合法 YAML 且有 clusters/contexts/users，且 `current-context` 必须指向已定义的 context——ops 工具不带 `--context`，缺失或失效的 current-context 会让每次调用都炸；ceph：[global]/mon_host + keyring 的 key 行缩进且 base64 ≥16 字节；ssh：**盔甲检查 + 真实解析**——`ssh-keygen -y -P ''` 跑通才放行（与 ssh 连接时同一个解析器），加密私钥报 BatchMode 不可用的明确错误）。钩子可以是**异步**的（ssh 要跑子进程）；provider 可声明 **`normalizeTrailingNewline`**（ssh/ceph 启用）在**校验前**把内容归一化为恰好一个结尾换行——PEM 的 END 行必须换行终止，粘贴/模型转述常丢这一字节（2026-08-27：ssh 密钥落盘缺尾换行 → 使用时 error in libcrypto，密钥数学关系完全自洽仍失败）。两条写入路径（admin UI、register_access）共用，校验失败 400/ok:false 且零文件 IO——粘贴丢格式（如 ceph keyring 的 TAB 缩进）在保存时就报明确错误，而不是使用时爆 cannot parse buffer
 - **能力探针 (capability probe)**（票 10）— provider 可选钩子，登记/保存时核验凭证的**真实权限**与声明档位是否相符（k8s 跑 `kubectl auth can-i` 矩阵——读 pods 必须 yes、写 deployments 按档位定；services/proxy、pods/exec 只做实况标注不卡判——子资源 can-i 可能误报（票 14 的 portforward 教训）；ceph 回读 `ceph auth get` 的 caps 比对，`allow r class-read` 仍算只读、任何含 w 的权限束（rwx/wx 等）算可写；紧 ro 实体无权自读 auth 库（EACCES）会标「无法核验」并自解释——危险方向（超权凭证占 ro 槽）必有足够权限做 auth get，必被抓；ssh 没有可测的只读壳，不实现钩子、档位恒为未核验）。结果以 `probe` 键落在注册表该 tier 旁（status/detail/probedAt，自动管理勿手改），经 listAll 透出到 list_access（`[probe: ro 已核验 / rw 核验失败: …]`；无记录的档位标 声明未核验）和管理 UI（tier 徽章旁的已核验/核验失败/无法核验 chip）。探针只读、失败降级 unverifiable——**从不拒绝写入**；stderr 永不上浮（kubectl/ceph 的报错会带出凭证路径）。`canResolve` 返回类型并入 `AdminTierStatus`（probe 的载体）。
@@ -228,7 +228,7 @@ session 事件日志是唯一真账本，树状态由事件 fold 而来。模型
 
 ### 树布局 (tree-layout)
 
-`src/tree-layout.ts`：排序（进行中优先、goal 最后）、索引、深度、DFS 展开的纯函数。**宿主渲染器和 web 面板共用同一份**——人看到的树和模型看到的树是同一个布局。面板在另一个包（ops-trace-ui），通过 `@deepseek-ai/dsh-ops-tool-trace/tree-layout` 子路径导出共享。
+`src/tree-layout.ts`：排序（进行中优先、goal 最后）、索引、深度、DFS 展开的纯函数。**宿主渲染器和 web 面板共用同一份**——人看到的树和模型看到的树是同一个布局。面板在另一个包（ops-trace-ui），通过 `@elinpf/dsh-ops-tool-trace/tree-layout` 子路径导出共享。
 
 ## Web 面板词汇
 

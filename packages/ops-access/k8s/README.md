@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-access-k8s
+# @elinpf/dsh-ops-access-k8s
 
 The Kubernetes credential-kind provider for the ops-access capability seam — validates `k8s` registry entries, expands kubeconfig paths, and probes real permissions at save time.
 
@@ -21,7 +21,7 @@ One provider per credential kind is the ops-access split rule: this package carr
 
 ```yaml
 - id: ops-access-k8s
-  name: '@deepseek-ai/dsh-ops-access-k8s'
+  name: '@elinpf/dsh-ops-access-k8s'
 ```
 
 | Key | Default | Meaning |

@@ -17,7 +17,7 @@
  * no edge and no error. A missing ConfigMap, a dangling Service name, a
  * selector-less Service — all simply yield no edge.
  *
- * @module @deepseek-ai/dsh-ops-tool-environment
+ * @module @elinpf/dsh-ops-tool-environment
  */
 
 import { isMiddlewareType } from './classify.js'

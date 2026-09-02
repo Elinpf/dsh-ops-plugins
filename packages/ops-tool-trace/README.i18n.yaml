@@ -1,4 +1,4 @@
-title: "@deepseek-ai/dsh-ops-tool-trace"
+title: "@elinpf/dsh-ops-tool-trace"
 description:
   zh: "运维模式调查树工具 — 用扩散-收敛树替代 todo_write"
   en: "Investigation tree tool for ops mode — replaces todo_write with a diverge-converge tree"

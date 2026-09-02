@@ -1,5 +1,5 @@
 {
-  "name": "@deepseek-ai/dsh-ops-kubectl",
+  "name": "@elinpf/dsh-ops-kubectl",
   "version": "0.1.0",
   "description": "kubectl tool consumer of the ops-access seam — resolves k8s profiles into kubeconfig paths and runs kubectl via ctx.shell; list_access surfaces registered profiles without secret fields.",
   "type": "module",
@@ -40,21 +40,24 @@
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",
-    "@deepseek-ai/dsh-ops-shell-tool": "workspace:^0.1.0"
+    "@elinpf/dsh-ops-shell-tool": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-invariants": "^0.0.1-rc.1",
-    "@deepseek-ai/dsh-ops-access": "^0.1.0",
+    "@elinpf/dsh-ops-access": "^0.1.0",
     "@deepseek-ai/dsh-tools": "^0.0.1-rc.1"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
-    "@deepseek-ai/dsh-ops-access": "workspace:*",
+    "@elinpf/dsh-ops-access": "workspace:*",
     "@deepseek-ai/dsh-shell": "0.0.1-rc.5",
     "@deepseek-ai/dsh-tools": "0.0.1-rc.1",
     "typescript": "^5.4.0",
     "vitest": "^4.1.11"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
 }

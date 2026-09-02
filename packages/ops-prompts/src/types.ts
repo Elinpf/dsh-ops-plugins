@@ -1,7 +1,7 @@
 /**
  * Type definitions for the ops-prompts plugin.
  *
- * @module @deepseek-ai/dsh-ops-prompts
+ * @module @elinpf/dsh-ops-prompts
  */
 
 // ── Config ───────────────────────────────────────────────────────────────────

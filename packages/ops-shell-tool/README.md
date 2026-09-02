@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-shell-tool
+# @elinpf/dsh-ops-shell-tool
 
 Shared factory for ops-access consumer tools: the standard shell result shape `{ exitCode, stdout, stderr, command, error? }`, its output schema and render, and the resolve-per-call execute template.
 

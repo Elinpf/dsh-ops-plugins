@@ -4,7 +4,7 @@
  * Types only — no runtime code lives here. Provider values (schema, probe
  * functions, plugin apply) stay in index.ts.
  *
- * @module @deepseek-ai/dsh-ops-access-ceph
+ * @module @elinpf/dsh-ops-access-ceph
  */
 
 // ── Capability probe outcomes (ticket 10) ────────────────────────────────────

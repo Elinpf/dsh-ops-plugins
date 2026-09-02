@@ -4,10 +4,10 @@
  * Types only — every runtime value (the credential token machinery, the
  * output contract, the factory itself) lives in index.ts.
  *
- * @module @deepseek-ai/dsh-ops-shell-tool
+ * @module @elinpf/dsh-ops-shell-tool
  */
 
-import type { AccessAgent } from '@deepseek-ai/dsh-ops-access'
+import type { AccessAgent } from '@elinpf/dsh-ops-access'
 import type { ShellExecRequest } from '@deepseek-ai/dsh-shell'
 
 // ── Result shape (the one definition every consumer shares) ─────────────────

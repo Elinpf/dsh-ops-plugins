@@ -77,7 +77,7 @@ describe('export shape', () => {
     await invariantPlugin.apply({
       invariants: { register: (pkg: string, install: unknown) => { registrations.push([pkg, install]) } },
     })
-    expect(registrations).toEqual([['@deepseek-ai/dsh-ops-access', expect.any(Function)]])
+    expect(registrations).toEqual([['@elinpf/dsh-ops-access', expect.any(Function)]])
   })
 })
 

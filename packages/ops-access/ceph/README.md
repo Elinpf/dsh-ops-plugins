@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-access-ceph
+# @elinpf/dsh-ops-access-ceph
 
 The Ceph credential provider for DeepSeek Harness ops mode — validates `ceph` registry entries (ceph.conf + keyring), expands their paths, and probes claimed ro/rw tiers against the cluster's real cephx caps at save time.
 
@@ -30,7 +30,7 @@ Provider row of the ops preset's `agent.cordis.yml`:
 
 ```yaml
 - id: ops-access-ceph
-  name: '@deepseek-ai/dsh-ops-access-ceph'
+  name: '@elinpf/dsh-ops-access-ceph'
 ```
 
 Registration goes through `registerAccessProvider` (deferred `ctx.inject` + effect lifecycle, so HMR unloads it) — never a static `inject` on `opsAccess`, which deadlocks the loader.

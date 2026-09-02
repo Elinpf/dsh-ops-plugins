@@ -1,4 +1,4 @@
-title: "@deepseek-ai/dsh-ops-tool-ceph"
+title: "@elinpf/dsh-ops-tool-ceph"
 description:
   zh: "ceph 工具 — 经 ops-access 接缝解析 Ceph 集群档案,自动注入凭证路径执行 ceph/rbd/rados"
   en: "ceph tool — resolves Ceph cluster profiles via the ops-access seam and runs ceph/rbd/rados with credential paths injected"

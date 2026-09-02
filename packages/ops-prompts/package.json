@@ -1,5 +1,5 @@
 {
-  "name": "@deepseek-ai/dsh-ops-prompts",
+  "name": "@elinpf/dsh-ops-prompts",
   "version": "0.1.0",
   "description": "Ops prompt orchestration center — methodology prompts and dynamic reminders for ops preset.",
   "type": "module",
@@ -64,5 +64,8 @@
     "typescript": "^5.4.0",
     "vitest": "^4.1.11"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
 }

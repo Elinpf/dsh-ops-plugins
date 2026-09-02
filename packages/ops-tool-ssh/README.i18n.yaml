@@ -1,4 +1,4 @@
-title: "@deepseek-ai/dsh-ops-tool-ssh"
+title: "@elinpf/dsh-ops-tool-ssh"
 description:
   zh: "ssh 工具 — 解析 ssh 访问档案,经 ctx.shell 在远程主机执行命令"
   en: "ssh tool — resolves ssh access profiles and runs commands on remote hosts via ctx.shell"

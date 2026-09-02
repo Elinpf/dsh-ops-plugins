@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-tool-ssh
+# @elinpf/dsh-ops-tool-ssh
 
 DeepSeek Harness 运维模式的 `ssh` 工具 — 使用已注册的 ssh 访问档案在远程主机上执行命令(密钥路径、端口、user@host 自动注入)。
 
@@ -12,7 +12,7 @@ ops-access 凭据缝隙的消费方:模型用档案名加命令调用 `ssh`,插�
 
 ## 设计
 
-本包刻意保持单薄。所有共享机制 — 结果形状 `{ exitCode, stdout, stderr, command, error? }`、输出 schema、render、按次解析的执行模板(默认 30s 超时)— 都在 `@deepseek-ai/dsh-ops-shell-tool`。消费方工具只提供四个身份要素:工具名、凭据 kind、档案参数名、`buildCommand`。ops-access 缝隙每次调用经 `ctx.get('opsAccess')` 现取,绝不用静态 inject(preset 并发挂载同组插件,静态 inject 会让加载器死锁)。
+本包刻意保持单薄。所有共享机制 — 结果形状 `{ exitCode, stdout, stderr, command, error? }`、输出 schema、render、按次解析的执行模板(默认 30s 超时)— 都在 `@elinpf/dsh-ops-shell-tool`。消费方工具只提供四个身份要素:工具名、凭据 kind、档案参数名、`buildCommand`。ops-access 缝隙每次调用经 `ctx.get('opsAccess')` 现取,绝不用静态 inject(preset 并发挂载同组插件,静态 inject 会让加载器死锁)。
 
 - `src/index.ts` — 插件本体(函数式插件:`name`/`inject`/`Config`/`apply`,无默认导出)。注册走 `ctx.effect`,fiber 销毁/HMR 时工具随之卸载。
 - `src/types.ts` — 纯类型(无任何运行时值)。
@@ -22,7 +22,7 @@ ops-access 凭据缝隙的消费方:模型用档案名加命令调用 `ssh`,插�
 
 ```yaml
 - id: ops-tool-ssh
-  name: '@deepseek-ai/dsh-ops-tool-ssh'
+  name: '@elinpf/dsh-ops-tool-ssh'
   timeoutMs: 30000            # 单次调用的 shell 超时(毫秒)
   connectTimeoutSeconds: 10   # ssh -o ConnectTimeout(TCP 握手等待)
 ```

@@ -6,7 +6,7 @@
  */
 
 import { apply } from '../src/index.ts'
-import type { AccessProfile, AdminEntry } from '@deepseek-ai/dsh-ops-access'
+import type { AccessProfile, AdminEntry } from '@elinpf/dsh-ops-access'
 
 export const DEFAULT_KUBECONFIG = '/home/test/.kube/prod.yaml'
 

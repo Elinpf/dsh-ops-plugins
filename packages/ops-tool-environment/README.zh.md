@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-tool-environment
+# @elinpf/dsh-ops-tool-environment
 
 DeepSeek Harness 运维模式的环境清单 —— 只读、纯确定性的盘点器：遍历 `ops-access` 注册的 k8s 集群，盘出环境地图落盘为 `~/.dsh-ops/environment.yaml`；agent 经模型工具 `environment` 消费（spec 见 `docs/specs/0004-environment-inventory.md`）。
 

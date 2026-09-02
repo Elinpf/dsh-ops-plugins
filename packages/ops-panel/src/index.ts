@@ -7,7 +7,7 @@
  * log-only record, and the command/executed local browser event is what
  * opens the panel on the client half.
  *
- * @module @deepseek-ai/dsh-ops-panel
+ * @module @elinpf/dsh-ops-panel
  */
 
 import z from '@deepseek-ai/schemastery'

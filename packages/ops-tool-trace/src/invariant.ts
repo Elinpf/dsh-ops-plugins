@@ -1,10 +1,10 @@
 /**
- * Invariant companion for @deepseek-ai/dsh-ops-tool-trace.
+ * Invariant companion for @elinpf/dsh-ops-tool-trace.
  *
- * @module @deepseek-ai/dsh-ops-tool-trace/invariant
+ * @module @elinpf/dsh-ops-tool-trace/invariant
  */
 
-const PACKAGE_NAME = '@deepseek-ai/dsh-ops-tool-trace'
+const PACKAGE_NAME = '@elinpf/dsh-ops-tool-trace'
 
 /** Cordis companion plugin name. */
 const name = 'ops-trace-invariant'

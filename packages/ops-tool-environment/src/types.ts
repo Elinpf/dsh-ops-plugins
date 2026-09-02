@@ -6,7 +6,7 @@
  * ClusterInventory per cluster section. Everything here is plain data —
  * no credential paths, no Secret values ever appear in these shapes.
  *
- * @module @deepseek-ai/dsh-ops-tool-environment
+ * @module @elinpf/dsh-ops-tool-environment
  */
 
 /** Reference to a namespaced k8s object. */

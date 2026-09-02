@@ -1,12 +1,12 @@
 /**
- * Pure type definitions for @deepseek-ai/dsh-ops-access-gate.
+ * Pure type definitions for @elinpf/dsh-ops-access-gate.
  *
  * Types only — no runtime values live here. The schemastery Config schema,
  * the denied-file persistence helpers, and the plugin apply stay in
  * index.ts; this module holds the contracts they operate on so consumers
  * can import them without pulling the plugin's runtime.
  *
- * @module @deepseek-ai/dsh-ops-access-gate/types
+ * @module @elinpf/dsh-ops-access-gate/types
  */
 
 // ── Config ───────────────────────────────────────────────────────────────────

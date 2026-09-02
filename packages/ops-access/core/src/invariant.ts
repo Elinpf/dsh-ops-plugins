@@ -1,10 +1,10 @@
 /**
- * Invariant companion for @deepseek-ai/dsh-ops-access.
+ * Invariant companion for @elinpf/dsh-ops-access.
  *
- * @module @deepseek-ai/dsh-ops-access/invariant
+ * @module @elinpf/dsh-ops-access/invariant
  */
 
-const PACKAGE_NAME = '@deepseek-ai/dsh-ops-access'
+const PACKAGE_NAME = '@elinpf/dsh-ops-access'
 
 /** Cordis companion plugin name. */
 const name = 'ops-access-invariant'

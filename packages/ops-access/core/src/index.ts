@@ -34,7 +34,7 @@
  * on the entry; `ro` and `rw` are tier sub-objects holding the
  * provider-specific fields for that tier.
  *
- * @module @deepseek-ai/dsh-ops-access
+ * @module @elinpf/dsh-ops-access
  */
 
 import { readFile, writeFile, mkdir, rm, rmdir } from 'node:fs/promises'
@@ -89,7 +89,7 @@ export const Config: z<Config> = z.object({
 // The service contract types (AccessProvider, AccessProfile, EntryEnvelope,
 // ProbeState, the admin-view types, KindDescriptor, the broker types,
 // OpsAccess) and the Config interface live in ./types.js — a types-only
-// module. This re-export keeps existing `from '@deepseek-ai/dsh-ops-access'`
+// module. This re-export keeps existing `from '@elinpf/dsh-ops-access'`
 // type imports working.
 export type {
   AccessProvider,

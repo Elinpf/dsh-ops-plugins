@@ -4,7 +4,7 @@
  * Types only — no runtime values live here (not even consts), so importing
  * this module never pulls in plugin code.
  *
- * @module @deepseek-ai/dsh-ops-tool-ceph
+ * @module @elinpf/dsh-ops-tool-ceph
  */
 
 /**

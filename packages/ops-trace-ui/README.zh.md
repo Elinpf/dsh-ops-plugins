@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-trace-ui
+# @elinpf/dsh-ops-trace-ui
 
 ops trace 功能的 host 面薄壳 — 注册共享的 `trace` session projection,并携带 web 面板 client bundle(输入框上方的调查树面板)。
 
@@ -6,10 +6,10 @@ ops trace 功能的 host 面薄壳 — 注册共享的 `trace` session projectio
 
 一个薄壳,两个 half:
 
-- **Host 半**(`src/index.ts`):把共享的 `trace` projection 注册进 `ctx.sessionProjections`,通过 `ctx.inject` 延迟执行,loader 不会因此把本行与 registry 排序。projection 定义从 `@deepseek-ai/dsh-ops-tool-trace` **原样引用**(引用同一对象,不是复制),因此 key/schema/fold/stateVersion 在工具半和面板半之间永不漂移。
+- **Host 半**(`src/index.ts`):把共享的 `trace` projection 注册进 `ctx.sessionProjections`,通过 `ctx.inject` 延迟执行,loader 不会因此把本行与 registry 排序。projection 定义从 `@elinpf/dsh-ops-tool-trace` **原样引用**(引用同一对象,不是复制),因此 key/schema/fold/stateVersion 在工具半和面板半之间永不漂移。
 - **Client 半**(`src/client.ts`,esbuild 打包为 `lib/client.js`):注册一个 `conversation.input.dock` 条目(`id: 'ops-tree'`),渲染可折叠的调查树面板,结构上与 todo_write 的 TodoPanel 完全一致。通过 `useProjection` 读 `trace` projection;registry 缺席时降级为不渲染。
 
-不注册任何工具和 prompt section — `trace` 工具及其方法论在 `@deepseek-ai/dsh-ops-tool-trace`,挂在 preset 面。
+不注册任何工具和 prompt section — `trace` 工具及其方法论在 `@elinpf/dsh-ops-tool-trace`,挂在 preset 面。
 
 ## 设计要点
 
@@ -22,7 +22,7 @@ ops trace 功能的 host 面薄壳 — 注册共享的 `trace` session projectio
 
 ```yaml
 - id: ops-trace-ui
-  name: '@deepseek-ai/dsh-ops-trace-ui'
+  name: '@elinpf/dsh-ops-trace-ui'
 ```
 
 无配置项 — `Config` 是空的 schemastery object。

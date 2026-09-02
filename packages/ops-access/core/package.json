@@ -1,5 +1,5 @@
 {
-  "name": "@deepseek-ai/dsh-ops-access",
+  "name": "@elinpf/dsh-ops-access",
   "version": "0.1.0",
   "description": "Ops access capability seam — owns the YAML credential registry and exposes ctx.opsAccess (resolve/list/register) to provider plugins.",
   "type": "module",
@@ -67,5 +67,8 @@
       "default": "./lib/mention.js"
     },
     "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

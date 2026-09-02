@@ -1,10 +1,10 @@
-# @deepseek-ai/dsh-ops-access-ssh
+# @elinpf/dsh-ops-access-ssh
 
 SSH credential provider for the ops access seam — validates `ssh` registry entries (`{ host, user, key?, port? }`) and expands key paths for the ssh consumer tool.
 
 ## What it does
 
-One of three provider plugins behind `@deepseek-ai/dsh-ops-access` (core). Core owns the YAML credential registry (`~/.dsh-ops/access.yaml`) and the `ctx.opsAccess` service; this package contributes exactly one credential kind, `ssh`, via `registerAccessProvider`:
+One of three provider plugins behind `@elinpf/dsh-ops-access` (core). Core owns the YAML credential registry (`~/.dsh-ops/access.yaml`) and the `ctx.opsAccess` service; this package contributes exactly one credential kind, `ssh`, via `registerAccessProvider`:
 
 - **Entry schema** (zod): `host`, `user`, optional `key` (private-key path), optional `port`
 - **Field processing**: expands `~` in the key path so `ssh -i` sees an absolute path
@@ -23,7 +23,7 @@ Add to `dsh-web-app` dependencies and reference in the ops preset's `agent.cordi
 
 ```yaml
 - id: ops-access-ssh
-  name: '@deepseek-ai/dsh-ops-access-ssh'
+  name: '@elinpf/dsh-ops-access-ssh'
 ```
 
 ## Configuration

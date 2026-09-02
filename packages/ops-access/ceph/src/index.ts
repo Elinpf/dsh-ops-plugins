@@ -6,15 +6,15 @@
  * under ~/.dsh-ops/credentials/ and stores the path in the registry. The
  * provider expands ~ in the path for the tool's --conf/--keyring flags.
  *
- * @module @deepseek-ai/dsh-ops-access-ceph
+ * @module @elinpf/dsh-ops-access-ceph
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import { execFile } from 'node:child_process'
-import type { AccessProvider } from '@deepseek-ai/dsh-ops-access'
-import { expandHome, registerAccessProvider } from '@deepseek-ai/dsh-ops-access'
+import type { AccessProvider } from '@elinpf/dsh-ops-access'
+import { expandHome, registerAccessProvider } from '@elinpf/dsh-ops-access'
 import type { CapAssessment, ProbeFailure, ProbeOutcome } from './types.js'
 
 // Pure types live in types.ts (zero runtime code); re-exported here so

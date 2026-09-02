@@ -31,7 +31,7 @@
  * audit file. Headless deployments (no webServer) fail request_access fast
  * with out-of-band guidance.
  *
- * @module @deepseek-ai/dsh-ops-access-gate
+ * @module @elinpf/dsh-ops-access-gate
  */
 
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -40,9 +40,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { AccessAgent, AccessBroker } from '@deepseek-ai/dsh-ops-access'
-import { expandHome, registerAccessBroker } from '@deepseek-ai/dsh-ops-access'
-import { registerPanelCommand } from '@deepseek-ai/dsh-ops-panel'
+import type { AccessAgent, AccessBroker } from '@elinpf/dsh-ops-access'
+import { expandHome, registerAccessBroker } from '@elinpf/dsh-ops-access'
+import { registerPanelCommand } from '@elinpf/dsh-ops-panel'
 import type { ActiveGrant, Config as ConfigShape, DeniedEntry, Grant, OpsAccessGate, PendingRequest, RequestDecision } from './types.js'
 
 // The pure contracts live in types.ts; re-exported here so existing

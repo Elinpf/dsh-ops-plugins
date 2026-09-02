@@ -6,7 +6,7 @@ import { assessK8sTier, provider } from '../src/index.ts'
 
 import { afterEach, describe, expect, it } from 'vitest'
 import * as plugin from '../src/index.ts'
-import type { AccessProvider } from '@deepseek-ai/dsh-ops-access'
+import type { AccessProvider } from '@elinpf/dsh-ops-access'
 
 // ── Export shape ─────────────────────────────────────────────────────────────
 

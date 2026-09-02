@@ -1,4 +1,4 @@
-# @deepseek-ai/dsh-ops-tool-environment
+# @elinpf/dsh-ops-tool-environment
 
 Environment inventory for DeepSeek Harness ops mode — a read-only, fully deterministic scanner that maps the k8s clusters registered in `ops-access` into `~/.dsh-ops/environment.yaml`, plus the model-facing `environment` tool the agent reads it through (spec `docs/specs/0004-environment-inventory.md`).
 

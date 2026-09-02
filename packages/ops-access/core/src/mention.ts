@@ -12,7 +12,7 @@
  * Host-side only — the browser never encodes or parses these; the remote
  * hands it ready-made mention strings.
  *
- * @module @deepseek-ai/dsh-ops-access/mention
+ * @module @elinpf/dsh-ops-access/mention
  */
 
 /** URI scheme reserved for ops access-profile references. */

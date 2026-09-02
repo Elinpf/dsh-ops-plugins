@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import * as plugin from '../src/index.ts'
 import * as invariant from '../src/invariant.ts'
 import * as types from '../src/types.ts'
-import type { AccessProvider } from '@deepseek-ai/dsh-ops-access'
+import type { AccessProvider } from '@elinpf/dsh-ops-access'
 
 // ── Export shape ─────────────────────────────────────────────────────────────
 
@@ -37,7 +37,7 @@ describe('export shape', () => {
   it('invariant companion reserves package ownership, installing nothing', async () => {
     const registered: string[] = []
     await invariant.apply({ invariants: { register: (pkg: string) => { registered.push(pkg) } } })
-    expect(registered).toEqual(['@deepseek-ai/dsh-ops-access-ceph'])
+    expect(registered).toEqual(['@elinpf/dsh-ops-access-ceph'])
   })
 })
 

@@ -1,10 +1,10 @@
 /**
- * Invariant companion for @deepseek-ai/dsh-ops-prompts.
+ * Invariant companion for @elinpf/dsh-ops-prompts.
  *
- * @module @deepseek-ai/dsh-ops-prompts/invariant
+ * @module @elinpf/dsh-ops-prompts/invariant
  */
 
-const PACKAGE_NAME = '@deepseek-ai/dsh-ops-prompts'
+const PACKAGE_NAME = '@elinpf/dsh-ops-prompts'
 
 /** Cordis companion plugin name. */
 const name = 'ops-prompts-invariant'

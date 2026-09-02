@@ -17,7 +17,7 @@
  *   no concurrent call can interleave. The create_tree double-fold guard
  *   (phantom tree) lives here, not in the caller.
  *
- * @module @deepseek-ai/dsh-ops-tool-trace/session-forests
+ * @module @elinpf/dsh-ops-tool-trace/session-forests
  */
 
 import type { ForestState, TraceArgs } from './types.js'

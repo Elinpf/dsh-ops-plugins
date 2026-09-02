@@ -8,14 +8,14 @@
  * auth failure short of deleting control-plane manifests remotely while
  * `restoring` them on the LOCAL machine (2026-08-27 near-miss). All shared
  * machinery (result shape, output schema, render, execute template) lives
- * in @deepseek-ai/dsh-ops-shell-tool.
+ * in @elinpf/dsh-ops-shell-tool.
  *
- * @module @deepseek-ai/dsh-ops-tool-ssh
+ * @module @elinpf/dsh-ops-tool-ssh
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { registerProfiledShellTool, shellQuote } from '@deepseek-ai/dsh-ops-shell-tool'
+import { registerProfiledShellTool, shellQuote } from '@elinpf/dsh-ops-shell-tool'
 import type { SshToolConfig } from './types'
 
 export type { SshToolConfig } from './types'
