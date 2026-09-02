@@ -4,7 +4,7 @@ English | [中文](README.zh.md)
 
 An ops plugin suite for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh): it turns a dsh agent into a production-incident investigator — one that resolves kubectl / ceph / ssh credentials by name, runs real read-only commands against your clusters, and organizes the whole investigation as a tree.
 
-The suite publishes to npm as `@elinpf/dsh-ops-*` (15 packages, lockstep versions). Everything is a Cordis plugin; [`ops-preset.yml`](ops-preset.yml) in this repo is the reference composition.
+The suite installs as a single npm package, `@elinpf/dsh-ops`, which pulls in the granular `@elinpf/dsh-ops-*` packages as dependencies (16 packages, lockstep versions). Everything is a Cordis plugin; [`ops-preset.yml`](ops-preset.yml) in this repo is the reference composition.
 
 ## Why you'd want it
 
@@ -23,43 +23,25 @@ The suite publishes to npm as `@elinpf/dsh-ops-*` (15 packages, lockstep version
 
 ## Installation
 
-Install the plugin packages into your dsh profile. The minimal set is the access seam plus the providers you actually use — for example kubectl and ssh:
+Install the single deployment package into your dsh profile — it depends on every granular `@elinpf/dsh-ops-*` package and carries the host-plane rows (trace panel, `@`-mention picker, ops panel):
 
 ```sh
-dsh plugin --profile <name> add @elinpf/dsh-ops-access
-dsh plugin --profile <name> add @elinpf/dsh-ops-access-k8s
-dsh plugin --profile <name> add @elinpf/dsh-ops-access-gate
-dsh plugin --profile <name> add @elinpf/dsh-ops-access-ssh
-dsh plugin --profile <name> add @elinpf/dsh-ops-tool-kubectl
-dsh plugin --profile <name> add @elinpf/dsh-ops-tool-ssh
-dsh plugin --profile <name> add @elinpf/dsh-ops-tool-trace
-dsh plugin --profile <name> add @elinpf/dsh-ops-trace-ui
-dsh plugin --profile <name> add @elinpf/dsh-ops-prompts
-dsh plugin --profile <name> add @elinpf/dsh-ops-panel
-dsh plugin --profile <name> add @elinpf/dsh-ops-access-ui
+dsh plugin --profile <name> add @elinpf/dsh-ops
 ```
 
-Add `@elinpf/dsh-ops-access-ceph` / `@elinpf/dsh-ops-tool-ceph` for ceph, and `@elinpf/dsh-ops-tool-environment` for the environment inventory. `@elinpf/dsh-ops-shell-tool` is a shared library and arrives as a dependency — never mount it directly.
+The granular packages remain published for advanced compositions; `@elinpf/dsh-ops-shell-tool` is a shared library and arrives as a dependency — never mount it directly.
 
 ## Deployment
 
-The plugins are inert until an agent preset mounts them. The `ops` preset is the reference composition:
+The plugins are inert until an agent preset mounts them. `@elinpf/dsh-ops` ships the `ops` preset — the reference composition — plus a small `dsh-ops` helper that materializes it:
 
-1. **Create the preset** in your agents home (default `~/.agents`), next to the built-in presets:
+1. **Install the preset** into your agents home (default `~/.agents`):
 
-   ```
-   ~/.agents/.agent-presets/ops/
-   ├── preset.yml          # name / description / order
-   └── agent.cordis.yml    # copy of this repo's ops-preset.yml
+   ```sh
+   npx @elinpf/dsh-ops preset install
    ```
 
-   `preset.yml` declares the preset's catalog entry, e.g.:
-
-   ```yaml
-   name: Ops mode
-   description: For ops engineers: everything in standard mode, plus the investigation tree, credential registry (k8s/ceph/ssh), and shell tools.
-   order: 5
-   ```
+   This writes `~/.agents/.agent-presets/ops/` (`preset.yml` + `agent.cordis.yml`) next to the built-in presets. For a non-default agents home, pass `--agents-home <dir>` or set `DSH_AGENTS_HOME`.
 
 2. **Point the profile at it** — add to the profile's `cordis.patch.yml`:
 
@@ -79,12 +61,11 @@ Verify: open the web UI, start a session on the ops preset — `list_access` lis
 
 ## Uninstall
 
-1. Switch the profile's default preset back (or remove the `ops` preset directory from `~/.agents/.agent-presets/`), then restart the profile.
-2. Remove the packages:
+1. Switch the profile's default preset back, or remove the ops preset (`npx @elinpf/dsh-ops preset remove`), then restart the profile.
+2. Remove the package:
 
    ```sh
-   dsh plugin --profile <name> remove @elinpf/dsh-ops-access
-   # …repeat for each package added above
+   dsh plugin --profile <name> remove @elinpf/dsh-ops
    ```
 
 3. Restart the profile again.

@@ -12,6 +12,55 @@ importers:
         specifier: ^3.0.1
         version: 3.0.1
 
+  packages/ops:
+    dependencies:
+      '@elinpf/dsh-ops-access':
+        specifier: workspace:^
+        version: link:../ops-access/core
+      '@elinpf/dsh-ops-access-ceph':
+        specifier: workspace:^
+        version: link:../ops-access/ceph
+      '@elinpf/dsh-ops-access-gate':
+        specifier: workspace:^
+        version: link:../ops-access/gate
+      '@elinpf/dsh-ops-access-k8s':
+        specifier: workspace:^
+        version: link:../ops-access/k8s
+      '@elinpf/dsh-ops-access-ssh':
+        specifier: workspace:^
+        version: link:../ops-access/ssh
+      '@elinpf/dsh-ops-access-ui':
+        specifier: workspace:^
+        version: link:../ops-access-ui
+      '@elinpf/dsh-ops-panel':
+        specifier: workspace:^
+        version: link:../ops-panel
+      '@elinpf/dsh-ops-prompts':
+        specifier: workspace:^
+        version: link:../ops-prompts
+      '@elinpf/dsh-ops-tool-ceph':
+        specifier: workspace:^
+        version: link:../ops-tool-ceph
+      '@elinpf/dsh-ops-tool-environment':
+        specifier: workspace:^
+        version: link:../ops-tool-environment
+      '@elinpf/dsh-ops-tool-kubectl':
+        specifier: workspace:^
+        version: link:../ops-tool-kubectl
+      '@elinpf/dsh-ops-tool-ssh':
+        specifier: workspace:^
+        version: link:../ops-tool-ssh
+      '@elinpf/dsh-ops-tool-trace':
+        specifier: workspace:^
+        version: link:../ops-tool-trace
+      '@elinpf/dsh-ops-trace-ui':
+        specifier: workspace:^
+        version: link:../ops-trace-ui
+    devDependencies:
+      typescript:
+        specifier: ^5.4.0
+        version: 5.9.3
+
   packages/ops-access-ui:
     dependencies:
       '@deepseek-ai/dsh-invariants':

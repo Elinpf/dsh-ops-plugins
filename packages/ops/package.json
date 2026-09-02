@@ -1,0 +1,46 @@
+{
+  "name": "@elinpf/dsh-ops",
+  "version": "0.1.3",
+  "description": "Single-package deployment unit for the dsh-ops plugin suite: host-plane rows plus the ops agent preset, over the granular @elinpf/dsh-ops-* packages.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "dsh-ops": "./bin/dsh-ops.mjs"
+  },
+  "exports": {
+    ".": "./lib/index.js"
+  },
+  "files": [
+    "lib",
+    "bin",
+    "presets",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "@elinpf/dsh-ops-access": "workspace:^",
+    "@elinpf/dsh-ops-access-ceph": "workspace:^",
+    "@elinpf/dsh-ops-access-gate": "workspace:^",
+    "@elinpf/dsh-ops-access-k8s": "workspace:^",
+    "@elinpf/dsh-ops-access-ssh": "workspace:^",
+    "@elinpf/dsh-ops-access-ui": "workspace:^",
+    "@elinpf/dsh-ops-panel": "workspace:^",
+    "@elinpf/dsh-ops-prompts": "workspace:^",
+    "@elinpf/dsh-ops-tool-ceph": "workspace:^",
+    "@elinpf/dsh-ops-tool-environment": "workspace:^",
+    "@elinpf/dsh-ops-tool-kubectl": "workspace:^",
+    "@elinpf/dsh-ops-tool-ssh": "workspace:^",
+    "@elinpf/dsh-ops-tool-trace": "workspace:^",
+    "@elinpf/dsh-ops-trace-ui": "workspace:^"
+  },
+  "scripts": {
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

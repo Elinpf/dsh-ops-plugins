@@ -4,6 +4,7 @@
   "commit": false,
   "fixed": [
     [
+      "@elinpf/dsh-ops",
       "@elinpf/dsh-ops-access",
       "@elinpf/dsh-ops-access-ceph",
       "@elinpf/dsh-ops-access-gate",

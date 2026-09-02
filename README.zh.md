@@ -4,7 +4,7 @@
 
 面向运维场景的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）插件集：把 dsh agent 变成生产事件排查员——按名字解析 kubectl / ceph / ssh 凭证、对集群执行真实的只读命令、把整个排查过程组织成一棵树。
 
-插件集以 `@elinpf/dsh-ops-*` 为名发布到 npm（15 个包，锁步版本）。一切都是 Cordis 插件；本仓库的 [`ops-preset.yml`](ops-preset.yml) 是参考组合。
+插件集以单个 npm 包 `@elinpf/dsh-ops` 安装，它把颗粒化的 `@elinpf/dsh-ops-*` 包作为依赖整体带入（共 16 个包，锁步版本）。一切都是 Cordis 插件；本仓库的 [`ops-preset.yml`](ops-preset.yml) 是参考组合。
 
 ## 为什么需要它
 
@@ -23,43 +23,25 @@
 
 ## 安装
 
-把插件包安装进你的 dsh profile。最小集合是访问缝加你实际使用的提供方——例如 kubectl 和 ssh：
+把单一的部署包安装进你的 dsh profile——它依赖全部颗粒化的 `@elinpf/dsh-ops-*` 包，并携带宿主层行（trace 面板、`@` 引用选择器、ops 面板）：
 
 ```sh
-dsh plugin --profile <name> add @elinpf/dsh-ops-access
-dsh plugin --profile <name> add @elinpf/dsh-ops-access-k8s
-dsh plugin --profile <name> add @elinpf/dsh-ops-access-gate
-dsh plugin --profile <name> add @elinpf/dsh-ops-access-ssh
-dsh plugin --profile <name> add @elinpf/dsh-ops-tool-kubectl
-dsh plugin --profile <name> add @elinpf/dsh-ops-tool-ssh
-dsh plugin --profile <name> add @elinpf/dsh-ops-tool-trace
-dsh plugin --profile <name> add @elinpf/dsh-ops-trace-ui
-dsh plugin --profile <name> add @elinpf/dsh-ops-prompts
-dsh plugin --profile <name> add @elinpf/dsh-ops-panel
-dsh plugin --profile <name> add @elinpf/dsh-ops-access-ui
+dsh plugin --profile <name> add @elinpf/dsh-ops
 ```
 
-需要 ceph 加 `@elinpf/dsh-ops-access-ceph` / `@elinpf/dsh-ops-tool-ceph`；需要环境清单加 `@elinpf/dsh-ops-tool-environment`。`@elinpf/dsh-ops-shell-tool` 是共享库，作为依赖自动到达——不要直接挂载它。
+颗粒化包仍在 npm 上发布，供高级组合取用；`@elinpf/dsh-ops-shell-tool` 是共享库，作为依赖自动到达——不要直接挂载它。
 
 ## 部署
 
-插件在被 agent 预设挂载之前是不生效的。`ops` 预设是参考组合：
+插件在被 agent 预设挂载之前是不生效的。`@elinpf/dsh-ops` 自带 `ops` 预设——即参考组合——并附一个 `dsh-ops` 小工具来落盘它：
 
-1. **创建预设**——在你的 agents home（默认 `~/.agents`）里，和内置预设并列：
+1. **安装预设**——到你的 agents home（默认 `~/.agents`）：
 
-   ```
-   ~/.agents/.agent-presets/ops/
-   ├── preset.yml          # name / description / order
-   └── agent.cordis.yml    # 复制本仓库的 ops-preset.yml
+   ```sh
+   npx @elinpf/dsh-ops preset install
    ```
 
-   `preset.yml` 声明预设的目录条目，例如：
-
-   ```yaml
-   name: 运维模式
-   description: 运维工程师专用：具备标准模式全部能力，额外提供调查树、凭证注册表（k8s/ceph/ssh）和 shell 工具。
-   order: 5
-   ```
+   这会把 `~/.agents/.agent-presets/ops/`（`preset.yml` + `agent.cordis.yml`）写到内置预设旁边。agents home 不在默认位置时，传 `--agents-home <dir>` 或设 `DSH_AGENTS_HOME`。
 
 2. **让 profile 指向它**——在 profile 的 `cordis.patch.yml` 里加：
 
@@ -79,12 +61,11 @@ dsh plugin --profile <name> add @elinpf/dsh-ops-access-ui
 
 ## 卸载
 
-1. 把 profile 的默认预设切回去（或删除 `~/.agents/.agent-presets/ops/` 目录），重启 profile。
+1. 把 profile 的默认预设切回去，或移除 ops 预设（`npx @elinpf/dsh-ops preset remove`），重启 profile。
 2. 移除插件包：
 
    ```sh
-   dsh plugin --profile <name> remove @elinpf/dsh-ops-access
-   # ……对上面安装的每个包重复
+   dsh plugin --profile <name> remove @elinpf/dsh-ops
    ```
 
 3. 再次重启 profile。

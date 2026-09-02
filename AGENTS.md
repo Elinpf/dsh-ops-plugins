@@ -6,7 +6,7 @@ This repo lives inside a larger workspace (`../`) together with a test instance 
 
 ## Overview
 
-All 15 packages under `packages/` share one version number (changesets `fixed` group) and publish together as a lockstep suite ("插件集 vX"). npm names are `@elinpf/dsh-ops-*`.
+All 16 packages under `packages/` share one version number (changesets `fixed` group) and publish together as a lockstep suite ("插件集 vX"). npm names are `@elinpf/dsh-ops-*`, plus the single deployment package `@elinpf/dsh-ops`.
 
 **`CONTEXT.md` is the domain glossary and the single source of truth for shared vocabulary** (in Chinese). If a code change alters the meaning of a term defined there, update `CONTEXT.md` in the same change. Design decisions and finalized specs live in `docs/adr/` and `docs/specs/`; planned work is broken into tickets under `.scratch/<feature>/issues/`.
 
@@ -14,6 +14,7 @@ The repo root carries a user-facing README trio (`README.md` / `README.zh.md` / 
 
 ## Packages
 
+- `ops/` (`@elinpf/dsh-ops`) — the single deployment package users install: depends on every granular package, carries the host-plane rows in its `cordis.patch.yml`, ships the `ops` agent preset under `presets/ops/`, and provides the `dsh-ops` bin (`preset install|remove`) that materializes the preset into the agents home. It is never mounted as a plugin row itself.
 - `ops-access/` — the credential capability seam, split by the three-role rule:
   - `core` (`@elinpf/dsh-ops-access`) — owns the YAML credential registry (default `~/.dsh-ops/access.yaml`) and the `ctx.opsAccess` service; providers register via its `registerAccessProvider(ctx, provider)` helper (never hand-write `ctx.inject` for sibling services — it deadlocks the loader).
   - `k8s` / `ceph` / `ssh` — one provider per credential kind: only a zod schema plus field processing (e.g. `~` expansion).
@@ -81,7 +82,7 @@ The test instance lives at `../../.dsh-target` (profile `dev-target`), which dep
 
 ## Release (changesets, fixed lockstep)
 
-All 15 packages share one version number (`fixed` group in `.changeset/config.json`) — the suite ships as "插件集 vX". Flow:
+All 16 packages share one version number (`fixed` group in `.changeset/config.json`) — the suite ships as "插件集 vX". Flow:
 
 1. With any user-facing change, run `pnpm changeset` and commit the generated `.changeset/*.md` file.
 2. On push to `master`, `.github/workflows/release.yml` (changesets/action) opens or updates a "chore: version packages" PR.
