@@ -1,6 +1,6 @@
 {
   "name": "@elinpf/dsh-ops-tool-ssh",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "ssh tool consumer of the ops-access seam — resolves ssh profiles and runs commands via ctx.shell, injecting credential paths automatically.",
   "type": "module",
   "main": "lib/index.js",
