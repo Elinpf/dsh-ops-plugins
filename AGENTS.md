@@ -6,16 +6,18 @@ This repo lives inside a larger workspace (`../`) together with a test instance 
 
 ## Overview
 
-Each package under `packages/` has its own version and publishes independently to npm. npm names are `@elinpf/dsh-ops-*`.
+All 15 packages under `packages/` share one version number (changesets `fixed` group) and publish together as a lockstep suite ("插件集 vX"). npm names are `@elinpf/dsh-ops-*`.
 
 **`CONTEXT.md` is the domain glossary and the single source of truth for shared vocabulary** (in Chinese). If a code change alters the meaning of a term defined there, update `CONTEXT.md` in the same change. Design decisions and finalized specs live in `docs/adr/` and `docs/specs/`; planned work is broken into tickets under `.scratch/<feature>/issues/`.
+
+The repo root carries a user-facing README trio (`README.md` / `README.zh.md` / `README.i18n.yaml`) — installation, deployment, and uninstall from the user's perspective. Keep it in sync when the composition or package names change; this file stays agent-facing and does not duplicate it.
 
 ## Packages
 
 - `ops-access/` — the credential capability seam, split by the three-role rule:
   - `core` (`@elinpf/dsh-ops-access`) — owns the YAML credential registry (default `~/.dsh-ops/access.yaml`) and the `ctx.opsAccess` service; providers register via its `registerAccessProvider(ctx, provider)` helper (never hand-write `ctx.inject` for sibling services — it deadlocks the loader).
   - `k8s` / `ceph` / `ssh` — one provider per credential kind: only a zod schema plus field processing (e.g. `~` expansion).
-- `ops-tool-kubectl` / `ops-tool-ceph` / `ops-tool-ssh` — consumer tools; resolve a profile by name and build the shell command. They only supply four identity pieces: tool name, resolved kind, profile-arg name, `buildCommand`.
+- `ops-tool-kubectl` / `ops-tool-ceph` / `ops-tool-ssh` — consumer tools; resolve a profile by name and build the shell command. They only supply four identity pieces: tool name, resolved kind, profile-arg name, `buildCommand`. npm names are `@elinpf/dsh-ops-tool-{kubectl,ceph,ssh}` — the kubectl package was renamed from `@elinpf/dsh-ops-kubectl` in 0.1.1 (old name deprecated on npm); directory names were never affected.
 - `ops-shell-tool` — pure library (not a plugin); the single source of the shared consumer machinery: standard result shape `{ exitCode, stdout, stderr, command, error? }`, output schema, render, and the resolve-per-call execute template (30 s timeout, signal deaths normalized to exitCode -1).
 - `ops-tool-trace` — investigation-tree tool (preset plane), replacing flat todo lists with a tree of goal/milestones/steps. Tree doctrine text has its single source in `src/doctrine.ts`; `src/tree-layout.ts` is shared with the web panel via the `/tree-layout` subpath export.
 - `ops-tool-environment` — environment inventory (preset plane): the deterministic scanner core (scan → classify → relations → Prometheus corroboration via short-lived `kubectl port-forward` → `~/.dsh-ops/environment.yaml`) plus the `environment` tool (overview/show/refresh, TTL auto-refresh). Realm topology splits it into two preset rows: the tool entry mounts in `ops-access-registry` (needs `opsAccess`), the `./prompt` subpath plugin registers the one-line methodology section and mounts in `ops-orchestration` (needs `opsPrompts`) — entry-local isolate realms are invisible across groups.
@@ -85,7 +87,15 @@ All 15 packages share one version number (`fixed` group in `.changeset/config.js
 2. On push to `master`, `.github/workflows/release.yml` (changesets/action) opens or updates a "chore: version packages" PR.
 3. Merging that PR bumps every package together, generates CHANGELOGs, and publishes all packages to npm in topological order via `pnpm release`.
 
-Requires the `NPM_TOKEN` secret (a granular token with publish rights on `@elinpf/dsh-ops-*`). `.github/workflows/check.yml` runs build+test on every push/PR.
+Requires the `NPM_TOKEN` secret (a granular token with **Read and write on the `@elinpf` scope AND "bypass 2FA" enabled** — a granular token without the 2FA bypass gets 403 on publish). `.github/workflows/check.yml` runs build+test on every push/PR.
+
+Operational facts about this pipeline (all verified 2026-09-02, 0.1.0/0.1.1 releases):
+
+- The release workflow must export the token as **`NODE_AUTH_TOKEN`** (it also sets `NPM_TOKEN`, which nothing reads): `setup-node`'s `registry-url` writes an `.npmrc` keyed on `NODE_AUTH_TOKEN`, and pnpm/npm only honor that name.
+- The repo setting **Settings → Actions → General → Workflow permissions → "Allow GitHub Actions to create and approve pull requests"** must stay enabled, or the changesets action fails with "GitHub Actions is not permitted to create or approve pull requests" when opening the version PR.
+- A bypass-2FA granular token may **publish and deprecate but not unpublish** — cleanup of accidentally published packages needs a web login or a classic token.
+- A brand-new npm package's tarball is fetchable immediately, but its metadata document 404s for several minutes (registry read-path lag) — do not re-publish or diagnose a 404 on a fresh package as failure.
+- Merging the version PR deletes `changeset-release/master` mid-run and kills the PR-branch `check` run (failure with no jobs/logs) — benign; the push-side `check` on master is the real verdict.
 
 ## General notes
 

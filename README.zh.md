@@ -1,72 +1,99 @@
 # dsh-ops-plugins
 
-面向运维场景的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）插件集：凭证代理、shell 工具、调查树、环境清单，以及把它们组装起来的 `ops` 预设。一切都是 Cordis 插件；15 个包以 `@elinpf/dsh-ops-*` 为名发布到 npm，锁步版本（「插件集 vX」）。
+[English](README.md) | 中文
 
-## 你能得到什么
+面向运维场景的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）插件集：把 dsh agent 变成生产事件排查员——按名字解析 kubectl / ceph / ssh 凭证、对集群执行真实的只读命令、把整个排查过程组织成一棵树。
 
-一个做生产事件排查（而不是写代码）的 agent：
+插件集以 `@elinpf/dsh-ops-*` 为名发布到 npm（15 个包，锁步版本）。一切都是 Cordis 插件；本仓库的 [`ops-preset.yml`](ops-preset.yml) 是参考组合。
 
-- **凭证不进上下文** — 档案只携带路径和连接参数（`~/.dsh-ops/access.yaml`）；登记表每次解析现读现校验。`list_access` 只报名字和描述，永远不报字段值。
-- **访问门** — 凭证使用按会话代理，ro/rw 分层、人工审批、审计日志。默认只读；读写需要显式授权，且可收回。
-- **诚实的 shell 工具** — `kubectl` / `ceph` / `ssh` 工具按名字解析档案、每次调用拼一条命令；真实路径在到达模型或日志之前，一律从命令串、stdout、stderr 擦回展示 token。
-- **调查树** — `trace` 工具把事件排查组织成扩散-收敛树（步骤、里程碑、死胡同），web UI 以 git-graph 风格面板渲染。
-- **环境清单** — 确定性扫描器（扫描 → 分类 → 关联 → Prometheus 印证 → `~/.dsh-ops/environment.yaml`），TTL 驱动刷新，带异常标注。
-- **提示词通道** — 系统提示词里的方法论段落 + 每步提醒，渐进披露：常驻只有几行核心，完整文档按需拉取。
+## 为什么需要它
 
-## 包
+- **凭证永不进入模型上下文。** 访问档案只携带路径和连接参数；agent 看到的是档案*名字*，永远看不到字段值。`list_access` 只回答名字和描述。
+- **默认只读，读写需显式授权。** 访问门按会话代理每一次凭证使用：ro/rw 分层、人工审批、可收回的授权，以及记录每次授权与收回的审计日志。
+- **诚实的工具输出。** `kubectl` / `ceph` / `ssh` 工具每次调用只拼一条命令；真实路径在命令串、stdout、stderr 到达模型或会话日志之前，一律擦回展示 token。
+- **排查是树，不是清单。** `trace` 工具把事件响应组织成扩散-收敛树——步骤、里程碑、保留在案的死胡同——在 web UI 里以 git-graph 风格面板渲染。
+- **agent 认识你的环境。** 确定性扫描器构建环境清单（命名空间、deployment、ceph 池、主机、相互关系、Prometheus 印证），TTL 驱动刷新——agent 基于「实际存在什么」推理，而不是靠猜。
+- **方法论，而不是玄学。** 提示词通道往系统提示词注入几行核心方法论 + 每步提醒；完整文档按需拉取，token 成本保持低廉。
 
-| 包 | 角色 |
-|---|---|
-| `@elinpf/dsh-ops-access` | 凭证登记核心：`ctx.opsAccess` 服务、`access.yaml`、提供方注册帮手 |
-| `@elinpf/dsh-ops-access-k8s` / `-ceph` / `-ssh` | 凭证提供方：zod schema、字段加工、保存时内容校验、能力探针 |
-| `@elinpf/dsh-ops-access-gate` | 访问门：按会话代理、ro/rw 分层、授权、审批流、审计日志 |
-| `@elinpf/dsh-ops-tool-kubectl` / `-tool-ceph` / `-tool-ssh` | 模型工具：按名字解析档案并拼命令 |
-| `@elinpf/dsh-ops-shell-tool` | 共享消费方库（不是插件）：结果形状、输出 schema、执行模板、路径擦除 |
-| `@elinpf/dsh-ops-tool-trace` | 调查树工具（`trace`）+ 树教义 |
-| `@elinpf/dsh-ops-trace-ui` | 调查树 web 面板的 host 平面薄壳 + 共享 `trace` 会话投影 |
-| `@elinpf/dsh-ops-tool-environment` | 环境清单：扫描核心 + `environment` 工具（overview/show/refresh） |
-| `@elinpf/dsh-ops-panel` | 会话作用域对话框面板缝（`ctx.opsPanels`） |
-| `@elinpf/dsh-ops-prompts` | 提示词通道：方法论段落、提醒、内置 prompt-only skills |
-| `@elinpf/dsh-ops-access-ui` | `@` 档案引用选择器的浏览器半 |
+## 环境要求
 
-[`ops-preset.yml`](ops-preset.yml) 是参考的 agent 平面组合（`ops` 预设），把这些包和上游 dsh 工具一起挂载。
-
-## 架构要点
-
-- **两个平面。** 模型可见行（工具、提示词内容）在 preset 平面；登记表、投影、web 客户端载体在 host 平面。一行只属于一个平面。
-- **能力缝三角色。** 凭证体系拆成定义包（`ops-access` core）、提供方（每类一个）、消费方（工具）——提供方之间互不依赖。
-- **模型可见 ⟺ 已记录。** 到达模型请求的任何东西都必须能从 session 事件日志重建；树状态由投影从事件 fold 出来。
-- **密钥永不经过任何服务。** 档案携带路径而非密文。访问门的威胁模型是「防误操作，不防恶意」。
-
-设计决策在 [`docs/adr/`](docs/adr/)，定稿 spec 在 [`docs/specs/`](docs/specs/)，领域词汇表在 [`CONTEXT.md`](CONTEXT.md)。
+- DeepSeek Harness，`dsh-v0.1.0-rc` 线（见 [harness 仓库](https://github.com/deepseek-ai/deepseek-harness)）
+- `@deepseek-ai/cordis` v4（自动带入）
+- dsh 宿主机上的集群侧二进制：`kubectl`（及集群网络可达）；`ceph`/`rbd`/`rados` 与 `ssh` 仅在使用对应提供方时需要
 
 ## 安装
 
-按需安装包，并参照 [`ops-preset.yml`](ops-preset.yml) 接入你的 agent 预设——它给出了所需的 group、realm 和行 id：
+把插件包安装进你的 dsh profile。最小集合是访问缝加你实际使用的提供方——例如 kubectl 和 ssh：
 
 ```sh
-npm install @elinpf/dsh-ops-access @elinpf/dsh-ops-access-k8s @elinpf/dsh-ops-access-ssh
+dsh plugin --profile <name> add @elinpf/dsh-ops-access
+dsh plugin --profile <name> add @elinpf/dsh-ops-access-k8s
+dsh plugin --profile <name> add @elinpf/dsh-ops-access-gate
+dsh plugin --profile <name> add @elinpf/dsh-ops-access-ssh
+dsh plugin --profile <name> add @elinpf/dsh-ops-tool-kubectl
+dsh plugin --profile <name> add @elinpf/dsh-ops-tool-ssh
+dsh plugin --profile <name> add @elinpf/dsh-ops-tool-trace
+dsh plugin --profile <name> add @elinpf/dsh-ops-trace-ui
+dsh plugin --profile <name> add @elinpf/dsh-ops-prompts
+dsh plugin --profile <name> add @elinpf/dsh-ops-panel
+dsh plugin --profile <name> add @elinpf/dsh-ops-access-ui
 ```
 
-本插件集面向 dsh 的 `dsh-v0.1.0-rc` 线和 `@deepseek-ai/cordis` v4。每个插件包自带 `cordis.patch.yml`（在 package.json 的 `dsh.bundle.patch` 里声明）；web 客户端半（`*-ui`、`ops-panel`）额外声明 `dsh.client.platform: "web"`。
+需要 ceph 加 `@elinpf/dsh-ops-access-ceph` / `@elinpf/dsh-ops-tool-ceph`；需要环境清单加 `@elinpf/dsh-ops-tool-environment`。`@elinpf/dsh-ops-shell-tool` 是共享库，作为依赖自动到达——不要直接挂载它。
 
-## 开发
+## 部署
 
-pnpm monorepo；日常命令按包执行：
+插件在被 agent 预设挂载之前是不生效的。`ops` 预设是参考组合：
 
-```sh
-pnpm install                # 仓库根，一次
-cd packages/<pkg> && npm run build && npx vitest run
-```
+1. **创建预设**——在你的 agents home（默认 `~/.agents`）里，和内置预设并列：
 
-全仓扫描（CI 跑的）：根目录 `pnpm -r run build`、`pnpm -r run test`。
+   ```
+   ~/.agents/.agent-presets/ops/
+   ├── preset.yml          # name / description / order
+   └── agent.cordis.yml    # 复制本仓库的 ops-preset.yml
+   ```
 
-## 版本与发布
+   `preset.yml` 声明预设的目录条目，例如：
 
-15 个包共享一个版本号（changesets `fixed` 组）一起发布。任何用户可见改动：跑 `pnpm changeset` 并提交生成的 `.changeset/*.md`；合并 master 上的 "chore: version packages" PR 后，GitHub Actions 将整套发布到 npm。
+   ```yaml
+   name: 运维模式
+   description: 运维工程师专用：具备标准模式全部能力，额外提供调查树、凭证注册表（k8s/ceph/ssh）和 shell 工具。
+   order: 5
+   ```
+
+2. **让 profile 指向它**——在 profile 的 `cordis.patch.yml` 里加：
+
+   ```yaml
+   - id: agent-presets
+     config:
+       default: ops
+   ```
+
+   `ops` 预设会顶替上游 `session-reference` 行的 `@` 引用选择器；如果你使用 ops 的访问档案选择器，把该行禁用（`- id: session-reference` 加 `disabled: true`），让 ops 的来源占住这个位置。
+
+3. **重启 profile**（`dsh plugin add/remove` 和预设改动都需要重启；web 表面上不热生效）。
+
+4. **登记凭证。** 档案在 `~/.dsh-ops/access.yaml` 里一次性登记——只携带路径和连接参数，永远不携带密钥材料。agent 可按需拉取格式文档（`list_access` 带 `help: true`），web 管理界面支持带保存时校验的登记。
+
+验证：打开 web UI，在 ops 预设上开一个会话——`list_access` 列出你的档案、`kubectl` 命令正确解析、trace 面板正常渲染、rw 凭证的使用会弹出审批请求而不是直接执行。
+
+## 卸载
+
+1. 把 profile 的默认预设切回去（或删除 `~/.agents/.agent-presets/ops/` 目录），重启 profile。
+2. 移除插件包：
+
+   ```sh
+   dsh plugin --profile <name> remove @elinpf/dsh-ops-access
+   # ……对上面安装的每个包重复
+   ```
+
+3. 再次重启 profile。
+4. 按需删除数据目录 `~/.dsh-ops/`——凭证登记表（`access.yaml`）、环境清单（`environment.yaml`）、以及档案引用的凭证文件本身（keyring、kubeconfig、SSH 私钥）。
+
+卸载不影响你的集群：本插件集的所有凭证都只是对你自有文件的只读引用。
 
 ## 安全说明
 
-- 密钥材料不进入任何服务、日志、错误信息或模型上下文——凭证文件在登记时写入一次，之后只按路径引用。
-- 保存时校验（`validateContent`）在写入时拒绝畸形凭证，失败时零文件 IO。
-- 访问门记录每次授权与收回的审计日志。同 UID 进程内保密显式超出范围。
+- 密钥材料不进入服务、日志、错误信息或模型上下文——凭证文件在登记时写入一次，之后只按路径引用。
+- 访问门的威胁模型是「防误操作，不防恶意」：它拦截并审计误写，不是对抗同 UID 恶意进程的防线。
+- 设计决策在 [`docs/adr/`](docs/adr/)；领域词汇表（中文）在 [`CONTEXT.md`](CONTEXT.md)。
