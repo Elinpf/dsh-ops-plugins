@@ -1,0 +1,10 @@
+{
+  "name": "dsh-ops-plugins",
+  "private": true,
+  "scripts": {
+    "release": "pnpm -r run build && pnpm -r publish --no-git-checks"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^3.0.1"
+  }
+}

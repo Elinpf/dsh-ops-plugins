@@ -6,14 +6,14 @@ This repo lives inside a larger workspace (`../`) together with a test instance 
 
 ## Overview
 
-Each package under `packages/` has its own version and publishes independently to npm. npm names are `@deepseek-ai/dsh-ops-*`.
+Each package under `packages/` has its own version and publishes independently to npm. npm names are `@elinpf/dsh-ops-*`.
 
 **`CONTEXT.md` is the domain glossary and the single source of truth for shared vocabulary** (in Chinese). If a code change alters the meaning of a term defined there, update `CONTEXT.md` in the same change. Design decisions and finalized specs live in `docs/adr/` and `docs/specs/`; planned work is broken into tickets under `.scratch/<feature>/issues/`.
 
 ## Packages
 
 - `ops-access/` — the credential capability seam, split by the three-role rule:
-  - `core` (`@deepseek-ai/dsh-ops-access`) — owns the YAML credential registry (default `~/.dsh-ops/access.yaml`) and the `ctx.opsAccess` service; providers register via its `registerAccessProvider(ctx, provider)` helper (never hand-write `ctx.inject` for sibling services — it deadlocks the loader).
+  - `core` (`@elinpf/dsh-ops-access`) — owns the YAML credential registry (default `~/.dsh-ops/access.yaml`) and the `ctx.opsAccess` service; providers register via its `registerAccessProvider(ctx, provider)` helper (never hand-write `ctx.inject` for sibling services — it deadlocks the loader).
   - `k8s` / `ceph` / `ssh` — one provider per credential kind: only a zod schema plus field processing (e.g. `~` expansion).
 - `ops-tool-kubectl` / `ops-tool-ceph` / `ops-tool-ssh` — consumer tools; resolve a profile by name and build the shell command. They only supply four identity pieces: tool name, resolved kind, profile-arg name, `buildCommand`.
 - `ops-shell-tool` — pure library (not a plugin); the single source of the shared consumer machinery: standard result shape `{ exitCode, stdout, stderr, command, error? }`, output schema, render, and the resolve-per-call execute template (30 s timeout, signal deaths normalized to exitCode -1).
@@ -27,7 +27,7 @@ Each package under `packages/` has its own version and publishes independently t
 
 ## Build and test
 
-There is **no root package.json and no root-level script** — all commands run per package:
+The root `package.json` is private and exists only for CI/release orchestration (changesets + `pnpm -r`); day-to-day commands run per package:
 
 ```sh
 cd packages/<pkg>          # or packages/ops-access/<core|k8s|ceph|ssh>
@@ -37,11 +37,13 @@ npm run typecheck          # tsc --noEmit
 npx vitest run             # or: npm test
 ```
 
+Whole-repo sweeps (what CI runs): `pnpm -r run build` and `pnpm -r run test` from the root.
+
 `ops-trace-ui` and `ops-access-ui` additionally run `node esbuild.config.mjs` after `tsc` to produce the web client bundle (`lib/client.js`).
 
 ## Dependency rules (workspace protocol)
 
-- Runtime cross-package dependencies MUST use the workspace protocol (`workspace:*` / `workspace:^x.y.z`); pnpm rewrites them to real versions at publish. A bare semver range in `dependencies` pointing at an unpublished sibling will 404 against the npm registry.
+- Runtime cross-package dependencies in `dependencies` use `workspace:^`; dev-only links in `devDependencies` use `workspace:*`. pnpm rewrites both to real versions at publish (`workspace:^` → `^x.y.z`). A bare semver range in `dependencies` pointing at an unpublished sibling will 404 against the npm registry.
 - Type-only references (`import type`) are safe as bare semver in `peerDependencies` + a `workspace:*` link in `devDependencies` (peers are not installed).
 - `pnpm-workspace.yaml` sets `nodeLinker: hoisted` and `autoInstallPeers: false` to match the dsh profile's linker expectations — do not change these casually.
 
@@ -74,6 +76,16 @@ The test instance lives at `../../.dsh-target` (profile `dev-target`), which dep
 - Secret material never passes through any service: profiles carry only paths and connection parameters, so logs, errors, and model context cannot contain secrets. `list_access` output omits even the fields — names and descriptions only.
 - The registry file is re-read and re-validated on every resolve (no caching) — edits take effect without restart.
 - The access-gate (`packages/ops-access/gate`, credential brokering, ro/rw tiers, per-session grants, audit log) is **implemented and wired into the ops preset** (inside the `ops-access-registry` realm, alongside its `opsAccessGate` isolate symbol); see `docs/adr/0001-access-gate.md` and `docs/specs/0001-access-gate.md` before touching authorization. Its threat model is "prevent mistakes, not malice" — same-UID in-process secrecy is explicitly out of scope.
+
+## Release (changesets, fixed lockstep)
+
+All 15 packages share one version number (`fixed` group in `.changeset/config.json`) — the suite ships as "插件集 vX". Flow:
+
+1. With any user-facing change, run `pnpm changeset` and commit the generated `.changeset/*.md` file.
+2. On push to `master`, `.github/workflows/release.yml` (changesets/action) opens or updates a "chore: version packages" PR.
+3. Merging that PR bumps every package together, generates CHANGELOGs, and publishes all packages to npm in topological order via `pnpm release`.
+
+Requires the `NPM_TOKEN` secret (a granular token with publish rights on `@elinpf/dsh-ops-*`). `.github/workflows/check.yml` runs build+test on every push/PR.
 
 ## General notes
 

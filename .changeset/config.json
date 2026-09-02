@@ -1,0 +1,29 @@
+{
+  "$schema": "https://unpkg.com/@changesets/config@3.0.0/schema.json",
+  "changelog": "@changesets/cli/changelog",
+  "commit": false,
+  "fixed": [
+    [
+      "@elinpf/dsh-ops-access",
+      "@elinpf/dsh-ops-access-ceph",
+      "@elinpf/dsh-ops-access-gate",
+      "@elinpf/dsh-ops-access-k8s",
+      "@elinpf/dsh-ops-access-ssh",
+      "@elinpf/dsh-ops-access-ui",
+      "@elinpf/dsh-ops-kubectl",
+      "@elinpf/dsh-ops-panel",
+      "@elinpf/dsh-ops-prompts",
+      "@elinpf/dsh-ops-shell-tool",
+      "@elinpf/dsh-ops-tool-ceph",
+      "@elinpf/dsh-ops-tool-environment",
+      "@elinpf/dsh-ops-tool-ssh",
+      "@elinpf/dsh-ops-tool-trace",
+      "@elinpf/dsh-ops-trace-ui"
+    ]
+  ],
+  "linked": [],
+  "access": "public",
+  "baseBranch": "master",
+  "updateInternalDependencies": "patch",
+  "ignore": []
+}
