@@ -13,7 +13,7 @@
  *   this tool's output. listAll (not list) so rw-only entries — awaiting ro
  *   derivation — are visible to the agent.
  *
- * @module @elinpf/dsh-ops-kubectl
+ * @module @elinpf/dsh-ops-tool-kubectl
  */
 
 import type { Context } from '@deepseek-ai/cordis'

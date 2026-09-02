@@ -1,4 +1,4 @@
-# @elinpf/dsh-ops-kubectl
+# @elinpf/dsh-ops-tool-kubectl
 
 kubectl tool consumer of the ops-access capability seam — resolves `k8s` profiles into kubeconfig paths and runs kubectl via `ctx.shell`, plus a `list_access` tool that surfaces registered profiles without any secret fields.
 
@@ -19,15 +19,15 @@ Registers two model-facing tools:
 
 ```yaml
 - id: tool-ops-kubectl
-  name: '@elinpf/dsh-ops-kubectl'
+  name: '@elinpf/dsh-ops-tool-kubectl'
   config:
     timeoutMs: 30000   # per-call shell timeout for kubectl runs (ms); raise for slow clusters
 ```
 
 ## Subpath exports
 
-- `@elinpf/dsh-ops-kubectl/types` — pure types (`ListedProfile`, `ListAccessResult`); zero runtime code.
-- `@elinpf/dsh-ops-kubectl/invariant` — the invariant companion plugin.
+- `@elinpf/dsh-ops-tool-kubectl/types` — pure types (`ListedProfile`, `ListAccessResult`); zero runtime code.
+- `@elinpf/dsh-ops-tool-kubectl/invariant` — the invariant companion plugin.
 
 ## Testing
 

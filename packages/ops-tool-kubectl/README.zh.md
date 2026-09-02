@@ -1,4 +1,4 @@
-# @elinpf/dsh-ops-kubectl
+# @elinpf/dsh-ops-tool-kubectl
 
 ops-access 能力缝的 kubectl 消费工具 — 把 `k8s` profile 解析成 kubeconfig 路径并通过 `ctx.shell` 执行 kubectl；另有 `list_access` 工具列出已注册 profile(不含任何凭据字段)。
 
@@ -19,15 +19,15 @@ ops-access 能力缝的 kubectl 消费工具 — 把 `k8s` profile 解析成 kub
 
 ```yaml
 - id: tool-ops-kubectl
-  name: '@elinpf/dsh-ops-kubectl'
+  name: '@elinpf/dsh-ops-tool-kubectl'
   config:
     timeoutMs: 30000   # kubectl 单次调用的 shell 超时(毫秒);集群慢可调大
 ```
 
 ## 子路径导出
 
-- `@elinpf/dsh-ops-kubectl/types` — 纯类型(`ListedProfile`、`ListAccessResult`),零运行时代码。
-- `@elinpf/dsh-ops-kubectl/invariant` — invariant 伴生插件。
+- `@elinpf/dsh-ops-tool-kubectl/types` — 纯类型(`ListedProfile`、`ListAccessResult`),零运行时代码。
+- `@elinpf/dsh-ops-tool-kubectl/invariant` — invariant 伴生插件。
 
 ## 测试
 

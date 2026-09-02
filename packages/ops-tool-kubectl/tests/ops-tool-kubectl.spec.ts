@@ -31,7 +31,7 @@ describe('export shape', () => {
     // apply reserves package ownership on the invariants service.
     const registered: string[] = []
     await invariant.apply({ invariants: { register: (pkg: string) => { registered.push(pkg) } } } as any)
-    expect(registered).toEqual(['@elinpf/dsh-ops-kubectl'])
+    expect(registered).toEqual(['@elinpf/dsh-ops-tool-kubectl'])
   })
 
   it('types subpath is types-only: zero runtime exports', async () => {

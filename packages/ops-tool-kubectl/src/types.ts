@@ -1,10 +1,10 @@
 /**
- * Type definitions for @elinpf/dsh-ops-kubectl.
+ * Type definitions for @elinpf/dsh-ops-tool-kubectl.
  *
  * Types-only module — no runtime values. Re-exported from the plugin entry
  * so existing imports keep working.
  *
- * @module @elinpf/dsh-ops-kubectl/types
+ * @module @elinpf/dsh-ops-tool-kubectl/types
  */
 
 // ── list_access types ────────────────────────────────────────────────────────

@@ -308,7 +308,7 @@
       name: '@elinpf/dsh-ops-access-gate'
 
     - id: ops-tool-kubectl
-      name: '@elinpf/dsh-ops-kubectl'
+      name: '@elinpf/dsh-ops-tool-kubectl'
 
     - id: ops-tool-ceph
       name: '@elinpf/dsh-ops-tool-ceph'

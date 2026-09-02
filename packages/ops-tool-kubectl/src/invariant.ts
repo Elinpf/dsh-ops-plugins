@@ -1,10 +1,10 @@
 /**
- * Invariant companion for @elinpf/dsh-ops-kubectl.
+ * Invariant companion for @elinpf/dsh-ops-tool-kubectl.
  *
- * @module @elinpf/dsh-ops-kubectl/invariant
+ * @module @elinpf/dsh-ops-tool-kubectl/invariant
  */
 
-const PACKAGE_NAME = '@elinpf/dsh-ops-kubectl'
+const PACKAGE_NAME = '@elinpf/dsh-ops-tool-kubectl'
 
 /** Cordis companion plugin name. */
 const name = 'ops-kubectl-invariant'

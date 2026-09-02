@@ -10,7 +10,7 @@
       "@elinpf/dsh-ops-access-k8s",
       "@elinpf/dsh-ops-access-ssh",
       "@elinpf/dsh-ops-access-ui",
-      "@elinpf/dsh-ops-kubectl",
+      "@elinpf/dsh-ops-tool-kubectl",
       "@elinpf/dsh-ops-panel",
       "@elinpf/dsh-ops-prompts",
       "@elinpf/dsh-ops-shell-tool",
