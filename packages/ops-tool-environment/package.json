@@ -40,7 +40,7 @@
     "@deepseek-ai/cordis": "^4.0.1",
     "@elinpf/dsh-ops-access": "^0.1.2",
     "@elinpf/dsh-ops-prompts": "^0.1.2",
-    "@deepseek-ai/dsh-tools": "^0.0.1-rc.1"
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.8"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",

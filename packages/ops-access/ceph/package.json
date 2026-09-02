@@ -44,7 +44,7 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-invariants": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.8",
     "@elinpf/dsh-ops-access": "^0.1.2"
   },
   "devDependencies": {
