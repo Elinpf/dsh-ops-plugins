@@ -2,79 +2,139 @@
 
 [English](README.md) | 中文
 
-面向运维场景的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）插件集：把 dsh agent 变成生产事件排查员——按名字解析 kubectl / ceph / ssh 凭证、对集群执行真实的只读命令、把整个排查过程组织成一棵树。
+面向运维场景的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）插件集：把 dsh agent 变成生产事件排查员——按名字解析 kubectl / ceph / ssh 凭证、对集群执行只读命令、把排查过程组织成树。
 
-插件集以单个 npm 包 `@elinpf/dsh-ops` 安装，它把颗粒化的 `@elinpf/dsh-ops-*` 包作为依赖整体带入（共 16 个包，锁步版本）。一切都是 Cordis 插件；本仓库的 [`ops-preset.yml`](ops-preset.yml) 是参考组合。
+以单个 npm 包 `@elinpf/dsh-ops` 安装，颗粒化的 `@elinpf/dsh-ops-*` 包作为依赖整体带入，锁步版本发布。
 
-## 为什么需要它
+## 特性
 
-- **凭证永不进入模型上下文。** 访问档案只携带路径和连接参数；agent 看到的是档案*名字*，永远看不到字段值。`list_access` 只回答名字和描述。
-- **默认只读，读写需显式授权。** 访问门按会话代理每一次凭证使用：ro/rw 分层、人工审批、可收回的授权，以及记录每次授权与收回的审计日志。
-- **诚实的工具输出。** `kubectl` / `ceph` / `ssh` 工具每次调用只拼一条命令；真实路径在命令串、stdout、stderr 到达模型或会话日志之前，一律擦回展示 token。
-- **排查是树，不是清单。** `trace` 工具把事件响应组织成扩散-收敛树——步骤、里程碑、保留在案的死胡同——在 web UI 里以 git-graph 风格面板渲染。
-- **agent 认识你的环境。** 确定性扫描器构建环境清单（命名空间、deployment、ceph 池、主机、相互关系、Prometheus 印证），TTL 驱动刷新——agent 基于「实际存在什么」推理，而不是靠猜。
-- **方法论，而不是玄学。** 提示词通道往系统提示词注入几行核心方法论 + 每步提醒；完整文档按需拉取，token 成本保持低廉。
+- 凭证只登记路径，agent 只见档案名——密钥不进入模型上下文
+- 默认只读；读写需按会话授权、人工审批，全程留审计日志
+- 工具输出真实，敏感路径在到达模型前擦除
+- `trace` 工具把排查组织成树，web UI 以 git-graph 风格渲染
+- 环境清单扫描，agent 基于「实际存在什么」推理
+- 系统提示词只注入几行方法论，完整文档按需拉取
 
 ## 环境要求
 
-- DeepSeek Harness，`dsh-v0.1.0-rc` 线（见 [harness 仓库](https://github.com/deepseek-ai/deepseek-harness)）
-- `@deepseek-ai/cordis` v4（自动带入）
-- dsh 宿主机上的集群侧二进制：`kubectl`（及集群网络可达）；`ceph`/`rbd`/`rados` 与 `ssh` 仅在使用对应提供方时需要
+- DeepSeek Harness ≥ 0.1.0-rc（已在 0.1.0-rc、0.1.1-rc.2 验证）
+- pnpm ≥ 10
+- 宿主机上有 `kubectl` 且集群网络可达；`ceph` / `ssh` 按需
 
 ## 安装
 
-把单一的部署包安装进你的 dsh profile——它依赖全部颗粒化的 `@elinpf/dsh-ops-*` 包，并携带宿主层行（trace 面板、`@` 引用选择器、ops 面板）：
+1. 安装插件包（依赖与宿主层行自动挂载）：
 
-```sh
-dsh plugin --profile <name> add @elinpf/dsh-ops
+   ```sh
+   dsh plugin --profile ops add @elinpf/dsh-ops
+   ```
+
+2. 需要 web UI 时，编辑 `~/.dsh/profiles/ops/package.json`，把 web 宿主加进 bundles：
+
+   ```json
+   "dsh": {
+     "profile": {
+       "bundles": [
+         "@deepseek-ai/dsh-base",
+         "@deepseek-ai/dsh-web-app",
+         "@elinpf/dsh-ops"
+       ]
+     }
+   }
+   ```
+
+   `@deepseek-ai/dsh-web-app` 随 dsh 安装解析，不能用 `dsh plugin add` 安装。
+
+安装报 `minimumReleaseAge` 错误时，在 profile 的 `pnpm-workspace.yaml` 加排除项（版本与当前一致）：
+
+```yaml
+minimumReleaseAgeExclude:
+  - '@elinpf/*@0.1.5'
 ```
-
-颗粒化包仍在 npm 上发布，供高级组合取用；`@elinpf/dsh-ops-shell-tool` 是共享库，作为依赖自动到达——不要直接挂载它。
 
 ## 部署
 
-插件在被 agent 预设挂载之前是不生效的。`@elinpf/dsh-ops` 自带 `ops` 预设——即参考组合——并附一个 `dsh-ops` 小工具来落盘它：
-
-1. **安装预设**——到你的 agents home（默认 `~/.agents`）：
+1. 落盘 ops 预设：
 
    ```sh
-   npx @elinpf/dsh-ops preset install
+   npx @elinpf/dsh-ops preset install --agents-home ~/.dsh
    ```
 
-   这会把 `~/.agents/.agent-presets/ops/`（`preset.yml` + `agent.cordis.yml`）写到内置预设旁边。agents home 不在默认位置时，传 `--agents-home <dir>` 或设 `DSH_AGENTS_HOME`。
+   harness 从 `~/.dsh/.agent-presets/` 发现用户预设；不带 `--agents-home` 会装到 `~/.agents`，静默失效。
 
-2. **让 profile 指向它**——在 profile 的 `cordis.patch.yml` 里加：
+2. 编辑 `~/.dsh/profiles/ops/cordis.patch.yml`，把顶层数组改为：
 
    ```yaml
    - id: agent-presets
      config:
        default: ops
+   - id: session-reference
+     disabled: true
    ```
 
-   `ops` 预设会顶替上游 `session-reference` 行的 `@` 引用选择器；如果你使用 ops 的访问档案选择器，把该行禁用（`- id: session-reference` 加 `disabled: true`），让 ops 的来源占住这个位置。
+3. 启动（`--no-open` 不自动开浏览器；参数同 `dsh web`）：
 
-3. **重启 profile**（`dsh plugin add/remove` 和预设改动都需要重启；web 表面上不热生效）。
+   ```sh
+   dsh --profile ops --no-open
+   ```
 
-4. **登记凭证。** 档案在 `~/.dsh-ops/access.yaml` 里一次性登记——只携带路径和连接参数，永远不携带密钥材料。agent 可按需拉取格式文档（`list_access` 带 `help: true`），web 管理界面支持带保存时校验的登记。
+4. 登记凭证到 `~/.dsh-ops/access.yaml`——只存路径和连接参数，不存密钥。`list_access` 带 `help: true` 可拉取格式文档，也可用 web 管理界面登记。
 
-验证：打开 web UI，在 ops 预设上开一个会话——`list_access` 列出你的档案、`kubectl` 命令正确解析、trace 面板正常渲染、rw 凭证的使用会弹出审批请求而不是直接执行。
+验证：
+
+```sh
+dsh --profile ops --dump-config | grep -A4 'id: agent-presets'      # default 应为 ops
+dsh --profile ops --dump-config | grep -A2 'id: session-reference'  # 应带 disabled: true
+```
+
+然后 web UI 开一个 ops 会话：`list_access` 列出档案、`kubectl` 正确解析、trace 面板渲染、rw 凭证触发审批。
+
+## 交给 Agent 安装
+
+在任意 dsh 会话里把下面这段发给 agent，让它替你完成安装与部署：
+
+```text
+阅读 https://github.com/Elinpf/dsh-ops-plugins 的 README.zh.md，
+把 @elinpf/dsh-ops 插件集安装部署到 ops profile，
+完成后按 README 里的验证步骤确认。
+```
+
+## 更新
+
+```sh
+dsh plugin --profile ops add @elinpf/dsh-ops@latest
+npx @elinpf/dsh-ops@latest preset install --agents-home ~/.dsh   # 预设是落盘文件，必须重新拷
+dsh --profile ops --no-open                                       # 重启
+```
+
+用 `add @latest` 而不是 `update`——`update` 不跨 minor。预设不随包更新自动刷新，必须重新落盘。
 
 ## 卸载
 
-1. 把 profile 的默认预设切回去，或移除 ops 预设（`npx @elinpf/dsh-ops preset remove`），重启 profile。
+1. 移除预设：
+
+   ```sh
+   npx @elinpf/dsh-ops preset remove --agents-home ~/.dsh
+   ```
+
 2. 移除插件包：
 
    ```sh
-   dsh plugin --profile <name> remove @elinpf/dsh-ops
+   dsh plugin --profile ops remove @elinpf/dsh-ops
    ```
 
-3. 再次重启 profile。
-4. 按需删除数据目录 `~/.dsh-ops/`——凭证登记表（`access.yaml`）、环境清单（`environment.yaml`）、以及档案引用的凭证文件本身（keyring、kubeconfig、SSH 私钥）。
+3. 重启 profile：
 
-卸载不影响你的集群：本插件集的所有凭证都只是对你自有文件的只读引用。
+   ```sh
+   dsh --profile ops --no-open
+   ```
 
-## 安全说明
+4. 按需删除 `~/.dsh-ops/`——凭证登记表、环境清单、被引用的凭证文件。
 
-- 密钥材料不进入服务、日志、错误信息或模型上下文——凭证文件在登记时写入一次，之后只按路径引用。
-- 访问门的威胁模型是「防误操作，不防恶意」：它拦截并审计误写，不是对抗同 UID 恶意进程的防线。
-- 设计决策在 [`docs/adr/`](docs/adr/)；领域词汇表（中文）在 [`CONTEXT.md`](CONTEXT.md)。
+卸载不影响集群：凭证只是对自有文件的只读引用。
+
+## 安全
+
+- 密钥不进入服务、日志、错误信息或模型上下文
+- 访问门的威胁模型是「防误操作，不防恶意」
+- 设计决策见 [`docs/adr/`](docs/adr/)；领域词汇表见 [`CONTEXT.md`](CONTEXT.md)

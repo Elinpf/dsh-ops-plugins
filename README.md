@@ -2,79 +2,139 @@
 
 English | [中文](README.zh.md)
 
-An ops plugin suite for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh): it turns a dsh agent into a production-incident investigator — one that resolves kubectl / ceph / ssh credentials by name, runs real read-only commands against your clusters, and organizes the whole investigation as a tree.
+An ops plugin suite for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh): it turns a dsh agent into a production-incident investigator — one that resolves kubectl / ceph / ssh credentials by name, runs read-only commands against your clusters, and organizes the investigation as a tree.
 
-The suite installs as a single npm package, `@elinpf/dsh-ops`, which pulls in the granular `@elinpf/dsh-ops-*` packages as dependencies (16 packages, lockstep versions). Everything is a Cordis plugin; [`ops-preset.yml`](ops-preset.yml) in this repo is the reference composition.
+It installs as a single npm package, `@elinpf/dsh-ops`; the granular `@elinpf/dsh-ops-*` packages arrive as its dependencies, all published in lockstep versions.
 
-## Why you'd want it
+## Features
 
-- **Credentials never enter the model's context.** Access profiles carry only paths and connection parameters; the agent sees profile *names*, never field values. `list_access` answers with names and descriptions only.
-- **Read-only by default, read-write by explicit grant.** An access gate brokers every credential use per session: ro/rw tiers, human approval, revocable grants, and an audit log of every grant and revocation.
-- **Honest tool output.** `kubectl` / `ceph` / `ssh` tools build exactly one command per call; real paths are scrubbed from command strings, stdout, and stderr back into display tokens before anything reaches the model or the session log.
-- **Investigations are trees, not lists.** The `trace` tool structures incident response as a diverge-converge tree — steps, milestones, dead ends kept on record — rendered as a git-graph-style panel in the web UI.
-- **The agent knows your environment.** A deterministic scanner builds an environment inventory (namespaces, deployments, ceph pools, hosts, cross-references, Prometheus corroboration) with TTL-driven refresh, so the agent reasons over "what exists" instead of guessing.
-- **Methodology, not vibes.** A prompt channel injects a few core methodology lines into the system prompt plus per-step reminders; full documentation is pulled on demand, keeping token cost low.
+- Credentials register paths only; the agent sees profile names — secrets never enter model context
+- Read-only by default; read-write needs a per-session grant with human approval, fully audit-logged
+- Honest tool output — sensitive paths are scrubbed before anything reaches the model
+- The `trace` tool structures investigations as trees, rendered git-graph-style in the web UI
+- Environment inventory scanning, so the agent reasons over what actually exists
+- A few methodology lines in the system prompt; full docs pulled on demand
 
 ## Requirements
 
-- DeepSeek Harness, `dsh-v0.1.0-rc` line (see the [harness repo](https://github.com/deepseek-ai/deepseek-harness))
-- `@deepseek-ai/cordis` v4 (pulled in automatically)
-- Cluster-side binaries on the dsh host: `kubectl` (and cluster network reachability); `ceph`/`rbd`/`rados` and `ssh` only if you use those providers
+- DeepSeek Harness ≥ 0.1.0-rc (verified on 0.1.0-rc and 0.1.1-rc.2)
+- pnpm ≥ 10
+- `kubectl` on the host with cluster network reachability; `ceph` / `ssh` as needed
 
 ## Installation
 
-Install the single deployment package into your dsh profile — it depends on every granular `@elinpf/dsh-ops-*` package and carries the host-plane rows (trace panel, `@`-mention picker, ops panel):
+1. Install the package (dependencies and host-plane rows mount automatically):
 
-```sh
-dsh plugin --profile <name> add @elinpf/dsh-ops
+   ```sh
+   dsh plugin --profile ops add @elinpf/dsh-ops
+   ```
+
+2. For the web UI, edit `~/.dsh/profiles/ops/package.json` and add the web host to the bundles:
+
+   ```json
+   "dsh": {
+     "profile": {
+       "bundles": [
+         "@deepseek-ai/dsh-base",
+         "@deepseek-ai/dsh-web-app",
+         "@elinpf/dsh-ops"
+       ]
+     }
+   }
+   ```
+
+   `@deepseek-ai/dsh-web-app` resolves through the dsh installation; it cannot be installed via `dsh plugin add`.
+
+If the install fails with a `minimumReleaseAge` error, add an exclusion to the profile's `pnpm-workspace.yaml` (matching the current version):
+
+```yaml
+minimumReleaseAgeExclude:
+  - '@elinpf/*@0.1.5'
 ```
-
-The granular packages remain published for advanced compositions; `@elinpf/dsh-ops-shell-tool` is a shared library and arrives as a dependency — never mount it directly.
 
 ## Deployment
 
-The plugins are inert until an agent preset mounts them. `@elinpf/dsh-ops` ships the `ops` preset — the reference composition — plus a small `dsh-ops` helper that materializes it:
-
-1. **Install the preset** into your agents home (default `~/.agents`):
+1. Materialize the ops preset:
 
    ```sh
-   npx @elinpf/dsh-ops preset install
+   npx @elinpf/dsh-ops preset install --agents-home ~/.dsh
    ```
 
-   This writes `~/.agents/.agent-presets/ops/` (`preset.yml` + `agent.cordis.yml`) next to the built-in presets. For a non-default agents home, pass `--agents-home <dir>` or set `DSH_AGENTS_HOME`.
+   The harness discovers user presets under `~/.dsh/.agent-presets/`; without `--agents-home` the preset lands in `~/.agents` and fails silently.
 
-2. **Point the profile at it** — add to the profile's `cordis.patch.yml`:
+2. Edit `~/.dsh/profiles/ops/cordis.patch.yml`, replacing the top-level array with:
 
    ```yaml
    - id: agent-presets
      config:
        default: ops
+   - id: session-reference
+     disabled: true
    ```
 
-   The `ops` preset replaces the upstream `session-reference` row for the `@`-mention picker; if you use the ops access picker, disable that row (`- id: session-reference` with `disabled: true`) so the ops source takes its slot.
+3. Start (`--no-open` skips opening a browser; flags match `dsh web`):
 
-3. **Restart the profile** (`dsh plugin add/remove` and preset edits need a restart; they do not hot-apply on the web surface).
+   ```sh
+   dsh --profile ops --no-open
+   ```
 
-4. **Register credentials.** Profiles are registered once in `~/.dsh-ops/access.yaml` — they carry paths and connection parameters, never secret material. The agent documents the format on demand (`list_access` with `help: true`), and a web admin UI covers registration with save-time validation.
+4. Register credentials in `~/.dsh-ops/access.yaml` — paths and connection parameters only, never secrets. `list_access` with `help: true` pulls the format docs; the web admin UI also covers registration.
 
-Verify: open the web UI, start a session on the ops preset — `list_access` lists your profiles, `kubectl` commands resolve them, the trace panel renders, and rw credential use raises an approval request instead of running.
+Verify:
+
+```sh
+dsh --profile ops --dump-config | grep -A4 'id: agent-presets'      # default should be ops
+dsh --profile ops --dump-config | grep -A2 'id: session-reference'  # should carry disabled: true
+```
+
+Then start an ops session in the web UI: `list_access` lists your profiles, `kubectl` resolves them, the trace panel renders, rw credential use raises an approval request.
+
+## Having an agent install it
+
+Paste this into any dsh session and let the agent run the installation and deployment for you:
+
+```text
+Read the README at https://github.com/Elinpf/dsh-ops-plugins,
+install and deploy the @elinpf/dsh-ops plugin suite into the ops profile,
+then confirm with the verification steps in the README.
+```
+
+## Updating
+
+```sh
+dsh plugin --profile ops add @elinpf/dsh-ops@latest
+npx @elinpf/dsh-ops@latest preset install --agents-home ~/.dsh   # the preset is a file on disk — re-copy it
+dsh --profile ops --no-open                                       # restart
+```
+
+Use `add @latest`, not `update` — `update` does not cross minors. The preset does not refresh with the package; re-materialize it.
 
 ## Uninstall
 
-1. Switch the profile's default preset back, or remove the ops preset (`npx @elinpf/dsh-ops preset remove`), then restart the profile.
+1. Remove the preset:
+
+   ```sh
+   npx @elinpf/dsh-ops preset remove --agents-home ~/.dsh
+   ```
+
 2. Remove the package:
 
    ```sh
-   dsh plugin --profile <name> remove @elinpf/dsh-ops
+   dsh plugin --profile ops remove @elinpf/dsh-ops
    ```
 
-3. Restart the profile again.
-4. Optionally remove the data directory `~/.dsh-ops/` — the credential registry (`access.yaml`), the environment inventory (`environment.yaml`), and the credential files themselves (keyrings, kubeconfigs, SSH keys referenced by profiles).
+3. Restart the profile:
 
-Uninstalling never touches your clusters: all the suite's credentials are read-only references to files you own.
+   ```sh
+   dsh --profile ops --no-open
+   ```
 
-## Security notes
+4. Optionally delete `~/.dsh-ops/` — the credential registry, environment inventory, and referenced credential files.
 
-- Secret material never enters services, logs, errors, or model context — credential files are written once at registration and referenced by path afterwards.
-- The access gate's threat model is "prevent mistakes, not malice": it gates and audits accidental writes, it is not a defense against a hostile same-UID process.
-- Design decisions live in [`docs/adr/`](docs/adr/); the domain glossary (Chinese) is [`CONTEXT.md`](CONTEXT.md).
+Uninstalling never touches your clusters: credentials are read-only references to files you own.
+
+## Security
+
+- Secrets never enter services, logs, errors, or model context
+- The access gate's threat model is "prevent mistakes, not malice"
+- Design decisions live in [`docs/adr/`](docs/adr/); the domain glossary (Chinese) is [`CONTEXT.md`](CONTEXT.md)
