@@ -1350,6 +1350,46 @@ describe('register_access tool', () => {
     expect(good.ok).toBe(true)
   })
 
+  it('reads a single-line path-shaped value from disk instead of treating it as content', async () => {
+    const { handle, callRegisterAccess, credentialsDir } = setup()
+    handle.register(fileProvider)
+    const source = join(credentialsDir, '..', 'source-kubeconfig')
+    writeFileSync(source, 'apiVersion: v1\nclusters: []\n')
+    const res = await callRegisterAccess({ profile: 'files/prod', fields: { kubeconfig: source } })
+    expect(res.ok).toBe(true)
+    // The source file's CONTENT lands in the managed file (a copy, not a
+    // reference), and the registry records the managed path.
+    expect(readFileSync(join(credentialsDir, 'files', 'prod', 'ro', 'kubeconfig'), 'utf8'))
+      .toBe('apiVersion: v1\nclusters: []\n')
+    const profile = await handle.resolve('files', 'prod')
+    expect(profile.fields.kubeconfig).toBe(join(credentialsDir, 'files', 'prod', 'ro', 'kubeconfig'))
+  })
+
+  it('runs provider validation on content read from a path, rejecting corrupt files', async () => {
+    const { handle, callRegisterAccess, credentialsDir } = setup()
+    handle.register(fileProvider)
+    const source = join(credentialsDir, '..', 'corrupt-kubeconfig')
+    writeFileSync(source, 'corrupt paste')
+    const res = await callRegisterAccess({ profile: 'files/prod', fields: { kubeconfig: source } })
+    expect(res.ok).toBe(false)
+    expect(res.message).toMatch(/invalid content for files\/prod ro kubeconfig: not a valid kubeconfig/)
+    expect(existsSync(join(credentialsDir, 'files'))).toBe(false)
+  })
+
+  it('rejects a path-shaped value with no file behind it, naming both accepted forms', async () => {
+    const { handle, callRegisterAccess, credentialsDir } = setup()
+    handle.register(fileProvider)
+    const res = await callRegisterAccess({
+      profile: 'files/prod',
+      fields: { kubeconfig: '/nonexistent/dir/kubeconfig' },
+    })
+    expect(res.ok).toBe(false)
+    expect(res.message).toMatch(/looks like a file path/)
+    expect(res.message).toMatch(/no readable file at .*\/nonexistent\/dir\/kubeconfig/)
+    expect(res.message).toMatch(/full file CONTENT/)
+    expect(existsSync(join(credentialsDir, 'files'))).toBe(false)
+  })
+
   it('rejects a path-hostile id BEFORE writing any credential file', async () => {
     const { handle, callRegisterAccess, credentialsDir } = setup()
     handle.register(fileProvider)

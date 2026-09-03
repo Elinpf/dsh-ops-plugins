@@ -38,6 +38,7 @@
  */
 
 import { readFile, writeFile, mkdir, rm, rmdir } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import os from 'node:os'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
@@ -302,6 +303,18 @@ function assertValidProfileName(profileName: string): void {
   }
 }
 
+/**
+ * Whether a file-field value names a file instead of carrying the content:
+ * a single line starting with `/`, `~/`, `./`, or `../`. Real file-field
+ * content (kubeconfig, ceph.conf, keyring, private key) is always multi-line
+ * structured text, so a path-shaped single line is unambiguous.
+ * @param content - a file-field value already known to be a non-empty string.
+ * @returns true when the value should be read from disk as a file path.
+ */
+function looksLikeFilePath(content: string): boolean {
+  return !content.includes('\n') && /^(?:\/|~\/|\.{1,2}\/)/.test(content)
+}
+
 async function writeContentFiles(credentialsDir: string, kind: string, profileName: string, tier: string, fileFields: readonly string[], contentFiles: Record<string, unknown>, entryFields: Record<string, unknown>, provider?: AccessProvider): Promise<string[]> {
   const allowed = new Set(fileFields)
   const written: string[] = []
@@ -315,9 +328,28 @@ async function writeContentFiles(credentialsDir: string, kind: string, profileNa
     if (!allowed.has(fieldName)) {
       throw new Error(`ops-access: "${fieldName}" is not a declared file field for kind "${kind}" (declared: ${fileFields.join(', ') || '(none)'})`)
     }
+    // A single-line value starting with a path prefix names a file to read
+    // instead of the content itself — the credential then never round-trips
+    // through the model request or the admin form. File-field content
+    // (kubeconfig, ceph.conf, keyring, private key) is always multi-line
+    // structured text, so the two never collide. A path with no file behind
+    // it fails loud: the commonest mistake is passing a path where content
+    // is expected.
+    let resolved = content
+    if (looksLikeFilePath(content)) {
+      const source = content.startsWith('~/')
+        ? (process.env.HOME ?? os.homedir()) + content.slice(1)
+        : resolve(content)
+      try {
+        resolved = await readFile(source, 'utf8')
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code ?? 'unreadable'
+        throw new Error(`ops-access: "${fieldName}" looks like a file path, but no readable file at ${source} (${code}) — pass the full file CONTENT, or a path to an existing file`)
+      }
+    }
     // Provider-declared write-time normalization runs FIRST — validator
     // and disk both see the normalized bytes.
-    const normalized = provider?.normalizeTrailingNewline ? content.replace(/[\r\n]+$/, '') + '\n' : content
+    const normalized = provider?.normalizeTrailingNewline ? resolved.replace(/[\r\n]+$/, '') + '\n' : resolved
     // Save-time content validation (provider hook, possibly async — ssh
     // runs ssh-keygen): reject corrupt pastes BEFORE anything lands on disk.
     const problem = await provider?.validateContent?.(fieldName, normalized)
@@ -565,7 +597,8 @@ export function apply(ctx: Context, config: Config): void {
       }
       lines.push('')
       lines.push('Agents register ro tiers with the register_access tool — rw tiers stay human-managed via the admin UI.')
-      lines.push('Secrets never go inline — fields carry file paths and connection params only, so logs and model context never contain secret material.')
+      lines.push('Registering: pass the full file CONTENT for file fields, or a single-line path to an existing readable file (read server-side, content never passes through the model). Multi-line pastes are always treated as content.')
+      lines.push('In the REGISTRY itself, file fields carry the managed file paths — secrets never go inline, so logs and model context never contain secret material.')
       return lines.join('\n')
     },
 
@@ -739,10 +772,10 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => ctx.tools.register(defineTool({
     name: 'register_access',
     description:
-      'Register or overwrite the read-only (ro) credential tier of an access profile — typically a credential you derived from the rw tier (a read-only ServiceAccount token, a read-only cephx keyring, a dedicated SSH key). The rw tier is human-managed via the admin UI; this tool writes ro only. File fields (kubeconfig, conf, keyring, key) take full file CONTENT, stored to a managed path automatically; other fields are inline values. Run list_access with help: true for per-kind field docs and derivation recipes.',
+      'Register or overwrite the read-only (ro) credential tier of an access profile — typically a credential you derived from the rw tier (a read-only ServiceAccount token, a read-only cephx keyring, a dedicated SSH key). The rw tier is human-managed via the admin UI; this tool writes ro only. File fields (kubeconfig, conf, keyring, key) take the full file CONTENT, stored to a managed path automatically; a path to an existing readable file also works and is read server-side, so the content never needs to pass through this call. Other fields are inline values. Run list_access with help: true for per-kind field docs and derivation recipes.',
     parameters: {
       profile: { type: 'string', required: true, description: '"kind/id", e.g. "k8s/prod". The entry is created when it does not exist yet.' },
-      fields: { type: 'object', additionalProperties: true, required: true, description: 'The ro tier field values for this kind. File fields take full content, not paths.' },
+      fields: { type: 'object', additionalProperties: true, required: true, description: 'The ro tier field values for this kind. File fields (kubeconfig, conf, keyring, key) take the full file CONTENT — or a single-line path to an existing readable file, which is read server-side. Multi-line pastes are always treated as content.' },
       description: { type: 'string', description: 'Optional envelope description (empty string clears it).' },
       environment: { type: 'string', description: 'Optional envelope environment label (empty string clears it).' },
     },

@@ -1040,10 +1040,11 @@ function AdminFormView(props: {
               className: 'ops-access-admin-input ops-access-admin-textarea',
               rows: 8,
               // Saved credential content is never read back: the textarea
-              // stays empty and says so; pasting new content overwrites.
+              // stays empty and says so; pasting new content overwrites. A
+              // single-line path also works — the server reads the file.
               placeholder: isEditing
-                ? (fileSet[f.name] ? '已保存 · 内容不可回读 — 粘贴新内容以覆盖' : '未设置 — 粘贴内容以添加')
-                : '粘贴完整内容…',
+                ? (fileSet[f.name] ? '已保存 · 内容不可回读 — 粘贴新内容或文件路径以覆盖' : '未设置 — 粘贴内容或文件路径以添加')
+                : '粘贴完整内容或文件路径…',
               value: values[f.name] ?? '',
               onChange: (e: any) => handleTierFieldChange(tier, f.name, e.target.value),
             })
