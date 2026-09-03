@@ -1,6 +1,6 @@
 {
   "name": "@elinpf/dsh-ops-access-ui",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Browser half carrier for @-mentioning ops-access profiles: the host row exists only for client-bundle discovery; candidates come from GET /ops-access/list served by @elinpf/dsh-ops-access, and mention expansion (agent/pre-step) lives there too.",
   "type": "module",
   "main": "lib/index.js",
