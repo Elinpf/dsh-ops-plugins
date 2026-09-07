@@ -6,7 +6,7 @@ This repo lives inside a larger workspace (`../`) together with a test instance 
 
 ## Overview
 
-All 16 packages under `packages/` share one version number (changesets `fixed` group) and publish together as a lockstep suite ("插件集 vX"). npm names are `@elinpf/dsh-ops-*`, plus the single deployment package `@elinpf/dsh-ops`.
+Sixteen of the 17 packages under `packages/` share one version number (changesets `fixed` group) and publish together as a lockstep suite ("插件集 vX"). The 17th, `ops-access-hub`, is the repo's one exception — not a dsh plugin, independently versioned (see Packages). npm names are `@elinpf/dsh-ops-*`, plus the single deployment package `@elinpf/dsh-ops`.
 
 **`CONTEXT.md` is the domain glossary and the single source of truth for shared vocabulary** (in Chinese). If a code change alters the meaning of a term defined there, update `CONTEXT.md` in the same change. Design decisions and finalized specs live in `docs/adr/` and `docs/specs/`; planned work is broken into tickets under `.scratch/<feature>/issues/`.
 
@@ -18,6 +18,7 @@ The repo root carries a user-facing README trio (`README.md` / `README.zh.md` / 
 - `ops-access/` — the credential capability seam, split by the three-role rule:
   - `core` (`@elinpf/dsh-ops-access`) — owns the YAML credential registry (default `~/.dsh-ops/access.yaml`) and the `ctx.opsAccess` service; providers register via its `registerAccessProvider(ctx, provider)` helper (never hand-write `ctx.inject` for sibling services — it deadlocks the loader).
   - `k8s` / `ceph` / `ssh` — one provider per credential kind: only a zod schema plus field processing (e.g. `~` expansion).
+- `ops-access-hub/` (`@elinpf/dsh-ops-access-hub`) — **the repo's one exception package: not a dsh plugin.** A standalone, separately deployable credential hub: AES-256-GCM encrypted-at-rest single-document store, dual-token (admin/read) HTTP API with an append-only audit log, a single-file web UI, and a YAML registry importer (`dsh-ops-access-hub serve` / `import`). `ops-access/core` can use it as its credential source (Config `source: 'hub'`, via the internal `AccessBackend` seam — `YamlBackend` default, `HubBackend` fetches per call and materializes file-field content to local 0600 files). No `cordis.patch.yml`, no `dsh` field in package.json, never mounted in a preset, outside the changesets `fixed` group (own version cadence). Design: `docs/adr/0005-access-hub.md`; contract: `docs/specs/0006-access-hub.md`.
 - `ops-tool-kubectl` / `ops-tool-ceph` / `ops-tool-ssh` — consumer tools; resolve a profile by name and build the shell command. They only supply four identity pieces: tool name, resolved kind, profile-arg name, `buildCommand`. npm names are `@elinpf/dsh-ops-tool-{kubectl,ceph,ssh}` — the kubectl package was renamed from `@elinpf/dsh-ops-kubectl` in 0.1.1 (old name deprecated on npm); directory names were never affected.
 - `ops-shell-tool` — pure library (not a plugin); the single source of the shared consumer machinery: standard result shape `{ exitCode, stdout, stderr, command, error? }`, output schema, render, and the resolve-per-call execute template (30 s timeout, signal deaths normalized to exitCode -1).
 - `ops-tool-trace` — investigation-tree tool (preset plane), replacing flat todo lists with a tree of goal/milestones/steps. Tree doctrine text has its single source in `src/doctrine.ts`; `src/tree-layout.ts` is shared with the web panel via the `/tree-layout` subpath export.
@@ -76,13 +77,14 @@ The test instance lives at `../../.dsh-target` (profile `dev-target`), which dep
 
 ## Security considerations
 
-- Secret material never passes through any service: profiles carry only paths and connection parameters, so logs, errors, and model context cannot contain secrets. `list_access` output omits even the fields — names and descriptions only.
-- The registry file is re-read and re-validated on every resolve (no caching) — edits take effect without restart.
+- Profiles carry only paths and connection parameters, so logs, errors, and model context cannot contain secrets. The credential source is pluggable (core Config `source`): with `yaml` (default) secret content never passes through any service; with `hub` secrets live AES-256-GCM-encrypted in the standalone access-hub and are pulled per resolve over HTTP (loopback bind or TLS reverse proxy) and materialized to local 0600 files — the profile still carries only paths, and list/metadata endpoints never carry field values. `list_access` output omits even the fields — names and descriptions only.
+- The source is consulted on every resolve (no caching) — the yaml backend re-reads and re-validates the registry file, the hub backend re-fetches from the hub; edits take effect without restart.
 - The access-gate (`packages/ops-access/gate`, credential brokering, ro/rw tiers, per-session grants, audit log) is **implemented and wired into the ops preset** (inside the `ops-access-registry` realm, alongside its `opsAccessGate` isolate symbol); see `docs/adr/0001-access-gate.md` and `docs/specs/0001-access-gate.md` before touching authorization. Its threat model is "prevent mistakes, not malice" — same-UID in-process secrecy is explicitly out of scope.
+- The access-hub (`packages/ops-access-hub`) is a single point of custody: back up its data file AND master key. It speaks plain HTTP and binds loopback by default — remote deployments must put it behind a TLS-terminating reverse proxy. See `docs/adr/0005-access-hub.md`.
 
 ## Release (changesets, fixed lockstep)
 
-All 16 packages share one version number (`fixed` group in `.changeset/config.json`) — the suite ships as "插件集 vX". Flow:
+All 16 fixed-group packages share one version number (`fixed` group in `.changeset/config.json`) — the suite ships as "插件集 vX". `ops-access-hub` stays outside the group and versions independently. Flow:
 
 1. With any user-facing change, run `pnpm changeset` and commit the generated `.changeset/*.md` file.
 2. On push to `master`, `.github/workflows/release.yml` (changesets/action) opens or updates a "chore: version packages" PR.

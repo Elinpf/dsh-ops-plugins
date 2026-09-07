@@ -60,7 +60,7 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 
 `resolve(kind, name)` 的返回：`{ kind, name, tier, description?, environment?, fields }`。`tier` 是本次实际发放的档位（broker 授权后为 `rw`，否则 `ro`），消费方用它标注凭证引用 token。`description`/`environment` 是所有类型通用的 envelope 字段；`fields` 是提供方 schema 校验+加工后的类型特有字段（k8s 是 `kubeconfigPath`，ceph 是 `conf`/`keyring`/`name?`，ssh 是 `host`/`user`/`key?`/`port?`）。
 
-**安全纪律是结构性的**：fields 里只有路径和连接参数，密钥内容永不过服务的手；连路径也不进日志——命令工具一律以 `<id@tier:field>` token 展示（见上「凭证引用 token」），因此日志、错误信息、模型上下文里天然不会出现秘密，也不出现凭证落盘位置。`list_access` 工具的输出连 fields 都不带——只有 envelope 和 ro/rw 就绪标记（基于 `listAll`，rw-only 条目也可见并标注派生提示）。
+**安全纪律是结构性的**：fields 里只有路径和连接参数——yaml 来源下密钥内容永不过任何服务的手；hub 来源下密钥集中加密存于 access-hub、resolve 时按需经 HTTP 拉到本机物化（见下「access-hub」），profile 仍只携路径。连路径也不进日志——命令工具一律以 `<id@tier:field>` token 展示（见上「凭证引用 token」），因此日志、错误信息、模型上下文里天然不会出现秘密，也不出现凭证落盘位置。`list_access` 工具的输出连 fields 都不带——只有 envelope 和 ro/rw 就绪标记（基于 `listAll`，rw-only 条目也可见并标注派生提示）。
 
 ### @ 档案引用 (dsh-access mention)
 
@@ -81,7 +81,7 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 按会话代发凭证的授权层。**决策与理由见 `docs/adr/0001-access-gate.md`（授权面板部分见 `docs/adr/0004-access-panel.md`），构建内容见 `docs/specs/0001-access-gate.md`（面板见 `docs/specs/0003-access-panel.md`)**——这里只定义词汇：
 
 - **凭证代发 (credential brokering)** — 门不改基础设施权限，只决定某 session 的工具调用拿到 ro 还是 rw 凭证
-- **两档账号 (ro/rw)** — 每环境静态预置只读/可写两套账号；ro/rw 是注册表条目内的 tier 子字段（单一注册表文件，默认 `~/.dsh-ops/access.yaml`，同现读现校验纪律；ADR-0003 由双文件合并而来），ro 档默认可用、rw 档需授权。门注册的 broker 是**纯决策函数**（`(kind, name, agent) => 'ro' | 'rw' | 拒绝`），不碰凭证内容。ssh 不分档，每次使用需授权
+- **两档账号 (ro/rw)** — 每环境静态预置只读/可写两套账号；ro/rw 是注册表条目内的 tier 子字段（单一注册表文件，默认 `~/.dsh-ops/access.yaml`，同现读现校验纪律；ADR-0003 由双文件合并而来；或 access-hub 条目的 tiers，来源由 core Config `source` 定），ro 档默认可用、rw 档需授权。门注册的 broker 是**纯决策函数**（`(kind, name, agent) => 'ro' | 'rw' | 拒绝`），不碰凭证内容。ssh 不分档，每次使用需授权
 - **授权 (grant)** — `{ session, profile, tier, 到期时间, 批准人, 理由 }`。agent 调 `request_access` 显式申请，人一次性批准；TTL 到期自动回落，可手动撤销，重启即清空。审批通道由 ADR-0004 从 dsh 原生 approval 换成自建待决请求通道（原生四态结果不能携带人修改后的 TTL）
 - **授权面板 (access panel)**（ADR-0004 / spec 0003，已落地：gate 提供路由与 /access 命令，ops-access-ui 渲染内容，ops-panel 提供外壳）— 人的授权操作唯一入口：会话作用域的自建对话框，敲 `/access`（host 命令）触发，client 半经 `command/executed` 本地事件打开。两个模式：空闲时是主动授权（选档案 → 选 TTL 档位 → 确认）/活跃授权管理面板（**延长**：按档位从现在起续期——不从旧到期点累加，反复续期也不会突破单档上限；过期 grant 不可续、只能重授，审计落 `grant-extend` 并带原到期点；收回单项/全部）；有待决请求时是审批台（可调档位后批准/拒绝）。不做固定设置页——固定页要先选目标会话，与 session 分键模型心智错位。注意路由是 preset-plane：**无活跃会话时 /ops-access/* 不存在**（请求落在 SPA fallback），现场验证路由必须先有一个跑着的会话
 - **待决请求 (pending request)**（同上）— agent 提权申请在 gate 进程内的驻留形态：入队后工具 Promise 挂起，人经面板 HTTP 路由裁决（批准可拨 TTL 档位）解出；默认 5 分钟无人裁决自动拒，exec.signal 中止按 cancelled 解出。headless（无 webServer）不入队、立即报错给带外指引
@@ -103,6 +103,17 @@ ops-tool-trace 通过它注册教义核心段和两条提醒规则；ops-prompts
 - **派生注册 (derived registration)** — agent 持 rw 凭证在基础设施上自助创建只读账号（命名约定：k8s ServiceAccount `<id>-ro`、ceph `client.<id>-ro`），再调 **`register_access`** 工具把派生凭证写入 ro 档。不设授权门槛：ro 档是 agent 默认工作面，人可随时在管理 UI 注册/覆盖；rw 档永远只能人注册（工具只写 ro，kind/id 缺失时整条新建）。每次注册随工具调用进 session 事件流，可重建。各 kind 的派生配方是 provider 的 `derivationDoc`（prose 而非代码——命令随基础设施版本漂移，由 agent 用判断力执行），经 `list_access help: true` 按需拉取。文件类字段内容与 UI 粘贴共用同一落盘机器（`writeContentFiles`，0600，根目录可配 `credentialsDir`，默认 `~/.dsh-ops/credentials`）；值若为单行路径形态（`/`、`~/`、`./` 开头）则服务端读文件——凭证内容不必经过模型上下文，路径无对应文件时报错点名两种写法。配套可发现性：rw-only 条目在 @ 菜单、list_access、mention 注入三处都可见并标注「可派生」；`request_access` 对两档 kind 只要求 rw 档可解析（ro 缺失正是派生引导场景，若卡 ro 检查会死锁）；ro 缺失且 rw 存在时 resolve 的报错直接指向 register_access
 
 - **封禁 (deny 第四态)**（票 12）— 运维对某 profile 的显式锁：broker 裁决的第一道检查，连 ro 档也拒发（场景：凭证泄露、维护期、事故冻结）。与授权的三处本质区别：进程级而非会话级、**持久化**到 `~/.dsh-ops/denied.json`（重启不悄悄解冻）、封禁瞬间连带收回所有会话的该档案授权并通知。面板档案行红点 + 封禁/解封两段确认；审计事件 `deny`/`undeny`/`deny-block`；被封档案上的 request_access 直接快速失败（不挂起）。
+
+### access-hub（凭证平台）— 已实现
+
+集中凭证管理服务（`packages/ops-access-hub`，npm 名 `@elinpf/dsh-ops-access-hub`），core 的可选第二凭证来源。**决策见 `docs/adr/0005-access-hub.md`，构建内容见 `docs/specs/0006-access-hub.md`**——这里只定义词汇：
+
+- **例外包** — hub 是仓库唯一**不是 dsh 插件**的包：无 cordis.patch.yml、不进 preset、package.json 无 `dsh` 字段、不进 changesets fixed 组（独立版本节奏）。可独立部署，不一定和 dsh 同机
+- **凭证平台 / access-hub** — 单一加密 JSON 文档存全部条目（AES-256-GCM，`<data-dir>/hub-data.json.enc`，写盘 tmp+rename 原子写）；master key 来自 env `ACCESS_HUB_KEY`（hex/base64）或 key 文件（首启自动生成，0600）。HTTP API 用**双 Bearer token**（admin 全量 / read 只读列表与解析），未配置的首启生成随机 token 打印一次；timingSafeEqual 比较，401/403 区分。审计落 append-only JSONL（resolve/put/delete，只记成功操作，**永不记字段值**）。自带单文件中文 Web UI（token 存浏览器 localStorage）。v1 明文 HTTP，默认只绑 loopback，远程部署套 TLS 反代。**hub 是单点——数据文件与 master key 都要备份**
+- **哑存储 (dumb storage)** — hub 不做 kind schema 校验，不认识 k8s/ceph/ssh：fileField 直接存**内容**而非路径。schema 权威仍在 provider 侧（access 侧物化后照旧过 provider schema + process + validateContent），probe 也仍由 access 侧算好回写。hub 的世界只有 kind/name/tier/fields/envelope
+- **后端缝 (AccessBackend)** — core 内部的来源抽象（`src/backend.ts`）：`label` / `listEntries()`（fields-free）/ `loadTier(kind,name,tier,{materialize?})` / `putTier` / `deleteTier`。`YamlBackend` 收编原 YAML 逻辑（默认来源，行为逐字节不变）；`HubBackend` 每次调用打 hub（无缓存，对齐 yaml 的现读纪律）。core Config 新增 `source: 'yaml'|'hub'`、`hubUrl`、`hubToken` / `hubAdminToken`（env 回退 `ACCESS_HUB_READ_TOKEN` / `ACCESS_HUB_ADMIN_TOKEN`；token 不进日志）。gate/broker、register_access、admin 路由、probe 流程对两种来源透明不变
+- **物化 (materialize)** — hub 模式下 resolve 时把 provider `fileFields` 的内容落盘到 `credentialsDir/kind/name/tier/field`（0600、原子写、内容相同跳过），fields 里的值替换为该本地路径——下游 provider schema、凭证引用 token、CLI 看到的 profile 与 yaml 来源同形，路径仍不出本机。`materialize: false` 用于 canResolve/list/getEntry 等元数据读（如门批准前的预检）：只替换将然路径、**不落盘**，元数据读不写秘密文件。写入方向相反：putTier 把本地受管文件的内容读出上传（envelope 合并语义与 yaml 一致：undefined 保留、`''` 删除）
+- **import 迁移** — `dsh-ops-access-hub import <access.yaml>` 把现有 YAML registry 搬进 hub：单行且路径形态（以 `/`、`~/`、`./`、`../` 开头）并指向可读文件的字段值替换为**文件内容**（`./`/`../` 相对 registry 文件目录）；`--url` + `--admin-token` 在线推送，或 `--data-dir` 离线直写，二选一
 
 ## 环境清单 (Environment Inventory)
 

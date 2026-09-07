@@ -21,7 +21,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-export function setup(opts: { registryFile?: string, credentialsDir?: string } = {}) {
+export function setup(opts: { registryFile?: string, credentialsDir?: string, config?: Partial<Record<string, unknown>> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ops-access-'))
   const registryFile = opts.registryFile ?? join(dir, 'access.yaml')
   const credentialsDir = opts.credentialsDir ?? join(dir, 'credentials')
@@ -102,7 +102,7 @@ export function setup(opts: { registryFile?: string, credentialsDir?: string } =
       },
     },
   }
-  apply(ctx, { registryFile, credentialsDir })
+  apply(ctx, { registryFile, credentialsDir, ...opts.config })
   /** Minimal mock response that captures status + JSON body. */
   const mockResponse = (): { writeHead: (s: number) => void, end: (text: string) => void, status: () => number, body: () => any } => {
     let status = 0

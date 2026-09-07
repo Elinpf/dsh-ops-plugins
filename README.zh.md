@@ -89,6 +89,42 @@ dsh --profile ops --dump-config | grep -A2 'id: session-reference'  # 应带 dis
 
 然后 web UI 开一个 ops 会话：`list_access` 列出档案、`kubectl` 正确解析、trace 面板渲染、rw 凭证触发审批。
 
+## 集中凭证平台 access-hub（可选）
+
+默认凭证存在 dsh 宿主机的本地 YAML 注册表里。需要集中管理——一处登记、轮换、审计——可以跑 `@elinpf/dsh-ops-access-hub`：一个独立部署的服务（不是 dsh 插件），全部凭证存于单一 AES-256-GCM 加密文档，对外提供 token 认证的小型 HTTP API 和内置 Web 界面。
+
+1. 启动 hub：
+
+   ```sh
+   npx @elinpf/dsh-ops-access-hub serve
+   ```
+
+   参数（flag / 环境变量 / 默认）：`--port` / `ACCESS_HUB_PORT` / `3090`；`--host` / `ACCESS_HUB_HOST` / `127.0.0.1`；`--data-dir` / `ACCESS_HUB_DATA_DIR` / `~/.dsh-ops-hub`；`--key-file` / `ACCESS_HUB_KEY_FILE` / `<data-dir>/hub.key`；`--admin-token` / `ACCESS_HUB_ADMIN_TOKEN` 与 `--read-token` / `ACCESS_HUB_READ_TOKEN` / 未配置时首启生成并打印一次。master key 来自 `ACCESS_HUB_KEY`（base64/hex）或 key 文件（自动生成，0600）。
+
+2. 把现有 YAML 注册表迁入 hub（路径形态的字段值会替换为文件内容）：
+
+   ```sh
+   npx @elinpf/dsh-ops-access-hub import ~/.dsh-ops/access.yaml \
+     --url http://127.0.0.1:3090 --admin-token <admin token>
+   ```
+
+   离线方式：用 `--data-dir <dir>` 替代 `--url`，直接写 hub 的数据文件。
+
+3. 在 `~/.dsh/profiles/ops/cordis.patch.yml` 加一行配置，把 ops-access 指向 hub：
+
+   ```yaml
+   - id: ops-access
+     config:
+       source: hub
+       hubUrl: http://127.0.0.1:3090
+       hubToken: <read token>          # 或用环境变量 ACCESS_HUB_READ_TOKEN
+       hubAdminToken: <admin token>    # 或用环境变量 ACCESS_HUB_ADMIN_TOKEN
+   ```
+
+   改完重启 profile。文件字段内容在 resolve 时按需从 hub 拉取并物化到 `~/.dsh-ops/credentials` 下的本地文件（0600）；profile 仍只携路径，访问门、能力探针、管理 UI、各工具的行为与 YAML 模式完全一致。
+
+安全提示：v1 是明文 HTTP——保持默认的 loopback 绑定，或把 hub 放在 TLS 反向代理之后。hub 是单点：数据文件和 master key 都要备份。本地 YAML 模式随时可切回作为回退。
+
 ## 交给 Agent 安装
 
 在任意 dsh 会话里把下面这段发给 agent，让它替你完成安装与部署：

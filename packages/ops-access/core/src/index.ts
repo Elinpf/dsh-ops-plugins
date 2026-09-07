@@ -1,21 +1,25 @@
 /**
  * Ops access capability seam.
  *
- * Owns the YAML credential registry file (default `~/.dsh-ops/access.yaml`)
- * and exposes `ctx.opsAccess`: a generic `resolve(kind, name)` / `list()`
- * entry plus a `register(provider)` surface for provider plugins. Providers
- * (one per credential kind) supply the zod schema for their entry shape and
- * an optional `process` step (e.g. `~` expansion); secret material never
- * leaves the filesystem — profiles carry only paths and connection params.
+ * Exposes `ctx.opsAccess`: a generic `resolve(kind, name)` / `list()` entry
+ * plus a `register(provider)` surface for provider plugins. Providers (one
+ * per credential kind) supply the zod schema for their entry shape and an
+ * optional `process` step (e.g. `~` expansion); profiles carry only paths
+ * and connection params, never inline secret material.
  *
- * The registry file is re-read, re-parsed, and re-validated on every call —
- * edits take effect immediately, nothing is cached.
+ * The credential SOURCE is pluggable (see backend.ts):
+ * - 'yaml' (default) owns the local YAML registry file
+ *   (`~/.dsh-ops/access.yaml`), re-read, re-parsed, and re-validated on
+ *   every call — edits take effect immediately, nothing is cached.
+ * - 'hub' fetches entries from a remote ops-access-hub service on every
+ *   call (hub-backend.ts): file-field CONTENT is materialized to managed
+ *   local files at resolve time, so profiles still carry only paths.
  *
  * Also registers the `register_access` tool: the agent's self-service path
  * for writing the ro tier of a profile (rw tiers stay human-managed via the
  * admin HTTP routes below).
  *
- * Registry format:
+ * Registry format (yaml source):
  *
  * ```yaml
  * version: 1
@@ -42,7 +46,6 @@ import { resolve } from 'node:path'
 import os from 'node:os'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { z as zod } from 'zod'
 import { createUserMessage, freezeMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -60,6 +63,9 @@ import type {
   AccessBroker,
   OpsAccess,
 } from './types.js'
+import type { AccessBackend, BackendEntry, BackendTier } from './backend.js'
+import { YamlBackend, buildEnvelope, isPlainObject } from './backend.js'
+import { HubBackend } from './hub-backend.js'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -74,15 +80,31 @@ export const inject = ['tools']
 // const with a type re-exported from another module. types.ts re-exports it
 // so the `./types` subpath still carries the full type set.
 export interface Config {
-  /** Path to the YAML access registry; a leading `~` expands to $HOME. */
+  /** Path to the YAML access registry; a leading `~` expands to $HOME. (source: 'yaml') */
   registryFile: string
   /** Root directory for managed credential content files; a leading `~` expands to $HOME. */
   credentialsDir: string
+  /**
+   * Credential source: 'yaml' (default) reads the local registry file;
+   * 'hub' fetches entries from a remote ops-access-hub service on every
+   * call and materializes file-field content to managed local files.
+   */
+  source?: 'yaml' | 'hub'
+  /** Hub base URL (source: 'hub'), e.g. http://127.0.0.1:3090. */
+  hubUrl?: string
+  /** Hub read token (source: 'hub'); falls back to env ACCESS_HUB_READ_TOKEN. Never logged. */
+  hubToken?: string
+  /** Hub admin token for write/delete (source: 'hub'); falls back to env ACCESS_HUB_ADMIN_TOKEN. Never logged. */
+  hubAdminToken?: string
 }
 
 export const Config: z<Config> = z.object({
   registryFile: z.string().default('~/.dsh-ops/access.yaml'),
   credentialsDir: z.string().default('~/.dsh-ops/credentials'),
+  source: z.union(['yaml', 'hub']).default('yaml'),
+  hubUrl: z.string().default(''),
+  hubToken: z.string().default(''),
+  hubAdminToken: z.string().default(''),
 })
 
 // ── Service contract ─────────────────────────────────────────────────────────
@@ -105,18 +127,6 @@ export type {
   AccessBroker,
   OpsAccess,
 } from './types.js'
-/** Read a persisted probe result off a raw tier object (durable boundary — sanitize). */
-function probeOf(tierRaw: unknown): ProbeState | undefined {
-  if (!isPlainObject(tierRaw)) return undefined
-  const p = (tierRaw as Record<string, unknown>).probe
-  if (!isPlainObject(p)) return undefined
-  const probe = p as Record<string, unknown>
-  if (probe.status !== 'verified' && probe.status !== 'mismatch' && probe.status !== 'unverifiable') return undefined
-  if (typeof probe.probedAt !== 'string') return undefined
-  const out: ProbeState = { status: probe.status, probedAt: probe.probedAt }
-  if (typeof probe.detail === 'string') out.detail = probe.detail
-  return out
-}
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -162,69 +172,23 @@ export function expandHome(p: string): string {
   return p
 }
 
-/** Parsed registry: kind section → profile name → raw entry. */
-type Registry = Record<string, Record<string, unknown>>
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-/**
- * Read and parse the registry file. Returns null when the file does not
- * exist so callers can pick their own discipline (list → empty, resolve →
- * error). Never includes raw file text in errors.
- */
-async function loadRegistry(file: string): Promise<Registry | null> {
-  let text: string
-  try {
-    text = await readFile(file, 'utf8')
-  } catch (err: any) {
-    if (err?.code === 'ENOENT') return null
-    throw new Error(`ops-access: failed to read registry file ${file}: ${err?.message ?? err}`)
-  }
-
-  let doc: unknown
-  try {
-    doc = parseYaml(text)
-  } catch (err: any) {
-    // First line only — the yaml library appends a source snippet to its
-    // messages, and raw registry text must not leak into errors.
-    const summary = String(err?.message ?? err).split('\n')[0]
-    throw new Error(`ops-access: failed to parse registry file ${file}: ${summary}`)
-  }
-
-  // An empty file parses to null — treat it as an empty registry.
-  if (doc == null) return {}
-  if (!isPlainObject(doc)) {
-    throw new Error(`ops-access: registry file ${file} must contain a top-level mapping`)
-  }
-
-  const registry: Registry = {}
-  for (const [kind, section] of Object.entries(doc)) {
-    if (kind === 'version') continue
-    if (!isPlainObject(section)) {
-      throw new Error(`ops-access: section "${kind}" in registry file ${file} must be a mapping of profile names`)
-    }
-    registry[kind] = section
-  }
-  return registry
-}
-
 /**
  * Validate one tier sub-object against the provider schema and build the
  * profile. `raw` carries only the provider fields; the envelope
  * (description/environment) lives on the parent entry and is passed separately.
+ * `source` is the backend's label phrase (e.g. `registry file <path>` /
+ * `access hub at <url>`), interpolated as `in ${source}` in error messages.
  */
-function buildProfile(provider: AccessProvider, kind: string, profileName: string, tier: 'ro' | 'rw', raw: unknown, file: string, parentEntry?: Record<string, unknown>): AccessProfile {
+function buildProfile(provider: AccessProvider, kind: string, profileName: string, tier: 'ro' | 'rw', raw: unknown, source: string, parentEntry?: EntryEnvelope): AccessProfile {
   if (!isPlainObject(raw)) {
-    throw new Error(`ops-access: entry ${kind}.${profileName} in registry file ${file} must be a mapping`)
+    throw new Error(`ops-access: entry ${kind}.${profileName} in ${source} must be a mapping`)
   }
   const result = provider.schema.safeParse(raw)
   if (!result.success) {
     const issues = result.error.issues
       .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
       .join('; ')
-    throw new Error(`ops-access: invalid entry ${kind}.${profileName} in registry file ${file}: ${issues}`)
+    throw new Error(`ops-access: invalid entry ${kind}.${profileName} in ${source}: ${issues}`)
   }
   const fields = provider.process
     ? provider.process(result.data, profileName)
@@ -235,15 +199,6 @@ function buildProfile(provider: AccessProvider, kind: string, profileName: strin
   if (typeof env.description === 'string') profile.description = env.description
   if (typeof env.environment === 'string') profile.environment = env.environment
   return profile
-}
-
-/** Serialize a registry back to its YAML file with the version header. */
-async function saveRegistry(file: string, registry: Registry): Promise<void> {
-  const doc: Record<string, unknown> = { version: 1 }
-  for (const [kind, section] of Object.entries(registry)) {
-    doc[kind] = section
-  }
-  await writeFile(file, stringifyYaml(doc), 'utf8')
 }
 
 /** Read the full HTTP request body as a string. */
@@ -260,18 +215,6 @@ function readRequestBody(req: { on: (event: string, cb: (chunk?: Buffer | string
 function sendJsonError(res: { writeHead: (status: number, headers?: Record<string, string>) => void, end: (text: string) => void }, status: number, err: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json' })
   res.end(JSON.stringify({ ok: false, error: String((err as Error | null)?.message ?? err) }))
-}
-
-/** Build an EntryEnvelope from raw entry data, taking each envelope field from the first source that has it. */
-function buildEnvelope(sources: Array<Record<string, unknown> | undefined>): EntryEnvelope {
-  const envelope: EntryEnvelope = {}
-  for (const source of sources) {
-    if (!isPlainObject(source)) continue
-    if (envelope.name === undefined && typeof source.name === 'string') envelope.name = source.name
-    if (envelope.description === undefined && typeof source.description === 'string') envelope.description = source.description
-    if (envelope.environment === undefined && typeof source.environment === 'string') envelope.environment = source.environment
-  }
-  return envelope
 }
 
 /** Split "kind/name" on the FIRST slash — profile names may contain '@' etc. */
@@ -432,6 +375,27 @@ export function apply(ctx: Context, config: Config): void {
   const registryFile = expandHome(config.registryFile)
   const credentialsDir = expandHome(config.credentialsDir)
   const providers = new Map<string, AccessProvider>()
+  // Credential source backend (see backend.ts / hub-backend.ts): yaml is the
+  // default and behaves byte-for-byte as before; hub fetches entries from a
+  // remote ops-access-hub on every call and materializes file-field content
+  // to managed local files under credentialsDir.
+  const source = config.source ?? 'yaml'
+  let backend: AccessBackend
+  if (source === 'hub') {
+    const hubUrl = (config.hubUrl ?? '').replace(/\/+$/, '')
+    if (hubUrl === '') {
+      throw new Error('ops-access: source "hub" requires hubUrl (e.g. http://127.0.0.1:3090)')
+    }
+    backend = new HubBackend({
+      baseUrl: hubUrl,
+      readToken: config.hubToken || process.env.ACCESS_HUB_READ_TOKEN || '',
+      adminToken: config.hubAdminToken || process.env.ACCESS_HUB_ADMIN_TOKEN || '',
+      credentialsDir,
+      getProvider: (kind) => providers.get(kind),
+    })
+  } else {
+    backend = new YamlBackend(registryFile)
+  }
   // At most one broker is active; a later registration replaces an earlier one.
   // The replaced broker's disposer is folded into the replacement's, so each
   // registration's effect cleanup runs exactly once even under replacement or
@@ -472,29 +436,25 @@ export function apply(ctx: Context, config: Config): void {
     async canResolve(kind: string, profileName: string, tier: 'ro' | 'rw'): Promise<AdminTierStatus> {
       const provider = providers.get(kind)
       if (!provider) return { ok: false }
-      // Load + locate the entry in its own try/catch: a missing or unparseable
-      // file is a structural "not resolvable" with no validation reason — the
-      // admin does not need a zod message to fix a file that isn't there.
-      let raw: unknown
-      let parentEntry: Record<string, unknown> | undefined
+      // Load + locate the entry in its own try/catch: a missing source or
+      // entry is a structural "not resolvable" with no validation reason —
+      // the admin does not need a zod message to fix an entry that isn't
+      // there. materialize: false — a precheck must not write secret files
+      // (hub mode), e.g. the gate's pre-approval check on the rw tier.
+      let loaded: BackendTier | null
       try {
-        const registry = await loadRegistry(registryFile)
-        if (registry === null) return { ok: false }
-        const entry = registry[kind]?.[profileName]
-        if (!isPlainObject(entry)) return { ok: false }
-        parentEntry = entry as Record<string, unknown>
-        raw = parentEntry[tier]
+        loaded = await backend.loadTier(kind, profileName, tier, { materialize: false })
       } catch {
         return { ok: false }
       }
-      if (!isPlainObject(raw)) return { ok: false }
+      if (loaded === null) return { ok: false }
       // Run the same buildProfile validation resolve would run — a precheck
       // shallower than the real issuance approves grants that cannot be
       // fulfilled. The profile itself is discarded: existence, not fields.
       // A validation failure surfaces the reason (zod issue paths + messages,
       // never raw field values) so the admin UI can show it.
       try {
-        buildProfile(provider, kind, profileName, tier, raw, registryFile, parentEntry)
+        buildProfile(provider, kind, profileName, tier, loaded.fields, backend.label, loaded.envelope)
         return { ok: true }
       } catch (err) {
         return { ok: false, error: String((err as Error | null)?.message ?? err) }
@@ -519,49 +479,50 @@ export function apply(ctx: Context, config: Config): void {
         }
         if (decision === 'rw') tier = 'rw'
       }
-      const registry = await loadRegistry(registryFile)
-      if (registry === null) {
-        throw new Error(`ops-access: registry file not found: ${registryFile}`)
-      }
-      const section = registry[kind]
-      const entry = section?.[profileName]
-      if (!isPlainObject(entry)) {
-        const available = Object.keys(section ?? {}).sort()
-        const hint = tier === 'rw' ? ' — a grant was approved but no rw credential is registered; ask the operator to add it via the admin UI' : ''
-        throw new Error(`ops-access: no profile "${profileName}" for kind "${kind}" in registry file ${registryFile} (available: ${available.join(', ') || '(none)'})${hint}`)
-      }
-      const tierData = (entry as Record<string, unknown>)[tier]
-      if (!isPlainObject(tierData)) {
+      // A missing SOURCE (yaml: no registry file) throws from the backend
+      // verbatim (SourceUnavailableError); an unreadable source propagates
+      // its read/parse error the same way.
+      const loaded = await backend.loadTier(kind, profileName, tier)
+      if (loaded === null) {
+        // Distinguish "no such entry" from "entry without this tier" via the
+        // fields-free listing — the hints below guide the agent's next move.
+        const entries = await backend.listEntries().catch(() => [] as BackendEntry[])
+        const inKind = entries.filter((e) => e.kind === kind)
+        const entry = inKind.find((e) => e.name === profileName)
+        if (!entry) {
+          const available = inKind.map((e) => e.name).sort()
+          const hint = tier === 'rw' ? ' — a grant was approved but no rw credential is registered; ask the operator to add it via the admin UI' : ''
+          throw new Error(`ops-access: no profile "${profileName}" for kind "${kind}" in ${backend.label} (available: ${available.join(', ') || '(none)'})${hint}`)
+        }
         // On the rw tier the grant was already approved — say so, so the agent
         // reports "no rw credential registered" to the operator instead of
         // re-requesting a grant that can never be fulfilled. On the ro tier
         // with rw present, point at the self-service derivation path.
         const hint = tier === 'rw'
           ? ' — a grant was approved but no rw credential is registered; ask the operator to add it via the admin UI'
-          : isPlainObject((entry as Record<string, unknown>).rw)
+          : entry.tiers.rw !== undefined
             ? ' — the rw tier is registered; derive a read-only credential from it (list_access help: true has the recipe) and register it via the register_access tool'
             : ''
-        throw new Error(`ops-access: no ${tier} tier for profile "${profileName}" (kind "${kind}") in registry file ${registryFile}${hint}`)
+        throw new Error(`ops-access: no ${tier} tier for profile "${profileName}" (kind "${kind}") in ${backend.label}${hint}`)
       }
-      return buildProfile(provider, kind, profileName, tier, tierData, registryFile, entry as Record<string, unknown>)
+      return buildProfile(provider, kind, profileName, tier, loaded.fields, backend.label, loaded.envelope)
     },
 
     async list(): Promise<AccessProfile[]> {
-      const registry = await loadRegistry(registryFile)
-      if (registry === null) return []
+      // A missing source lists empty; an unreadable/corrupt source throws
+      // (same discipline as the pre-backend list).
+      const entries = await backend.listEntries()
       const profiles: AccessProfile[] = []
-      for (const [kind, section] of Object.entries(registry)) {
-        // Sections whose kind has no registered provider are skipped —
-        // an unrecognized kind must not fail the whole listing.
-        const provider = providers.get(kind)
-        if (!provider) continue
-        for (const [profileName, entry] of Object.entries(section)) {
-          // list() surfaces the agent-readable ro tier only.
-          if (!isPlainObject(entry)) continue
-          const roData = (entry as Record<string, unknown>).ro
-          if (!isPlainObject(roData)) continue
-          profiles.push(buildProfile(provider, kind, profileName, 'ro', roData, registryFile, entry as Record<string, unknown>))
-        }
+      for (const entry of entries) {
+        // Kinds without a registered provider are skipped — an unrecognized
+        // kind must not fail the whole listing. list() surfaces the
+        // agent-readable ro tier only. materialize: false — listing is not
+        // issuance; file fields carry their would-be managed path.
+        const provider = providers.get(entry.kind)
+        if (!provider || entry.tiers.ro === undefined) continue
+        const loaded = await backend.loadTier(entry.kind, entry.name, 'ro', { materialize: false }).catch(() => null)
+        if (loaded === null) continue
+        profiles.push(buildProfile(provider, entry.kind, entry.name, 'ro', loaded.fields, backend.label, loaded.envelope))
       }
       return profiles
     },
@@ -570,23 +531,32 @@ export function apply(ctx: Context, config: Config): void {
       const lines: string[] = [
         'Ops access registry — how to manage credentials',
         '',
-        `File: ${registryFile}`,
-        'Re-read, re-parsed, and re-validated on EVERY call — edit it with the fs tools and the change takes effect immediately, no restart.',
-        '',
-        'Format:',
-        '  version: 1',
-        '  <kind>:',
-        '    <profile-id>:                            # stable id: letters/digits plus . _ - @; used in paths, mentions, grants',
-        '      name: display label, freely editable   # optional, UI-facing only',
-        '      description: what this profile is for   # optional, shown by list_access',
-        '      environment: prod | staging | ...        # optional; the future audit gate reads this',
-        '      ro:                                      # ro tier fields (agent-readable default)',
-        '        <kind-specific fields, see below>',
-        '      rw:                                      # rw tier fields (grant-gated)',
-        '        probe: {...}                            # auto-managed capability check (ticket 10): status/detail/probedAt, written at save time — do not edit',
-        '',
-        'Registered kinds and their entry fields:',
       ]
+      if (source === 'hub') {
+        lines.push(
+          `Source: ${backend.label}`,
+          'Entries are fetched from the hub on EVERY call — edits in the hub UI take effect immediately, no restart.',
+          `File-field contents live in the hub; at resolve time they are materialized to managed local files under ${credentialsDir} (0600) and profiles carry those paths — secret material never enters logs or model context.`,
+        )
+      } else {
+        lines.push(
+          `File: ${registryFile}`,
+          'Re-read, re-parsed, and re-validated on EVERY call — edit it with the fs tools and the change takes effect immediately, no restart.',
+          '',
+          'Format:',
+          '  version: 1',
+          '  <kind>:',
+          '    <profile-id>:                            # stable id: letters/digits plus . _ - @; used in paths, mentions, grants',
+          '      name: display label, freely editable   # optional, UI-facing only',
+          '      description: what this profile is for   # optional, shown by list_access',
+          '      environment: prod | staging | ...        # optional; the future audit gate reads this',
+          '      ro:                                      # ro tier fields (agent-readable default)',
+          '        <kind-specific fields, see below>',
+          '      rw:                                      # rw tier fields (grant-gated)',
+          '        probe: {...}                            # auto-managed capability check (ticket 10): status/detail/probedAt, written at save time — do not edit',
+        )
+      }
+      lines.push('', 'Registered kinds and their entry fields:')
       const kinds = [...providers.values()].sort((a, b) => a.kind.localeCompare(b.kind))
       if (kinds.length === 0) {
         lines.push('- (none registered)')
@@ -612,100 +582,56 @@ export function apply(ctx: Context, config: Config): void {
       // The tier sub-object carries only provider fields; the envelope
       // (name/description/environment) lives on the parent entry.
       const tierData: Record<string, unknown> = { ...fields }
-      // Read → merge → validate → write back. A missing file starts from an
-      // empty registry; an unparseable file throws (we will not overwrite a
-      // file we cannot read).
-      let registry: Registry = {}
-      const loaded = await loadRegistry(registryFile)
-      if (loaded !== null) registry = loaded
-      if (!registry[kind]) registry[kind] = {}
-      if (!isPlainObject(registry[kind][profileName])) registry[kind][profileName] = {}
-      const entry = registry[kind][profileName] as Record<string, unknown>
-      entry[tier] = tierData
-      // Envelope discipline: omitted = preserve, empty string = delete, else set.
-      // The admin UI always sends all three so the operator can clear them.
-      if (envelope?.name !== undefined) {
-        if (envelope.name === '') delete entry.name
-        else entry.name = envelope.name
-      }
-      if (envelope?.description !== undefined) {
-        if (envelope.description === '') delete entry.description
-        else entry.description = envelope.description
-      }
-      if (envelope?.environment !== undefined) {
-        if (envelope.environment === '') delete entry.environment
-        else entry.environment = envelope.environment
-      }
       // Validate via buildProfile BEFORE writing — a schema failure must not
-      // touch the file. buildProfile throws with zod issue paths + messages,
-      // never raw field values. (The in-memory merged entry is what we
-      // validate, matching the spec's read→merge→validate→write sequence.)
-      const writtenProfile = buildProfile(provider, kind, profileName, tier, tierData, registryFile, entry)
+      // touch the source. buildProfile throws with zod issue paths + messages,
+      // never raw field values.
+      const writtenProfile = buildProfile(provider, kind, profileName, tier, tierData, backend.label)
       // Capability probe (ticket 10): verify claims against reality at save
       // time — the credential files are already on disk (the caller writes
       // them first). A probe failure degrades to 'unverifiable', never a
       // write rejection.
+      let probe: ProbeState | undefined
       if (provider.probe) {
         const probed = await provider.probe(writtenProfile.fields, tier)
           .catch((err: unknown) => ({
             status: 'unverifiable' as const,
             detail: err instanceof Error ? err.message.split('\n')[0] : String(err),
           }))
-        tierData.probe = { ...probed, probedAt: new Date().toISOString() }
+        probe = { ...probed, probedAt: new Date().toISOString() }
       }
-      await saveRegistry(registryFile, registry)
+      // The backend applies the envelope patch discipline (undefined =
+      // preserve, empty string = delete) and persists the tier.
+      await backend.putTier(kind, profileName, tier, tierData, envelope, probe)
     },
 
     async deleteEntry(kind: string, profileName: string, tier: 'ro' | 'rw'): Promise<boolean> {
-      const registry = await loadRegistry(registryFile)
-      if (registry === null) return false
-      const section = registry[kind]
-      if (!section || !(profileName in section)) return false
-      const entry = section[profileName]
-      if (!isPlainObject(entry)) return false
-      // Remove the tier sub-object and its managed credential files.
-      delete (entry as Record<string, unknown>)[tier]
+      const outcome = await backend.deleteTier(kind, profileName, tier)
+      if (outcome === 'missing') return false
+      // Remove the tier's managed credential files; when the whole entry
+      // went, remove its credential directory too.
       const provider = providers.get(kind)
       if (provider?.fileFields && provider.fileFields.length > 0) {
         await rm(credentialsDir + '/' + kind + '/' + profileName + '/' + tier, { recursive: true, force: true })
-      }
-      // If neither tier remains, remove the whole entry, its credential
-      // directory, and drop empty sections.
-      const remaining = ['ro', 'rw'].filter((t) => (entry as Record<string, unknown>)[t] !== undefined)
-      if (remaining.length === 0) {
-        delete section[profileName]
-        if (Object.keys(section).length === 0) delete registry[kind]
-        if (provider?.fileFields && provider.fileFields.length > 0) {
+        if (outcome === 'entry') {
           await rm(credentialsDir + '/' + kind + '/' + profileName, { recursive: true, force: true })
         }
       }
-      await saveRegistry(registryFile, registry)
       return true
     },
 
     async listAll(): Promise<AdminEntry[]> {
-      // Load the single registry for enumeration. A parse error degrades to
-      // an empty list — canResolve reports the failure per tier.
-      let registry: Registry = {}
-      try { const r = await loadRegistry(registryFile); if (r) registry = r } catch { /* canResolve reports the failure */ }
+      // A source failure degrades to an empty list — canResolve reports the
+      // failure per tier.
+      let entries: BackendEntry[] = []
+      try { entries = await backend.listEntries() } catch { /* canResolve reports the failure */ }
       const result: AdminEntry[] = []
-      for (const kind of Object.keys(registry).sort()) {
-        if (!providers.has(kind)) continue
-        const section = registry[kind]
-        if (!section) continue
-        for (const name of Object.keys(section).sort()) {
-          const entry = section[name]
-          if (!isPlainObject(entry)) continue
-          const envelope = buildEnvelope([entry as Record<string, unknown>])
-          const roStatus = await handle.canResolve(kind, name, 'ro')
-          const rwStatus = await handle.canResolve(kind, name, 'rw')
-          const rawEntry = entry as Record<string, unknown>
-          const roProbe = probeOf(rawEntry.ro)
-          if (roProbe !== undefined) roStatus.probe = roProbe
-          const rwProbe = probeOf(rawEntry.rw)
-          if (rwProbe !== undefined) rwStatus.probe = rwProbe
-          result.push({ kind, name, envelope, tiers: { ro: roStatus, rw: rwStatus } })
-        }
+      for (const entry of entries) {
+        if (!providers.has(entry.kind)) continue
+        const roStatus = await handle.canResolve(entry.kind, entry.name, 'ro')
+        const rwStatus = await handle.canResolve(entry.kind, entry.name, 'rw')
+        if (entry.tiers.ro?.probe !== undefined) roStatus.probe = entry.tiers.ro.probe
+        if (entry.tiers.rw?.probe !== undefined) rwStatus.probe = entry.tiers.rw.probe
+        result.push({ kind: entry.kind, name: entry.name, envelope: entry.envelope, tiers: { ro: roStatus, rw: rwStatus } })
       }
       return result
     },
@@ -723,28 +649,22 @@ export function apply(ctx: Context, config: Config): void {
     async getEntry(kind: string, profileName: string, tier: 'ro' | 'rw'): Promise<{ fields: Record<string, unknown>, fileFields: Record<string, boolean>, displayName?: string, description?: string, environment?: string } | null> {
       const provider = providers.get(kind)
       if (!provider) return null
-      let registry: Registry | null
+      let loaded: BackendTier | null
       try {
-        registry = await loadRegistry(registryFile)
+        loaded = await backend.loadTier(kind, profileName, tier, { materialize: false })
       } catch {
-        // Registry file unreadable/corrupt → the entry is unknowable; getEntry
+        // Source unreadable/corrupt → the entry is unknowable; getEntry
         // reports null (not found) rather than failing the caller's whole flow.
         return null
       }
-      if (registry === null) return null
-      const entry = registry[kind]?.[profileName]
-      if (!isPlainObject(entry)) return null
-      const parent = entry as Record<string, unknown>
-      const raw = parent[tier]
-      if (!isPlainObject(raw)) return null
-      // Return the tier's NON-file fields plus the parent's envelope. File
+      if (loaded === null) return null
+      // Return the tier's NON-file fields plus the entry's envelope. File
       // fields (credential content) are write-only after save: content is
       // never read back — not even the managed path — only the set status
       // rides along so the UI can render "已保存，粘贴新内容以覆盖". This
       // keeps stored credentials unreachable for anyone (or anything) that
       // can merely reach the admin routes.
-      const { name: displayName, description, environment } = parent
-      const fields: Record<string, unknown> = { ...(raw as Record<string, unknown>) }
+      const fields: Record<string, unknown> = { ...loaded.fields }
       const fileFields: Record<string, boolean> = {}
       for (const ff of provider.fileFields ?? []) {
         const stored = fields[ff]
@@ -752,9 +672,9 @@ export function apply(ctx: Context, config: Config): void {
         delete fields[ff]
       }
       const result: { fields: Record<string, unknown>, fileFields: Record<string, boolean>, displayName?: string, description?: string, environment?: string } = { fields, fileFields }
-      if (typeof displayName === 'string') result.displayName = displayName
-      if (typeof description === 'string') result.description = description
-      if (typeof environment === 'string') result.environment = environment
+      if (loaded.envelope.name !== undefined) result.displayName = loaded.envelope.name
+      if (loaded.envelope.description !== undefined) result.description = loaded.envelope.description
+      if (loaded.envelope.environment !== undefined) result.environment = loaded.envelope.environment
       return result
     },
   }
@@ -959,15 +879,14 @@ export function apply(ctx: Context, config: Config): void {
             // from the UI (getEntry withholds them), so an edit request
             // cannot carry them. Carry over the stored path for any declared
             // file field the request omits — otherwise the tier-replace
-            // write would silently drop the credential.
+            // write would silently drop the credential. (materialize: false
+            // — the path alone is what gets carried.)
             if (provider?.fileFields?.length) {
-              const existing = await loadRegistry(registryFile)
-              const existingEntry = existing?.[kind]?.[name]
-              const existingTier = isPlainObject(existingEntry) ? (existingEntry as Record<string, unknown>)[tier] : undefined
-              if (isPlainObject(existingTier)) {
+              const existing = await backend.loadTier(kind, name, tier, { materialize: false }).catch(() => null)
+              if (existing !== null) {
                 for (const ff of provider.fileFields) {
-                  if (entryFields[ff] === undefined && typeof (existingTier as Record<string, unknown>)[ff] === 'string') {
-                    entryFields[ff] = (existingTier as Record<string, unknown>)[ff]
+                  if (entryFields[ff] === undefined && typeof existing.fields[ff] === 'string') {
+                    entryFields[ff] = existing.fields[ff]
                   }
                 }
               }

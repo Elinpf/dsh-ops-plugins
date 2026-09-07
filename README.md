@@ -89,6 +89,42 @@ dsh --profile ops --dump-config | grep -A2 'id: session-reference'  # should car
 
 Then start an ops session in the web UI: `list_access` lists your profiles, `kubectl` resolves them, the trace panel renders, rw credential use raises an approval request.
 
+## Central credential hub (optional)
+
+By default credentials live in a local YAML registry on the dsh host. For a centralized store — one place to register, rotate, and audit credentials — run `@elinpf/dsh-ops-access-hub`, a standalone service (not a dsh plugin) that keeps every credential in a single AES-256-GCM-encrypted document and serves it over a small token-authenticated HTTP API with a built-in web UI.
+
+1. Run the hub:
+
+   ```sh
+   npx @elinpf/dsh-ops-access-hub serve
+   ```
+
+   Options (flag / env / default): `--port` / `ACCESS_HUB_PORT` / `3090`; `--host` / `ACCESS_HUB_HOST` / `127.0.0.1`; `--data-dir` / `ACCESS_HUB_DATA_DIR` / `~/.dsh-ops-hub`; `--key-file` / `ACCESS_HUB_KEY_FILE` / `<data-dir>/hub.key`; `--admin-token` / `ACCESS_HUB_ADMIN_TOKEN` and `--read-token` / `ACCESS_HUB_READ_TOKEN` / generated and printed once on first start when unset. The master key comes from `ACCESS_HUB_KEY` (base64/hex) or the key file (auto-generated, mode 0600).
+
+2. Migrate an existing YAML registry into the hub (path-shaped field values are inlined as file content):
+
+   ```sh
+   npx @elinpf/dsh-ops-access-hub import ~/.dsh-ops/access.yaml \
+     --url http://127.0.0.1:3090 --admin-token <admin token>
+   ```
+
+   Offline alternative: `--data-dir <dir>` instead of `--url` writes the hub's data file directly.
+
+3. Point ops-access at the hub by adding a config row to `~/.dsh/profiles/ops/cordis.patch.yml`:
+
+   ```yaml
+   - id: ops-access
+     config:
+       source: hub
+       hubUrl: http://127.0.0.1:3090
+       hubToken: <read token>          # or set env ACCESS_HUB_READ_TOKEN
+       hubAdminToken: <admin token>    # or set env ACCESS_HUB_ADMIN_TOKEN
+   ```
+
+   Restart the profile afterwards. File-field contents are pulled from the hub per resolve and materialized to local files under `~/.dsh-ops/credentials` (mode 0600); profiles still carry only paths, and the access gate, probes, admin UI, and tools behave exactly as in YAML mode.
+
+Security notes: v1 speaks plain HTTP — keep the default loopback bind or put the hub behind a TLS-terminating reverse proxy. The hub is a single point of custody: back up both the data file and the master key. The local YAML mode remains available as a fallback at any time.
+
 ## Having an agent install it
 
 Paste this into any dsh session and let the agent run the installation and deployment for you:
