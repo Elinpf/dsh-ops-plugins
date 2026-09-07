@@ -26,12 +26,22 @@ declare module '@deepseek-ai/cordis' {
     // the ui half (ops-trace-ui) calls register. Splitting the declaration
     // across packages would make the two augmentations conflict on merge.
     sessionProjections?: {
+      // Dual-contract definition: dsh ≤0.1.0-rc.8 reads `schema` + top-level
+      // `view`; dsh ≥0.1.1 reads `stateSchema` + `wire` and SILENTLY drops
+      // wire-less units from snapshots and push frames (register erases the
+      // definition down to stateSchema/wire without complaint). Both shapes
+      // ride along; each consumer ignores the other's fields.
       register(def: {
         key: string
         schema: unknown
+        stateSchema: unknown
         init: () => ForestState | null
         apply: (state: ForestState | null, event: FoldEvent) => ForestState | null
         view: (state: ForestState | null) => ForestState | null
+        wire: {
+          viewSchema: unknown
+          view: (state: ForestState | null) => ForestState | null
+        }
         stateVersion: number
       }): () => void
       snapshot(session: { id: string }): { values: { trace?: ForestState | null } }
@@ -380,13 +390,25 @@ const traceProjectionSchema = zod.union([forestStateSchema, zod.null()])
  * The shared projection definition, registered host-plane by ops-trace-ui
  * (the panel's package) and consumed here through snapshots. One home for
  * key/schema/fold/stateVersion so the two packages can never drift apart.
+ *
+ * Dual wire contract: dsh ≤0.1.0-rc.8 reads `schema` + top-level `view`;
+ * dsh ≥0.1.1 reads `stateSchema` + `wire.{viewSchema,view}` and SILENTLY
+ * drops a wire-less unit from baselines and push frames (register() erases
+ * the definition without validating, so the old shape "worked" while staying
+ * invisible — prod 0.1.1-rc.2, 2026-09-07). Both shapes ride along; each
+ * side ignores the other's fields.
  */
 export const traceProjection = {
   key: 'trace',
   schema: traceProjectionSchema,
+  stateSchema: traceProjectionSchema,
   init: (): ForestState | null => null,
   apply: foldEvent,
   view: (s: ForestState | null): ForestState | null => s,
+  wire: {
+    viewSchema: traceProjectionSchema,
+    view: (s: ForestState | null): ForestState | null => s,
+  },
   // v4: resolve on a non-goal node folds to complete semantics (was: id
   // ignored, always closed the tree).
   // v5: resolve(goal) without force folds only when every non-root node is
