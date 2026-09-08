@@ -352,3 +352,89 @@ describe('hub source', () => {
     expect(text).not.toContain('version: 1')
   })
 })
+
+// ── Hub source × reference expansion ─────────────────────────────────────────
+// The integration point of the two features: a host entry's `cred` reference
+// must expand THROUGH the hub — the referenced credential's file-field content
+// is fetched and materialized by the same loadTier machinery as a direct
+// resolve, and metadata reads must stay write-free.
+
+describe('hub source × reference expansion', () => {
+  const credProvider: AccessProvider = {
+    kind: 'test-cred',
+    schema: zod.object({ user: zod.string().optional(), secret: zod.string().optional() }),
+    fileFields: ['secret'],
+  }
+  const hostProvider: AccessProvider = {
+    kind: 'test-host',
+    schema: zod.object({ host: zod.string(), cred: zod.string().optional(), user: zod.string().optional() }),
+    references: { cred: 'test-cred' },
+  }
+
+  let hub: MockHub
+  beforeEach(async () => {
+    hub = await startHub()
+  })
+  afterEach(async () => {
+    await hub.close()
+  })
+
+  function refSetup() {
+    const s = setup({ config: { source: 'hub', hubUrl: hub.url } })
+    s.handle.register(credProvider)
+    s.handle.register(hostProvider)
+    return s
+  }
+
+  it('resolve expands the reference through the hub and materializes the CREDENTIAL\'s file field', async () => {
+    seed(hub, 'test-cred', 'shared', 'ro', { user: 'ops', secret: 's3-content\n' })
+    seed(hub, 'test-host', 'web-1', 'ro', { host: '10.0.0.11', cred: 'shared' })
+    const { handle, credentialsDir } = refSetup()
+    const profile = await handle.resolve('test-host', 'web-1')
+    const expectedPath = `${credentialsDir}/test-cred/shared/ro/secret`
+    expect(profile.fields).toEqual({ host: '10.0.0.11', cred: 'shared', user: 'ops', secret: expectedPath })
+    expect(readFileSync(expectedPath, 'utf8')).toBe('s3-content\n')
+    expect(statSync(expectedPath).mode & 0o777).toBe(0o600)
+  })
+
+  it('the referring entry wins conflicts, on hub data too', async () => {
+    seed(hub, 'test-cred', 'shared', 'ro', { user: 'ops' })
+    seed(hub, 'test-host', 'web-2', 'ro', { host: '10.0.0.12', cred: 'shared', user: 'root' })
+    const { handle } = refSetup()
+    const profile = await handle.resolve('test-host', 'web-2')
+    expect(profile.fields.user).toBe('root')
+  })
+
+  it('canResolve expands the reference WITHOUT materializing (metadata reads write no secret files)', async () => {
+    seed(hub, 'test-cred', 'shared', 'ro', { user: 'ops', secret: 's3-content\n' })
+    seed(hub, 'test-host', 'web-1', 'ro', { host: '10.0.0.11', cred: 'shared' })
+    seed(hub, 'test-host', 'dangling', 'ro', { host: '10.0.0.13', cred: 'ghost' })
+    const { handle, credentialsDir } = refSetup()
+    expect(await handle.canResolve('test-host', 'web-1', 'ro')).toEqual({ ok: true })
+    const dangling = await handle.canResolve('test-host', 'dangling', 'ro')
+    expect(dangling.ok).toBe(false)
+    expect(dangling.error).toMatch(/references test-cred\/ghost.*access hub at/)
+    expect(existsSync(`${credentialsDir}/test-cred`)).toBe(false)
+  })
+
+  it('a dangling reference fails the referring resolve with the hub as the source', async () => {
+    seed(hub, 'test-cred', 'shared', 'ro', { user: 'ops' })
+    seed(hub, 'test-host', 'dangling', 'ro', { host: '10.0.0.13', cred: 'ghost' })
+    const { handle } = refSetup()
+    await expect(handle.resolve('test-host', 'dangling')).rejects.toThrow(
+      /entry test-host\.dangling references test-cred\/ghost.*access hub at http:\/\/127\.0\.0\.1:\d+ \(available: shared\)/,
+    )
+  })
+
+  it('reference expansion follows the served tier against the hub', async () => {
+    seed(hub, 'test-cred', 'shared', 'ro', { user: 'ops' })
+    seed(hub, 'test-cred', 'shared', 'rw', { user: 'root-rw' })
+    seed(hub, 'test-host', 'web-1', 'ro', { host: '10.0.0.11', cred: 'shared' })
+    seed(hub, 'test-host', 'web-1', 'rw', { host: '10.0.0.11', cred: 'shared' })
+    const { handle } = refSetup()
+    handle.registerBroker(() => 'rw')
+    const profile = await handle.resolve('test-host', 'web-1')
+    expect(profile.tier).toBe('rw')
+    expect(profile.fields.user).toBe('root-rw')
+  })
+})

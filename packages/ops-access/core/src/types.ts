@@ -73,6 +73,31 @@ export interface AccessProvider {
    */
   normalizeTrailingNewline?: boolean
   /**
+   * Reference fields: maps a field name to the KIND it points at (e.g. ssh's
+   * `cred` → an `ssh-cred` entry), letting many entries share one credential
+   * instead of each carrying a copy. At resolve time core expands each
+   * present reference against the SAME registry and tier: the referenced
+   * entry is validated through its own provider and its fields are merged
+   * UNDER the referring entry's (the referring entry wins conflicts, e.g. a
+   * per-host user override). One level only — a referenced entry's own
+   * reference fields are NOT expanded. The referenced profile is an
+   * implementation detail of the referring resolve: the broker is consulted
+   * once, on the referring kind/name, never on the reference. A missing or
+   * invalid reference fails the referring resolve with a pointer to both
+   * entries, and canResolve reports the same.
+   */
+  references?: Record<string, string>
+  /**
+   * Post-merge validator, run by core on the resolved fields AFTER reference
+   * expansion (and on the plain fields when the provider declares no
+   * references). Catches requirements that only hold on the merged shape —
+   * e.g. ssh needs a login user, which may come from the host entry OR from
+   * its referenced credential, so the entry schema cannot require it. Return
+   * an error message to fail the resolve, nothing to accept. Sync and
+   * structural only — same discipline as validateContent.
+   */
+  validateResolved?: (fields: Record<string, unknown>) => string | null | undefined
+  /**
    * Capability probe (ticket 10): verify the credential's REAL
    * permissions against the claimed tier. Core runs it at save time,
    * after validation (credential files are on disk by then), and stores

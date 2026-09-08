@@ -209,6 +209,199 @@ test:
   })
 })
 
+// ── reference expansion (resolve-time credential merge) ─────────────────────
+
+describe('reference expansion', () => {
+  const credProviderFixture: AccessProvider = {
+    kind: 'test-cred',
+    schema: zod.object({ user: zod.string().optional(), secret: zod.string().optional() }),
+  }
+  const hostProvider: AccessProvider = {
+    kind: 'test-host',
+    schema: zod.object({ host: zod.string(), cred: zod.string().optional(), user: zod.string().optional() }),
+    references: { cred: 'test-cred' },
+  }
+  const REF_REGISTRY = `version: 1
+test-cred:
+  shared:
+    ro:
+      user: ops
+      secret: s3
+test-host:
+  web-1:
+    ro:
+      host: 10.0.0.11
+      cred: shared
+  web-2:
+    ro:
+      host: 10.0.0.12
+      cred: shared
+      user: root
+  dangling:
+    ro:
+      host: 10.0.0.13
+      cred: ghost
+`
+
+  function setupRefs() {
+    const h = setup()
+    h.handle.register(credProviderFixture)
+    h.handle.register(hostProvider)
+    h.write(REF_REGISTRY)
+    return h
+  }
+
+  it('resolve merges the referenced entry UNDER the referring one — registered once, shared by many', async () => {
+    const { handle } = setupRefs()
+    const profile = await handle.resolve('test-host', 'web-1')
+    expect(profile.fields).toEqual({ host: '10.0.0.11', cred: 'shared', user: 'ops', secret: 's3' })
+  })
+
+  it('the referring entry wins conflicts (per-host user override)', async () => {
+    const { handle } = setupRefs()
+    const profile = await handle.resolve('test-host', 'web-2')
+    expect(profile.fields).toEqual({ host: '10.0.0.12', cred: 'shared', user: 'root', secret: 's3' })
+  })
+
+  it('expansion follows the served tier: an rw grant merges the credential\'s rw tier', async () => {
+    const { handle, write } = setupRefs()
+    write(`version: 1
+test-cred:
+  shared:
+    ro:
+      user: ops
+    rw:
+      user: root-rw
+test-host:
+  web-1:
+    ro:
+      host: 10.0.0.11
+      cred: shared
+    rw:
+      host: 10.0.0.11
+      cred: shared
+`)
+    handle.registerBroker(() => 'rw')
+    const profile = await handle.resolve('test-host', 'web-1')
+    expect(profile.tier).toBe('rw')
+    expect(profile.fields.user).toBe('root-rw')
+  })
+
+  it('the broker is consulted once, on the referring kind/name — never on the reference', async () => {
+    const { handle } = setupRefs()
+    const calls: Array<[string, string]> = []
+    handle.registerBroker((kind, name) => { calls.push([kind, name]); return 'ro' })
+    await handle.resolve('test-host', 'web-1')
+    expect(calls).toEqual([['test-host', 'web-1']])
+  })
+
+  it('a dangling reference fails the referring resolve with a pointer to both entries', async () => {
+    const { handle } = setupRefs()
+    await expect(handle.resolve('test-host', 'dangling')).rejects.toThrow(/test-host\.dangling references test-cred\/ghost.*available: shared/)
+  })
+
+  it('a reference to an unregistered kind fails with a clear error', async () => {
+    const { handle, write } = setup()
+    handle.register(hostProvider)
+    write('test-host:\n  web-1:\n    ro:\n      host: 10.0.0.11\n      cred: shared\n')
+    await expect(handle.resolve('test-host', 'web-1')).rejects.toThrow(/no provider is registered for kind "test-cred"/)
+  })
+
+  it('one level only: a referenced entry\'s own reference fields are NOT expanded', async () => {
+    const { handle, write } = setup()
+    const chained: AccessProvider = {
+      kind: 'test-chained',
+      schema: zod.object({ cred: zod.string().optional(), value: zod.string().optional() }),
+      references: { cred: 'test-cred' },
+    }
+    handle.register(credProviderFixture)
+    handle.register(chained)
+    handle.register({ ...hostProvider, references: { cred: 'test-chained' } })
+    write(`version: 1
+test-cred:
+  shared:
+    ro:
+      secret: s3
+test-chained:
+  mid:
+    ro:
+      cred: shared
+      value: mid
+test-host:
+  web-1:
+    ro:
+      host: 10.0.0.11
+      cred: mid
+`)
+    const profile = await handle.resolve('test-host', 'web-1')
+    // mid's own `cred: shared` stays a literal field — no transitive pull of secret.
+    expect(profile.fields).toEqual({ host: '10.0.0.11', cred: 'mid', value: 'mid' })
+    expect(profile.fields.secret).toBeUndefined()
+  })
+
+  it('a non-string reference value fails with a field-level message (schemas that do not type the field)', async () => {
+    const { handle, write } = setup()
+    handle.register(credProviderFixture)
+    handle.register({
+      kind: 'test-host',
+      schema: zod.object({ host: zod.string(), cred: zod.unknown().optional() }),
+      references: { cred: 'test-cred' },
+    })
+    write('test-cred:\n  shared:\n    ro:\n      secret: s3\ntest-host:\n  web-1:\n    ro:\n      host: 10.0.0.11\n      cred: 42\n')
+    await expect(handle.resolve('test-host', 'web-1')).rejects.toThrow(/field "cred" must be a non-empty string naming a test-cred profile/)
+  })
+
+  it('validateResolved runs on the merged shape — requirements spanning entry and credential', async () => {
+    const { handle, write } = setup()
+    handle.register(credProviderFixture)
+    handle.register({
+      ...hostProvider,
+      validateResolved: (fields) => (typeof fields.user === 'string' ? null : 'no login user'),
+    })
+    write('test-host:\n  web-1:\n    ro:\n      host: 10.0.0.11\n')
+    await expect(handle.resolve('test-host', 'web-1')).rejects.toThrow(/no login user/)
+
+    write(`version: 1
+test-cred:
+  shared:
+    ro:
+      user: ops
+test-host:
+  web-1:
+    ro:
+      host: 10.0.0.11
+      cred: shared
+`)
+    const profile = await handle.resolve('test-host', 'web-1')
+    expect(profile.fields.user).toBe('ops')
+  })
+
+  it('the referenced kind still resolves on its own', async () => {
+    const { handle } = setupRefs()
+    const profile = await handle.resolve('test-cred', 'shared')
+    expect(profile.fields).toEqual({ user: 'ops', secret: 's3' })
+  })
+
+  it('list() surfaces the expanded shape too', async () => {
+    const { handle, write } = setupRefs()
+    // list() fails loudly on any unexpandable entry (same discipline as a
+    // schema-invalid entry) — use the registry without the dangling one.
+    write(REF_REGISTRY.replace(/  dangling:[\s\S]*$/, ''))
+    const profiles = await handle.list()
+    const web1 = profiles.find((p) => p.kind === 'test-host' && p.name === 'web-1')
+    expect(web1?.fields).toMatchObject({ user: 'ops', secret: 's3' })
+  })
+
+  it('canResolve reports a dangling reference — grants are never approved against undeliverable resolves', async () => {
+    const { handle } = setupRefs()
+    const ok = await handle.canResolve('test-host', 'web-1', 'ro')
+    expect(ok.ok).toBe(true)
+    const dangling = await handle.canResolve('test-host', 'dangling', 'ro')
+    expect(dangling.ok).toBe(false)
+    expect(dangling.error).toMatch(/references test-cred\/ghost/)
+  })
+})
+
 // ── list ─────────────────────────────────────────────────────────────────────
 
 describe('list', () => {

@@ -56,10 +56,37 @@ describe('entry schema', () => {
     expect(plugin.entrySchema.safeParse({ host: '10.0.0.11', user: 'ops', key: '~/.ssh/id_ed25519', port: 22 }).success).toBe(true)
   })
 
-  it('rejects a missing host or user', () => {
+  it('accepts a host-only entry — user may come from the referenced credential', () => {
+    expect(plugin.entrySchema.safeParse({ host: '10.0.0.11', cred: 'ops-default' }).success).toBe(true)
+  })
+
+  it('rejects a missing host or a non-number port', () => {
     expect(plugin.entrySchema.safeParse({ user: 'ops' }).success).toBe(false)
-    expect(plugin.entrySchema.safeParse({ host: '10.0.0.11' }).success).toBe(false)
     expect(plugin.entrySchema.safeParse({ host: '10.0.0.11', user: 'ops', port: '22' }).success).toBe(false)
+  })
+
+  it('validateResolved: the merged profile must end up with a login user', () => {
+    expect(plugin.provider.validateResolved?.({ host: '10.0.0.11' })).toMatch(/no login user/)
+    expect(plugin.provider.validateResolved?.({ host: '10.0.0.11', user: 'ops' })).toBeNull()
+  })
+})
+
+// ── ssh-cred schema ──────────────────────────────────────────────────────────
+
+describe('ssh-cred entry schema', () => {
+  it('accepts a key credential and a password credential', () => {
+    expect(plugin.credEntrySchema.safeParse({ user: 'ops', key: '~/.ssh/id_ed25519' }).success).toBe(true)
+    expect(plugin.credEntrySchema.safeParse({ user: 'admin', password: '/run/secrets/netdevice-pw' }).success).toBe(true)
+  })
+
+  it('rejects an empty credential — it would fail every referencing host at connection time', () => {
+    expect(plugin.credEntrySchema.safeParse({ user: 'ops' }).success).toBe(false)
+    expect(plugin.credEntrySchema.safeParse({}).success).toBe(false)
+  })
+
+  it('registers under kind ssh-cred with both secret fields declared as file fields', () => {
+    expect(plugin.credProvider.kind).toBe('ssh-cred')
+    expect(plugin.credProvider.fileFields).toEqual(['key', 'password'])
   })
 })
 
@@ -82,6 +109,18 @@ describe('process', () => {
   it('omits optional fields when absent', () => {
     const fields = plugin.provider.process!({ host: '10.0.0.11', user: 'ops' }, 'node-1')
     expect(fields).toEqual({ host: '10.0.0.11', user: 'ops' })
+  })
+
+  it('passes cred and password through, expanding ~ on the password path', () => {
+    process.env.HOME = '/home/tester'
+    const fields = plugin.provider.process!({ host: '10.0.0.11', cred: 'ops-default', password: '~/pw' }, 'node-1')
+    expect(fields).toEqual({ host: '10.0.0.11', cred: 'ops-default', password: '/home/tester/pw' })
+  })
+
+  it('ssh-cred process expands ~ in key and password', () => {
+    process.env.HOME = '/home/tester'
+    const fields = plugin.credProvider.process!({ user: 'ops', key: '~/.ssh/id_ed25519', password: '~/pw' }, 'shared')
+    expect(fields).toEqual({ user: 'ops', key: '/home/tester/.ssh/id_ed25519', password: '/home/tester/pw' })
   })
 })
 
@@ -112,19 +151,18 @@ describe('apply', () => {
     return { ctx, registered, effectCleanups, getInjectedDeps: () => injectedDeps }
   }
 
-  it('defers through ctx.inject and registers once opsAccess arrives', () => {
+  it('defers through ctx.inject and registers both providers once opsAccess arrives', () => {
     const { ctx, registered, effectCleanups, getInjectedDeps } = makeCtx()
     plugin.apply(ctx, { validateTimeoutMs: 5000 })
     expect(getInjectedDeps()).toEqual(['opsAccess'])
-    expect(registered).toHaveLength(1)
-    expect(registered[0].kind).toBe(plugin.provider.kind)
-    expect(effectCleanups).toHaveLength(1)
+    expect(registered.map((p) => p.kind)).toEqual(['ssh', 'ssh-cred'])
+    expect(effectCleanups).toHaveLength(2)
   })
 
-  it('HMR unload: running every effect disposer removes the provider from the registry', () => {
+  it('HMR unload: running every effect disposer removes both providers from the registry', () => {
     const { ctx, registered, effectCleanups } = makeCtx()
     plugin.apply(ctx, { validateTimeoutMs: 5000 })
-    expect(registered).toHaveLength(1)
+    expect(registered).toHaveLength(2)
     for (const dispose of effectCleanups) dispose()
     expect(registered).toHaveLength(0)
   })
@@ -188,5 +226,14 @@ describe('validateContent', () => {
 
   it('ignores non-file fields', async () => {
     expect(await plugin.provider.validateContent?.('host', 'anything')).toBeNull()
+  })
+
+  it('password: accepts a single line, rejects interior newlines (sshpass -f reads only the first line)', async () => {
+    expect(await plugin.credProvider.validateContent?.('password', 'S3cret!@#\n')).toBeNull()
+    expect(await plugin.credProvider.validateContent?.('password', 'line1\nline2\n')).toMatch(/single line/)
+  })
+
+  it('declares the cred → ssh-cred reference for core expansion', () => {
+    expect(plugin.provider.references).toEqual({ cred: 'ssh-cred' })
   })
 })

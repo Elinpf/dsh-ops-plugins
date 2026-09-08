@@ -411,3 +411,44 @@ describe('full scenario', () => {
     expect(state!.resolved).toBe(true)
   })
 })
+
+// ── Wire contract (dsh version compatibility) ───────────────────────────────
+
+describe('traceProjection wire contract', () => {
+  // dsh 0.1.1 changed the session-projection contract: register() now reads
+  // `stateSchema` + `wire.{viewSchema,view}` and SILENTLY drops wire-less
+  // units from baselines and push frames. The definition must carry BOTH
+  // shapes (≤0.1.0-rc.8 reads `schema`/top-level `view`) — regression guard
+  // for the prod incident of 2026-09-07 (dsh 0.1.1-rc.2, panel never showed).
+  it('carries both the legacy (schema/view) and the 0.1.1 (stateSchema/wire) shapes', async () => {
+    const { traceProjection } = await import('../src/index.ts')
+    expect(traceProjection.key).toBe('trace')
+    // legacy shape (dsh ≤0.1.0-rc.8)
+    expect(traceProjection.schema).toBeDefined()
+    expect(typeof traceProjection.view).toBe('function')
+    // 0.1.1 shape — without `wire` the unit is invisible on the wire
+    expect(traceProjection.stateSchema).toBeDefined()
+    expect(traceProjection.wire).toBeDefined()
+    expect(traceProjection.wire.viewSchema).toBeDefined()
+    expect(typeof traceProjection.wire.view).toBe('function')
+    expect(traceProjection.stateVersion).toBe(5)
+  })
+
+  it('both schema paths parse a folded forest, and both views are identity', async () => {
+    const { traceProjection } = await import('../src/index.ts')
+    const forest = foldForest([
+      { turn: 1, args: { action: 'create_tree', goal_title: 'wire contract' } },
+      { turn: 1, args: { action: 'add_step', id: 's1', parent_id: 'goal', title: 'step' } },
+    ])
+    expect(forest).not.toBeNull()
+    // stateSchema (stored-state validation) and wire.viewSchema (outbound
+    // view validation) both accept the folded state; both views pass it
+    // through unchanged.
+    expect(() => (traceProjection.stateSchema as { parse: (v: unknown) => unknown }).parse(forest)).not.toThrow()
+    const viewed = traceProjection.wire.view(forest)
+    expect(viewed).toBe(forest)
+    expect(() => (traceProjection.wire.viewSchema as { parse: (v: unknown) => unknown }).parse(viewed)).not.toThrow()
+    expect(traceProjection.view(forest)).toBe(forest)
+    expect(() => (traceProjection.schema as { parse: (v: unknown) => unknown }).parse(traceProjection.view(forest))).not.toThrow()
+  })
+})

@@ -43,25 +43,45 @@ export function apply(ctx: Context, config: SshToolConfig): void {
     name: 'ssh',
     kind: 'ssh',
     targetParam: 'host',
-    description: 'Run a command on a remote host over SSH, using a registered ssh access profile (key, port, user@host injected automatically). Non-interactive: BatchMode is on, so anything that would prompt fails fast. Use list_access to see available host names.',
+    description: 'Run a command on a remote host over SSH, using a registered ssh access profile (credential — key from the profile or its referenced ssh-cred, port, user@host injected automatically; password profiles run through sshpass). Non-interactive: key auth uses BatchMode so anything that would prompt fails fast, password auth allows exactly one prompt answered by sshpass. Use list_access to see available host names.',
     targetParamDescription: 'SSH host profile name. Use list_access to see options.',
     commandDescription: 'Command to run on the remote host, e.g. "systemctl status ceph-osd@3". The whole string is passed as ONE shell-quoted argument and run by the remote shell: pipes, redirects, &&, ; and $() all execute on the REMOTE host — nothing is interpreted locally.',
     buildCommand(fields, command, ref) {
-      const { host, user, key, port } = fields as {
-        host: string, user: string, key?: string, port?: number
+      const { host, user, key, port, password } = fields as {
+        host: string, user?: string, key?: string, port?: number, password?: string
       }
-      // BatchMode: never prompt (password/passphrase) — fail fast instead.
-      // accept-new: trust a host key on first contact, refuse changed ones —
-      // ops hosts are reached by name from the registry, not typed by hand.
-      const opts = ['-o BatchMode=yes', `-o ConnectTimeout=${config.connectTimeoutSeconds}`, '-o StrictHostKeyChecking=accept-new']
-      // Only the key path gets a credential token; user@host/port stay inline.
-      if (key !== undefined) opts.push(`-i ${ref('key')}`)
-      if (port !== undefined) opts.push(`-p ${port}`)
+      // user may live on the referenced ssh-cred entry — core's reference
+      // expansion has already merged it in; core's validateResolved rejects
+      // user-less profiles at resolve time, so this is a belt-and-braces guard.
+      if (typeof user !== 'string' || user.length === 0) {
+        throw new Error('profile "' + String(fields.cred ?? host) + '" resolved without a login user — set user on the host entry or on its referenced ssh-cred entry')
+      }
+      const connOpts = [`-o ConnectTimeout=${config.connectTimeoutSeconds}`, '-o StrictHostKeyChecking=accept-new']
       // The remote command goes out as ONE single-quoted argument: sshd
       // re-runs it through the remote shell, where &&, pipes, redirects and
       // $() all belong. Left unquoted, the LOCAL shell would split the line
       // and run the later segments here as root (2026-08-27 near-miss).
-      return `ssh ${opts.join(' ')} ${user}@${host} ${shellQuote(command)}`
+      const target = `${user}@${host} ${shellQuote(command)}`
+      // Password auth: sshpass answers sshd's prompt with the first line of
+      // the password file. BatchMode must stay OFF — it suppresses the very
+      // prompt sshpass exists to answer. NumberOfPasswordPrompts=1 keeps a
+      // wrong password failing fast instead of looping; PubkeyAuthentication=no
+      // keeps a stray local key from silently winning over the intended
+      // password path. Requires sshpass installed on the dsh host.
+      if (password !== undefined) {
+        const opts = ['-o PreferredAuthentications=password', '-o PubkeyAuthentication=no', '-o NumberOfPasswordPrompts=1', ...connOpts]
+        if (port !== undefined) opts.push(`-p ${port}`)
+        return `sshpass -f ${ref('password')} ssh ${opts.join(' ')} ${target}`
+      }
+      // Key auth (or agent): BatchMode: never prompt (password/passphrase) —
+      // fail fast instead. accept-new: trust a host key on first contact,
+      // refuse changed ones — ops hosts are reached by name from the
+      // registry, not typed by hand. Only the key path gets a credential
+      // token; user@host/port stay inline.
+      const opts = ['-o BatchMode=yes', ...connOpts]
+      if (key !== undefined) opts.push(`-i ${ref('key')}`)
+      if (port !== undefined) opts.push(`-p ${port}`)
+      return `ssh ${opts.join(' ')} ${target}`
     },
   })
 }

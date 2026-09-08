@@ -82,6 +82,7 @@ interface AccessBackend {
 - `putTier`：对 fileField 读本地受管文件内容上传（读不到则失败 loud——hub 上留半份凭证不如不写）；路径永不出本机。
 - `deleteTier`：DELETE 后重新 list 判断整条是否连带删除，决定本地受管目录的清理范围。
 - 每次调用都打 hub；404 → null，其余失败带 hub 的错误消息抛出（hub 错误不含字段值）；token 走 Authorization 头，不进错误文本、不进日志。
+- 引用展开（ADR-0007 的 `references`）对被引用条目也走 `loadTier`：hub 模式下被引用凭证（如 ssh-cred）的内容在展开时抓取+物化，`materialize` 标志随调用方传递——resolve 展开即物化，canResolve/list 展开只拿将然路径。
 
 ## envelope 合并语义
 

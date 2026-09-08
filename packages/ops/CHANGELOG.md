@@ -1,5 +1,25 @@
 # @elinpf/dsh-ops
 
+## 0.1.7
+
+### Patch Changes
+
+- Updated dependencies [e004cd5]
+  - @elinpf/dsh-ops-tool-trace@0.1.7
+  - @elinpf/dsh-ops-trace-ui@0.1.7
+  - @elinpf/dsh-ops-access-ui@0.1.7
+  - @elinpf/dsh-ops-access-ceph@0.1.7
+  - @elinpf/dsh-ops-access@0.1.7
+  - @elinpf/dsh-ops-access-gate@0.1.7
+  - @elinpf/dsh-ops-access-k8s@0.1.7
+  - @elinpf/dsh-ops-access-ssh@0.1.7
+  - @elinpf/dsh-ops-panel@0.1.7
+  - @elinpf/dsh-ops-prompts@0.1.7
+  - @elinpf/dsh-ops-tool-ceph@0.1.7
+  - @elinpf/dsh-ops-tool-environment@0.1.7
+  - @elinpf/dsh-ops-tool-kubectl@0.1.7
+  - @elinpf/dsh-ops-tool-ssh@0.1.7
+
 ## 0.1.6
 
 ### Patch Changes

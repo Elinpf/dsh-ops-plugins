@@ -1,14 +1,16 @@
 # @elinpf/dsh-ops-tool-ssh
 
-The `ssh` tool for DeepSeek Harness ops mode — runs a command on a remote host over SSH, using a registered ssh access profile (key, port, user@host injected automatically).
+The `ssh` tool for DeepSeek Harness ops mode — runs a command on a remote host over SSH, using a registered ssh access profile (credential, port, user@host injected automatically). Supports key auth and password auth (via `sshpass`).
 
 ## What it does
 
-A consumer of the ops-access credential seam: the model calls `ssh` with a profile name and a command; the plugin resolves the profile through `opsAccess` and runs the command via `ctx.shell`. `BatchMode=yes` makes anything that would prompt fail fast, and `StrictHostKeyChecking=accept-new` trusts a host key on first contact while refusing changed ones. Use `list_access` to see available host names.
+A consumer of the ops-access credential seam: the model calls `ssh` with a profile name and a command; the plugin resolves the profile through `opsAccess` and runs the command via `ctx.shell`. The profile's credential usually comes from a referenced `ssh-cred` entry (registered once, shared by many hosts); the merge has already happened at resolve time, so this tool only ever sees flat fields.
 
+- **Key auth** (default): `BatchMode=yes` makes anything that would prompt fail fast, and `StrictHostKeyChecking=accept-new` trusts a host key on first contact while refusing changed ones.
+- **Password auth** (profile carries `password`): runs through `sshpass -f <password-file>` with `PreferredAuthentications=password`, `PubkeyAuthentication=no`, and `NumberOfPasswordPrompts=1` — BatchMode must stay OFF, since it would suppress the very prompt sshpass exists to answer. Requires `sshpass` installed on the dsh host. Meant for network devices and other appliances that only offer password login.
 - The remote command is passed as ONE single-quoted argument — pipes, redirects, `&&`, `;` and `$()` all execute on the REMOTE host; the local shell never splits the line (an unquoted `&&` chain once came one auth failure short of deleting control-plane manifests locally, 2026-08-27 near-miss).
-- Only the key path gets a per-call credential token; user@host and port stay inline. The display command (model-visible, logged) keeps tokens — only the executed command carries real values.
-- Signal deaths (null exitCode) are normalized to exitCode -1, with the cause surfaced in `error`.
+- Only the key/password path gets a per-call credential token; user@host and port stay inline. The display command (model-visible, logged) keeps tokens — only the executed command carries real values.
+- Signal deaths (null exitCode) are normalized to exitCode -1, with the cause surfaced in `error`. Use `list_access` to see available host names.
 
 ## Design
 

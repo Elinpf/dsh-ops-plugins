@@ -201,6 +201,62 @@ function buildProfile(provider: AccessProvider, kind: string, profileName: strin
   return profile
 }
 
+/**
+ * The final step of building a profile: expand the provider's declared
+ * reference fields through the SAME backend and tier, then run the
+ * provider's post-merge validation. Referenced fields are merged UNDER the
+ * referring entry's (the referring entry wins conflicts — e.g. a per-host
+ * user override of a shared credential's default user). One level only: a
+ * referenced entry's own reference fields are not expanded. The broker is
+ * NOT consulted for the reference — it is an implementation detail of the
+ * referring resolve, which was already gated.
+ *
+ * References load through the backend (`loadTier`), so in hub mode the
+ * referenced credential's file-field content is fetched and materialized by
+ * the same machinery as a direct resolve — `materialize` propagates the
+ * caller's intent (resolve issues credentials → write the files; canResolve/
+ * list are metadata reads → paths only, nothing touches disk). Shared by
+ * resolve, canResolve, and list so all three see the same resolved shape.
+ */
+async function finalizeProfile(
+  backend: AccessBackend,
+  providers: ReadonlyMap<string, AccessProvider>,
+  provider: AccessProvider,
+  profile: AccessProfile,
+  opts: { materialize: boolean },
+): Promise<AccessProfile> {
+  if (provider.references) {
+    const merged: Record<string, unknown> = {}
+    let any = false
+    for (const [field, refKind] of Object.entries(provider.references)) {
+      const refName = profile.fields[field]
+      if (refName === undefined) continue
+      if (typeof refName !== 'string' || refName.length === 0) {
+        throw new Error(`ops-access: entry ${profile.kind}.${profile.name} ${profile.tier} field "${field}" must be a non-empty string naming a ${refKind} profile`)
+      }
+      const refProvider = providers.get(refKind)
+      if (!refProvider) {
+        throw new Error(`ops-access: entry ${profile.kind}.${profile.name} references ${refKind}/${refName}, but no provider is registered for kind "${refKind}"`)
+      }
+      const loaded = await backend.loadTier(refKind, refName, profile.tier, { materialize: opts.materialize })
+      if (loaded === null) {
+        const entries = await backend.listEntries().catch(() => [] as BackendEntry[])
+        const available = entries.filter((e) => e.kind === refKind).map((e) => e.name).sort()
+        throw new Error(`ops-access: entry ${profile.kind}.${profile.name} references ${refKind}/${refName}, which has no ${profile.tier} tier in ${backend.label} (available: ${available.join(', ') || '(none)'})`)
+      }
+      const refProfile = buildProfile(refProvider, refKind, refName, profile.tier, loaded.fields, backend.label, loaded.envelope)
+      Object.assign(merged, refProfile.fields)
+      any = true
+    }
+    if (any) profile.fields = { ...merged, ...profile.fields }
+  }
+  const problem = provider.validateResolved?.(profile.fields)
+  if (problem) {
+    throw new Error(`ops-access: invalid entry ${profile.kind}.${profile.name} in ${backend.label}: ${problem}`)
+  }
+  return profile
+}
+
 /** Read the full HTTP request body as a string. */
 function readRequestBody(req: { on: (event: string, cb: (chunk?: Buffer | string) => void) => void }): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -451,10 +507,13 @@ export function apply(ctx: Context, config: Config): void {
       // Run the same buildProfile validation resolve would run — a precheck
       // shallower than the real issuance approves grants that cannot be
       // fulfilled. The profile itself is discarded: existence, not fields.
-      // A validation failure surfaces the reason (zod issue paths + messages,
-      // never raw field values) so the admin UI can show it.
+      // Reference expansion runs too (finalizeProfile): a dangling credential
+      // reference is exactly the kind of undeliverable resolve this precheck
+      // exists to catch. A validation failure surfaces the reason (zod issue
+      // paths + messages, never raw field values) so the admin UI can show it.
       try {
-        buildProfile(provider, kind, profileName, tier, loaded.fields, backend.label, loaded.envelope)
+        const profile = buildProfile(provider, kind, profileName, tier, loaded.fields, backend.label, loaded.envelope)
+        await finalizeProfile(backend, providers, provider, profile, { materialize: false })
         return { ok: true }
       } catch (err) {
         return { ok: false, error: String((err as Error | null)?.message ?? err) }
@@ -505,7 +564,8 @@ export function apply(ctx: Context, config: Config): void {
             : ''
         throw new Error(`ops-access: no ${tier} tier for profile "${profileName}" (kind "${kind}") in ${backend.label}${hint}`)
       }
-      return buildProfile(provider, kind, profileName, tier, loaded.fields, backend.label, loaded.envelope)
+      const profile = buildProfile(provider, kind, profileName, tier, loaded.fields, backend.label, loaded.envelope)
+      return finalizeProfile(backend, providers, provider, profile, { materialize: true })
     },
 
     async list(): Promise<AccessProfile[]> {
@@ -522,7 +582,8 @@ export function apply(ctx: Context, config: Config): void {
         if (!provider || entry.tiers.ro === undefined) continue
         const loaded = await backend.loadTier(entry.kind, entry.name, 'ro', { materialize: false }).catch(() => null)
         if (loaded === null) continue
-        profiles.push(buildProfile(provider, entry.kind, entry.name, 'ro', loaded.fields, backend.label, loaded.envelope))
+        const profile = buildProfile(provider, entry.kind, entry.name, 'ro', loaded.fields, backend.label, loaded.envelope)
+        profiles.push(await finalizeProfile(backend, providers, provider, profile, { materialize: false }))
       }
       return profiles
     },
