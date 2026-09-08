@@ -19,7 +19,7 @@ It installs as a single npm package, `@elinpf/dsh-ops`; the granular `@elinpf/ds
 
 - DeepSeek Harness ≥ 0.1.0-rc (verified on 0.1.0-rc and 0.1.1-rc.2)
 - pnpm ≥ 10
-- `kubectl` on the host with cluster network reachability; `ceph` / `ssh` as needed
+- `kubectl` on the host with cluster network reachability; `ceph` / `ssh` as needed; `sshpass` too when using password-auth ssh profiles (network devices & co.)
 
 ## Installation
 

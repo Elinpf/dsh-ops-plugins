@@ -1,14 +1,16 @@
 # @elinpf/dsh-ops-tool-ssh
 
-DeepSeek Harness 运维模式的 `ssh` 工具 — 使用已注册的 ssh 访问档案在远程主机上执行命令(密钥路径、端口、user@host 自动注入)。
+DeepSeek Harness 运维模式的 `ssh` 工具 — 使用已注册的 ssh 访问档案在远程主机上执行命令(凭证、端口、user@host 自动注入)。支持密钥登录和密码登录(经 `sshpass`)。
 
 ## 功能
 
-ops-access 凭据缝隙的消费方:模型用档案名加命令调用 `ssh`,插件经 `opsAccess` 解析档案,再经 `ctx.shell` 执行。`BatchMode=yes` 让任何需要交互的场景快速失败;`StrictHostKeyChecking=accept-new` 首次连接信任主机密钥、密钥变更则拒绝。可用 `list_access` 查看可选主机名。
+ops-access 凭据缝隙的消费方:模型用档案名加命令调用 `ssh`,插件经 `opsAccess` 解析档案,再经 `ctx.shell` 执行。档案的凭证通常来自其引用的 `ssh-cred` 条目(登记一次、多机共享)——合并在 resolve 时已完成,本工具永远只看到扁平字段。
 
+- **密钥登录**(默认):`BatchMode=yes` 让任何需要交互的场景快速失败;`StrictHostKeyChecking=accept-new` 首次连接信任主机密钥、密钥变更则拒绝。
+- **密码登录**(档案带 `password`):经 `sshpass -f <密码文件>` 执行,带 `PreferredAuthentications=password`、`PubkeyAuthentication=no`、`NumberOfPasswordPrompts=1` — BatchMode 必须关闭,因为它会压制 sshpass 赖以应答的那个提示符。要求 dsh 宿主机上装有 `sshpass`。面向只提供密码登录的网络设备等场景。
 - 远程命令作为**一个**单引号参数整体传出 — 管道、重定向、`&&`、`;`、`$()` 全部在远程主机执行,本地 shell 绝不切分这行命令(2026-08-27 险情:一条未加引号的 `&&` 链差一次认证失败就在本地删掉了控制面清单)。
-- 只有密钥路径换成按次生成的凭据 token;user@host 和端口保持内联。展示命令(模型可见、入日志)只含 token — 真正执行的命令才带真实值。
-- 信号死亡(exitCode 为 null)归一化为 -1,原因写入 `error` 字段。
+- 只有密钥/密码路径换成按次生成的凭据 token;user@host 和端口保持内联。展示命令(模型可见、入日志)只含 token — 真正执行的命令才带真实值。
+- 信号死亡(exitCode 为 null)归一化为 -1,原因写入 `error` 字段。可用 `list_access` 查看可选主机名。
 
 ## 设计
 

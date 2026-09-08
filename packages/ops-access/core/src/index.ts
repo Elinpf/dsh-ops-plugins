@@ -237,6 +237,56 @@ function buildProfile(provider: AccessProvider, kind: string, profileName: strin
   return profile
 }
 
+/**
+ * The final step of building a profile: expand the provider's declared
+ * reference fields against the same registry and tier, then run the
+ * provider's post-merge validation. Referenced fields are merged UNDER the
+ * referring entry's (the referring entry wins conflicts — e.g. a per-host
+ * user override of a shared credential's default user). One level only: a
+ * referenced entry's own reference fields are not expanded. The broker is
+ * NOT consulted for the reference — it is an implementation detail of the
+ * referring resolve, which was already gated. Shared by resolve, canResolve,
+ * and list so all three see the same resolved shape.
+ */
+function finalizeProfile(
+  registry: Registry,
+  providers: ReadonlyMap<string, AccessProvider>,
+  provider: AccessProvider,
+  profile: AccessProfile,
+  file: string,
+): AccessProfile {
+  if (provider.references) {
+    const merged: Record<string, unknown> = {}
+    let any = false
+    for (const [field, refKind] of Object.entries(provider.references)) {
+      const refName = profile.fields[field]
+      if (refName === undefined) continue
+      if (typeof refName !== 'string' || refName.length === 0) {
+        throw new Error(`ops-access: entry ${profile.kind}.${profile.name} ${profile.tier} field "${field}" must be a non-empty string naming a ${refKind} profile`)
+      }
+      const refProvider = providers.get(refKind)
+      if (!refProvider) {
+        throw new Error(`ops-access: entry ${profile.kind}.${profile.name} references ${refKind}/${refName}, but no provider is registered for kind "${refKind}"`)
+      }
+      const refEntry = registry[refKind]?.[refName]
+      const refRaw = isPlainObject(refEntry) ? (refEntry as Record<string, unknown>)[profile.tier] : undefined
+      if (!isPlainObject(refRaw)) {
+        const available = Object.keys(registry[refKind] ?? {}).sort()
+        throw new Error(`ops-access: entry ${profile.kind}.${profile.name} references ${refKind}/${refName}, which has no ${profile.tier} tier in registry file ${file} (available: ${available.join(', ') || '(none)'})`)
+      }
+      const refProfile = buildProfile(refProvider, refKind, refName, profile.tier, refRaw, file, refEntry as Record<string, unknown>)
+      Object.assign(merged, refProfile.fields)
+      any = true
+    }
+    if (any) profile.fields = { ...merged, ...profile.fields }
+  }
+  const problem = provider.validateResolved?.(profile.fields)
+  if (problem) {
+    throw new Error(`ops-access: invalid entry ${profile.kind}.${profile.name} in registry file ${file}: ${problem}`)
+  }
+  return profile
+}
+
 /** Serialize a registry back to its YAML file with the version header. */
 async function saveRegistry(file: string, registry: Registry): Promise<void> {
   const doc: Record<string, unknown> = { version: 1 }
@@ -477,8 +527,9 @@ export function apply(ctx: Context, config: Config): void {
       // admin does not need a zod message to fix a file that isn't there.
       let raw: unknown
       let parentEntry: Record<string, unknown> | undefined
+      let registry: Registry | null = null
       try {
-        const registry = await loadRegistry(registryFile)
+        registry = await loadRegistry(registryFile)
         if (registry === null) return { ok: false }
         const entry = registry[kind]?.[profileName]
         if (!isPlainObject(entry)) return { ok: false }
@@ -491,10 +542,13 @@ export function apply(ctx: Context, config: Config): void {
       // Run the same buildProfile validation resolve would run — a precheck
       // shallower than the real issuance approves grants that cannot be
       // fulfilled. The profile itself is discarded: existence, not fields.
-      // A validation failure surfaces the reason (zod issue paths + messages,
-      // never raw field values) so the admin UI can show it.
+      // Reference expansion runs too (finalizeProfile): a dangling credential
+      // reference is exactly the kind of undeliverable resolve this precheck
+      // exists to catch. A validation failure surfaces the reason (zod issue
+      // paths + messages, never raw field values) so the admin UI can show it.
       try {
-        buildProfile(provider, kind, profileName, tier, raw, registryFile, parentEntry)
+        const profile = buildProfile(provider, kind, profileName, tier, raw, registryFile, parentEntry)
+        finalizeProfile(registry, providers, provider, profile, registryFile)
         return { ok: true }
       } catch (err) {
         return { ok: false, error: String((err as Error | null)?.message ?? err) }
@@ -543,7 +597,8 @@ export function apply(ctx: Context, config: Config): void {
             : ''
         throw new Error(`ops-access: no ${tier} tier for profile "${profileName}" (kind "${kind}") in registry file ${registryFile}${hint}`)
       }
-      return buildProfile(provider, kind, profileName, tier, tierData, registryFile, entry as Record<string, unknown>)
+      const profile = buildProfile(provider, kind, profileName, tier, tierData, registryFile, entry as Record<string, unknown>)
+      return finalizeProfile(registry, providers, provider, profile, registryFile)
     },
 
     async list(): Promise<AccessProfile[]> {
@@ -560,7 +615,8 @@ export function apply(ctx: Context, config: Config): void {
           if (!isPlainObject(entry)) continue
           const roData = (entry as Record<string, unknown>).ro
           if (!isPlainObject(roData)) continue
-          profiles.push(buildProfile(provider, kind, profileName, 'ro', roData, registryFile, entry as Record<string, unknown>))
+          const profile = buildProfile(provider, kind, profileName, 'ro', roData, registryFile, entry as Record<string, unknown>)
+          profiles.push(finalizeProfile(registry, providers, provider, profile, registryFile))
         }
       }
       return profiles

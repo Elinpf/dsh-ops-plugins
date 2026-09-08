@@ -93,6 +93,47 @@ describe('ssh', () => {
     expect(value.command.endsWith('\'' + cmd + '\'')).toBe(true)
   })
 
+  it('password profile: sshpass -f answers the prompt, BatchMode stays OFF', async () => {
+    const pwProfile: AccessProfile = {
+      kind: 'ssh', name: 'switch-1', tier: 'ro',
+      fields: { host: '10.0.1.1', user: 'admin', password: '/home/test/.dsh-ops/credentials/ssh-cred/netdevice/ro/password' },
+    }
+    const h = setup({ profile: pwProfile })
+    const { value } = await h.runSsh({ host: 'switch-1', command: 'display version' })
+    expect(value.command).toBe(
+      'sshpass -f <switch-1@ro:password> ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no'
+      + ' -o NumberOfPasswordPrompts=1 -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new'
+      + ' admin@10.0.1.1 \'display version\'',
+    )
+    // The executed command carries the real path, shell-quoted; the display
+    // command and any echoed output keep the token.
+    expect(h.shellRequests[0].command).toContain("sshpass -f '/home/test/.dsh-ops/credentials/ssh-cred/netdevice/ro/password'")
+    expect(h.shellRequests[0].command).not.toContain('BatchMode')
+  })
+
+  it('password + key both present: password wins (explicit password auth is the intent)', async () => {
+    // Should not happen from a well-formed registry — but if both resolve,
+    // password is the auth method the operator explicitly configured.
+    const both: AccessProfile = {
+      kind: 'ssh', name: 'odd', tier: 'ro',
+      fields: { host: '10.0.1.2', user: 'admin', key: '/k', password: '/p' },
+    }
+    const h = setup({ profile: both })
+    const { value } = await h.runSsh({ host: 'odd', command: 'uptime' })
+    expect(value.command.startsWith('sshpass -f <odd@ro:password> ssh')).toBe(true)
+  })
+
+  it('missing user after resolve: clean error, shell untouched', async () => {
+    const noUser: AccessProfile = {
+      kind: 'ssh', name: 'broken', tier: 'ro', fields: { host: '10.0.1.3', key: '/k' },
+    }
+    const h = setup({ profile: noUser })
+    const { value } = await h.runSsh({ host: 'broken', command: 'uptime' })
+    expect(value.error).toContain('without a login user')
+    expect(value.exitCode).toBe(-1)
+    expect(h.calls.shellRun).toBe(0)
+  })
+
   it('normalizes a null exitCode (signal death) to -1', async () => {
     const h = setup({ runImpl: async () => ({ exitCode: null, stdoutText: '', stderrText: '' }) })
     const { value } = await h.runSsh({ host: 'node-1', command: 'uptime' })

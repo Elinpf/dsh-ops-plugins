@@ -7,6 +7,7 @@
 - **单注册表文件、零缓存**：每次 `resolve`/`list`/`writeEntry` 都重新读取、解析、校验 YAML — 改文件立即生效，无需重启。
 - **分层条目**：每个 profile 携带 `ro` 层（agent 默认可读）和 `rw` 层（只有注册了 broker 授权后才发放）。
 - **Provider 缝**：每种凭据类型一个 provider（`k8s`/`ceph`/`ssh` 包），只提供 zod schema 加字段处理（`~` 展开、内容校验、能力探测）。provider 通过 `registerAccessProvider(ctx, provider)` 注册 — 绝不要手写 `ctx.inject` 依赖兄弟服务，会死锁 loader。
+- **引用字段**（`references`）：provider 可声明某字段指向另一个种类的条目（ssh 的 `cred` → `ssh-cred`），让多个条目共享一份凭证而不是各自复制。resolve 时 core 把被引用条目的字段合并到引用方**之下**（同注册表、同 tier、只展开一层）；broker 只被咨询一次，针对引用方条目。`validateResolved` 是合并后的校验钩子，承载只在合并形状上成立的要求（ssh 的登录用户可来自任一侧）。悬挂引用会让引用方的 resolve 及其 `canResolve` 预检一起失败。
 - **`register_access` 工具**：agent 自助写入 ro 层的路径（rw 层始终由人通过 admin HTTP 路由管理）。
 - **Mention 支持**：`@[kind/name](dsh-access:<payload>)` mention 在 `agent/pre-step` 上被解析、重写为可读引用并注入 envelope 上下文；`GET /ops-access/list` 给浏览器的 `@` 选择器供数。编码在 `./mention` 子路径。
 - **Admin 路由**：`GET /ops-access/admin/list`、`GET /ops-access/admin/kinds`、`GET|POST|DELETE /ops-access/admin/entry` — 只出 envelope + 校验状态，绝不出字段值。

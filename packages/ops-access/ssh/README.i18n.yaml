@@ -1,4 +1,4 @@
 title: "@elinpf/dsh-ops-access-ssh"
 description:
-  zh: "ops access 接缝的 SSH 凭据 provider — 校验 ssh registry 条目并展开密钥路径"
-  en: "SSH credential provider for the ops access seam — validates ssh registry entries and expands key paths"
+  zh: "ops access 接缝的 SSH provider — ssh 主机条目 + ssh-cred 可复用凭证(密钥/密码),一份秘密多机共享"
+  en: "SSH provider for the ops access seam — ssh host entries + ssh-cred reusable credentials (key/password), one secret shared by many hosts"

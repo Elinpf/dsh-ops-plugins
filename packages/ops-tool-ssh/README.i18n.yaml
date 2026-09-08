@@ -1,4 +1,4 @@
 title: "@elinpf/dsh-ops-tool-ssh"
 description:
-  zh: "ssh 工具 — 解析 ssh 访问档案,经 ctx.shell 在远程主机执行命令"
-  en: "ssh tool — resolves ssh access profiles and runs commands on remote hosts via ctx.shell"
+  zh: "ssh 工具 — 解析 ssh 访问档案,经 ctx.shell 在远程主机执行命令(密钥或 sshpass 密码登录)"
+  en: "ssh tool — resolves ssh access profiles and runs commands on remote hosts via ctx.shell (key or sshpass password auth)"
