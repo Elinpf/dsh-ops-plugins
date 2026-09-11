@@ -141,6 +141,39 @@ export function createIdleRule(latch: ReminderLatch, gapSteps = 5): (ctx: Remind
 }
 
 /**
+ * The stale-step rule: nudge when open steps (pending / in_progress) have
+ * gone untouched for N turns while the investigation moved on. The idle
+ * rule only notices total SILENCE; it cannot see a tree that is being
+ * updated while its open steps quietly stop being decided — dead ends
+ * never abandoned, parked probes never explained (2026-09-10: the user
+ * had to ask "哪些路是死路" twice before seven dead ends were recorded).
+ *
+ * Milestones (status 'goal') are excluded: they are umbrella hypotheses
+ * whose `turns` only advance on direct operations, so a healthy milestone
+ * looks permanently stale while its children do the work.
+ */
+export function createStaleStepRule(latch: ReminderLatch, staleTurns = 4): (ctx: ReminderContext) => string | null {
+  return (ctx) => {
+    const tree = ctx.tree
+    if (!tree || tree.resolved) return null
+    const currentTurn = Math.floor(ctx.currentStep / 1000)
+    if (currentTurn <= 0) return null
+    const stale = tree.nodes.filter((n) =>
+      n.parent !== null
+      && (n.status === 'pending' || n.status === 'in_progress')
+      && n.turns.length > 0
+      && currentTurn - Math.max(...n.turns) >= staleTurns)
+    if (stale.length === 0) return null
+    // Version tracks the current turn: each passing turn re-arms the rule
+    // and the latch's min gap (in turns) is the anti-spam mechanism. The
+    // tree count keeps a new tree from inheriting the old one's fires.
+    if (!latch.shouldFire(ctx.sessionId, ctx.forest.trees.length * 100000 + currentTurn)) return null
+    const list = stale.slice(0, 5).map((n) => `${n.id}(${n.status === 'pending' ? '未开始' : '进行中'})`).join(', ')
+    return `[REMINDER] ${stale.length} 个 step 超过 ${staleTurns} 轮没有任何定论: ${list}。每个开放的 step 都该有下文 — 有发现就 complete 带 summary; 走不通就 abandon(死路也是成果, 防止后面重查); 在等外部输入就把等什么写进 detail。`
+  }
+}
+
+/**
  * The nesting rule: fires when steps pile up flat under milestones — no step
  * nested under another step — while completed nodes already carry findings.
  *

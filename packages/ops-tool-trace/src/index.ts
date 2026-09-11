@@ -61,7 +61,7 @@ import type {
 } from './types.js'
 import { activeTree, NODE_STATUSES } from './node-status.js'
 import { SessionForestStore } from './session-forests.js'
-import { buildReminderContext, createIdleRule, createNestingRule, ReminderLatch } from './reminders.js'
+import { buildReminderContext, createIdleRule, createNestingRule, createStaleStepRule, ReminderLatch } from './reminders.js'
 import type { ReminderContext } from './reminders.js'
 import { HELP_TEXT, STATIC_PROMPT, TOOL_DESCRIPTION, TRIGGER_NODE_RULE, milestoneFollowUpHint, resolveGateError } from './doctrine.js'
 import { buildTreeIndex, depthOf, flattenTree, sortChildren } from './tree-layout.js'
@@ -83,6 +83,8 @@ const Config = z.object({
   idleReminderBackoffCeilingSteps: z.number().default(40),
   /** Nesting reminder: fires when this many steps hang flat under milestones with nothing deeper (default 3). */
   nestingReminderFlatSteps: z.number().default(3),
+  /** Stale-step reminder: nudge when an open step (pending/in_progress) has gone this many turns without a decision (default 4). */
+  staleStepReminderTurns: z.number().default(4),
 })
 
 // ── State machine (05) ───────────────────────────────────────────────────────
@@ -319,8 +321,12 @@ function buildSummary(tree: TreeState | null): TraceResult['summary'] {
   const incomplete = nodes
     .filter((n) => n.parent !== null && n.status !== 'done' && n.status !== 'dead_end' && n.status !== 'resolved')
     .map((n) => ({ id: n.id, title: n.title, status: n.status }))
+  // Only reachable via resolve(force): the hard gate rejects a plain resolve
+  // with undecided nodes. Spell out what a force closure MEANS — the summary
+  // is an unverified assertion, not a conclusion (2026-09-10: a forced
+  // "网络层根因" anchored half a session of wrong-turn hypotheses).
   const warning = incomplete.length > 0 && tree?.resolved
-    ? `${incomplete.length} node(s) still incomplete`
+    ? `${incomplete.length} node(s) still incomplete, closed by force: ${incomplete.map((n) => n.id).join(', ')} — 这次收口是未实证断言, 不是结论; 若后续证据与此冲突, reopen 对应节点修正, 不要在它的基础上继续推理`
     : null
   return { total: nodes.length, counts, incomplete, warning }
 }
@@ -677,7 +683,7 @@ interface ProjectionRegistryLike {
   snapshot(session: { id: string }): { values: { trace?: ForestState | null } }
 }
 
-function apply(ctx: Context, config: { idleReminderGapSteps: number, idleReminderBackoffCeilingSteps: number, nestingReminderFlatSteps: number }): void {
+function apply(ctx: Context, config: { idleReminderGapSteps: number, idleReminderBackoffCeilingSteps: number, nestingReminderFlatSteps: number, staleStepReminderTurns: number }): void {
   // ── Session projection access (09) ─────────────────────────────────────────
   // The projection itself is registered host-plane by ops-trace-ui (the
   // panel's package) — see its src/index.ts. Here we only capture the
@@ -755,7 +761,7 @@ function apply(ctx: Context, config: { idleReminderGapSteps: number, idleReminde
 
       format: { type: 'string', enum: ['full', 'tree'], description: 'view 输出格式 (view only, optional): "full" 完整树含 detail/summary (默认); "tree" 缩进树总览, 只看形状。' },
 
-      force: { type: 'boolean', description: 'resolve goal 的逃生口: 还有节点未定论时强制收口(结果带 WARN), 用于调查中途放弃。仅 resolve 打在 goal 上时有效。' },
+      force: { type: 'boolean', description: 'resolve goal 的逃生口: 还有节点未定论时强制收口(结果带 WARN)。只用于【放弃这次调查】—— force 收口意味着结论是未实证断言; 认为已有结论时, 正确做法是先给每个节点定论(证实 complete / 证伪 abandon), 再无 force 收口。仅 resolve 打在 goal 上时有效。' },
     },
 
     output: {
@@ -1044,6 +1050,9 @@ function apply(ctx: Context, config: { idleReminderGapSteps: number, idleReminde
   // mechanism — the ceiling is.
   const idleRule = createIdleRule(new ReminderLatch((fires) => Math.min(config.idleReminderGapSteps * 2 ** (fires - 1), config.idleReminderBackoffCeilingSteps), 1000), config.idleReminderGapSteps)
   const nestingRule = createNestingRule(new ReminderLatch(1, 5), config.nestingReminderFlatSteps)
+  // Stale-step gap is measured in TURNS (the rule's version is turn-based):
+  // first nudge after the threshold, then 2, 4, 8-turn backoff.
+  const staleStepRule = createStaleStepRule(new ReminderLatch((fires) => Math.min(2 * 2 ** (fires - 1), 8), 1000), config.staleStepReminderTurns)
   const runRule = (rule: (ctx: ReminderContext) => string | null) => (agent: unknown): string | null => {
     const ctx = buildReminderContext(agent, store)
     return ctx === null ? null : rule(ctx)
@@ -1063,7 +1072,8 @@ function apply(ctx: Context, config: { idleReminderGapSteps: number, idleReminde
       })
       const disposeIdle = opsPrompts.registerReminder({ name: 'trace:idle', check: runRule(idleRule) })
       const disposeNesting = opsPrompts.registerReminder({ name: 'trace:nesting', check: runRule(nestingRule) })
-      return () => { disposeMethodology(); disposeIdle(); disposeNesting() }
+      const disposeStale = opsPrompts.registerReminder({ name: 'trace:stale-step', check: runRule(staleStepRule) })
+      return () => { disposeMethodology(); disposeIdle(); disposeNesting(); disposeStale() }
     })
   }
 

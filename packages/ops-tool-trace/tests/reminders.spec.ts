@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from 'vitest'
 import {
-  buildReminderContext, createIdleRule, createNestingRule, ReminderLatch,
+  buildReminderContext, createIdleRule, createNestingRule, createStaleStepRule, ReminderLatch,
 } from '../src/reminders.ts'
 import type { ReminderContext } from '../src/reminders.ts'
 import { SessionForestStore } from '../src/session-forests.ts'
@@ -154,6 +154,63 @@ describe('idle rule', () => {
       results.push(r(ctxWith({ tree: flatTree(1), currentStep: s, lastTraceStep: 1 })))
     }
     expect(results.filter((x) => x !== null)).toHaveLength(5)
+  })
+})
+
+// ── trace:stale-step rule ────────────────────────────────────────────────────
+
+describe('stale-step rule', () => {
+  const rule = () => createStaleStepRule(new ReminderLatch(2, 10), 4)
+
+  /** goal → m1; steps with explicit last-touched turns. */
+  function treeWithSteps(steps: Array<{ id: string, status: NodeStatus, turns: number[] }>, resolved = false): TreeState {
+    return treeWith([
+      node('goal', null, 'goal'),
+      node('m1', 'goal', 'goal'),
+      ...steps.map((s) => ({ ...node(s.id, 'm1', s.status), turns: s.turns })),
+    ], resolved)
+  }
+
+  it('silent without a tree, on a resolved tree, or before turn 1', () => {
+    expect(rule()(ctxWith({ tree: null, currentStep: 9001 }))).toBeNull()
+    expect(rule()(ctxWith({ tree: treeWithSteps([{ id: 's1', status: 'pending', turns: [1] }], true), currentStep: 9001 }))).toBeNull()
+    expect(rule()(ctxWith({ tree: treeWithSteps([{ id: 's1', status: 'pending', turns: [0] }]), currentStep: 0 }))).toBeNull()
+  })
+
+  it('fires when an open step has been untouched for 4+ turns, listing the ids', () => {
+    const tree = treeWithSteps([{ id: 's1', status: 'pending', turns: [1] }])
+    // currentStep 6001 = turn 6, step 1: s1 last touched turn 1 → 5 turns stale.
+    const text = rule()(ctxWith({ tree, currentStep: 6001 }))
+    expect(text).toContain('REMINDER')
+    expect(text).toContain('s1(未开始)')
+    expect(text).toContain('abandon')
+    // turn 4: only 3 turns stale — silent.
+    expect(rule()(ctxWith({ tree, currentStep: 4001 }))).toBeNull()
+  })
+
+  it('ignores milestones (umbrella hypotheses look permanently stale), done, and dead_end nodes', () => {
+    const tree = treeWith([
+      node('goal', null, 'goal'),
+      { ...node('m1', 'goal', 'goal'), turns: [1] }, // milestone: untouched 8 turns, must NOT count
+      { ...node('s-done', 'm1', 'done'), turns: [1] },
+      { ...node('s-dead', 'm1', 'dead_end'), turns: [1] },
+    ])
+    expect(rule()(ctxWith({ tree, currentStep: 9001 }))).toBeNull()
+  })
+
+  it('uses the latest touch (max of turns), not the first', () => {
+    const tree = treeWithSteps([{ id: 's1', status: 'in_progress', turns: [1, 4] }])
+    expect(rule()(ctxWith({ tree, currentStep: 6001 }))).toBeNull() // turn 4 → 2 turns stale
+    expect(rule()(ctxWith({ tree, currentStep: 8001 }))).toContain('s1(进行中)')
+  })
+
+  it('does not refire within the same turn, and a new tree re-arms it', () => {
+    const r = rule()
+    const tree = treeWithSteps([{ id: 's1', status: 'pending', turns: [1] }])
+    expect(r(ctxWith({ tree, currentStep: 6001 }))).not.toBeNull()
+    expect(r(ctxWith({ tree, currentStep: 6002 }))).toBeNull() // same turn, same version
+    expect(r(ctxWith({ tree, currentStep: 7001 }))).toBeNull() // min gap 2 turns
+    expect(r(ctxWith({ tree, currentStep: 8001 }))).not.toBeNull()
   })
 })
 

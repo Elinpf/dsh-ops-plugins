@@ -1,6 +1,6 @@
 /**
  * HMR unload spec: disposing the plugin's fiber must remove every
- * registration surface — the trace tool, the methodology section, and both
+ * registration surface — the trace tool, the methodology section, and the
  * reminders — from the registries they were added to, plus the in-process
  * tree state. Mirrors what cordis does on HMR reload / preset unmount: run
  * every effect disposer, then assert nothing leaks.
@@ -10,14 +10,14 @@ import { describe, it, expect } from 'vitest'
 import { setup } from './harness.ts'
 
 describe('HMR unload', () => {
-  it('disposing the fiber removes tool, methodology, and both reminders', () => {
+  it('disposing the fiber removes tool, methodology, and all reminders', () => {
     const h = setup()
 
-    // Mounted: one tool, one methodology, two reminders; projection is NOT
+    // Mounted: one tool, one methodology, three reminders; projection is NOT
     // registered here (ops-trace-ui owns it host-plane).
     expect(h.tools.map((t) => t.name)).toEqual(['trace'])
     expect(h.opsPrompts.methodologies.map((m) => m.name)).toEqual(['trace:usage'])
-    expect([...h.opsPrompts.reminders.keys()].sort()).toEqual(['trace:idle', 'trace:nesting'])
+    expect([...h.opsPrompts.reminders.keys()].sort()).toEqual(['trace:idle', 'trace:nesting', 'trace:stale-step'])
     expect(h.registeredProjections).toHaveLength(0)
 
     h.dispose()

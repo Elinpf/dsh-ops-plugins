@@ -373,12 +373,12 @@ describe('render output', () => {
 // ── Registration surface ─────────────────────────────────────────────────────
 
 describe('registration surface', () => {
-  it('registers the trace tool, methodology, and two reminders — but NOT the projection (ops-trace-ui owns it host-plane)', () => {
+  it('registers the trace tool, methodology, and three reminders — but NOT the projection (ops-trace-ui owns it host-plane)', () => {
     const { tool, registeredProjections, opsPrompts } = setup()
     expect(tool.name).toBe('trace')
     expect(registeredProjections).toHaveLength(0)
     expect(opsPrompts.methodologies.map((m) => m.name)).toEqual(['trace:usage'])
-    expect([...opsPrompts.reminders.keys()].sort()).toEqual(['trace:idle', 'trace:nesting'])
+    expect([...opsPrompts.reminders.keys()].sort()).toEqual(['trace:idle', 'trace:nesting', 'trace:stale-step'])
   })
 
   it('methodology text is the minimal core pointing at help (progressive disclosure)', () => {

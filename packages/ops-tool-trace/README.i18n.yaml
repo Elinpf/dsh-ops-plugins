@@ -1,4 +1,4 @@
 title: "@elinpf/dsh-ops-tool-trace"
 description:
-  zh: "运维模式调查树工具 — 用扩散-收敛树替代 todo_write"
-  en: "Investigation tree tool for ops mode — replaces todo_write with a diverge-converge tree"
+  zh: "运维模式调查树工具 — 假设/步骤/死胡同/收口的扩散-收敛树,抗上下文压缩的调查工作记忆"
+  en: "Investigation tree tool for ops mode — a diverge-converge tree of hypotheses, steps, and dead ends; compaction-proof working memory"
