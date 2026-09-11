@@ -3,11 +3,11 @@
  * bucket, and the user rules file (append + override, tolerant of bad files).
  */
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { builtinRules, classifySignals, classifyWorkload, isMiddlewareType, loadUserRules } from '../src/classify.js'
+import { mktmpdir } from './tmpdir.ts'
 
 function byImage(image: string, labels: Record<string, string> = {}): string {
   return classifySignals({ images: [image], labels }, builtinRules)
@@ -88,7 +88,7 @@ describe('unknown bucket', () => {
 
 describe('user rules file', () => {
   function rulesFile(content: string): string {
-    const dir = mkdtempSync(join(tmpdir(), 'env-rules-'))
+    const dir = mktmpdir('env-rules-')
     const file = join(dir, 'environment-rules.yaml')
     writeFileSync(file, content)
     return file

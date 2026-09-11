@@ -3,8 +3,7 @@
  * semantics, and the credential-discipline guarantees of the written file.
  */
 
-import { mkdtempSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
@@ -14,12 +13,13 @@ import {
 } from '../src/inventory.js'
 import { scanCluster } from '../src/scanner.js'
 import { FAKE_KUBECONFIG, fakeExec, fakeFetch, fakeSpawn, failSpawn } from './helper.ts'
+import { mktmpdir } from './tmpdir.ts'
 
 const NOW = new Date('2026-08-27T00:00:00Z')
 const NO_USER_RULES = '/nonexistent/environment-rules.yaml'
 
 function tempFile(): string {
-  return join(mkdtempSync(join(tmpdir(), 'env-inventory-')), 'environment.yaml')
+  return join(mktmpdir('env-inventory-'), 'environment.yaml')
 }
 
 describe('refreshInventory — happy path', () => {

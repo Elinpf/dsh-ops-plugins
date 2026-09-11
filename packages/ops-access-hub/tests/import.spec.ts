@@ -6,8 +6,7 @@
  * direct-to-store writes.
  */
 
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
@@ -15,11 +14,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyToStore, importRegistry, pushToHub } from '../src/import.ts'
 import { HubStore } from '../src/store.ts'
 import { createHubServer } from '../src/server.ts'
+import { mktmpdir } from './tmpdir.ts'
 
 let dir: string
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'hub-import-'))
+  dir = mktmpdir('hub-import-')
 })
 
 function writeRegistry(yaml: string): string {
@@ -34,7 +34,7 @@ describe('importRegistry', () => {
     writeFileSync(join(dir, 'creds', 'kubeconfig'), 'KUBECONFIG-CONTENT\n')
     writeFileSync(join(dir, 'rel-key.pem'), 'REL-KEY-CONTENT')
 
-    const home = mkdtempSync(join(tmpdir(), 'hub-import-home-'))
+    const home = mktmpdir('hub-import-home-')
     writeFileSync(join(home, 'home-token'), 'HOME-TOKEN')
     const oldHome = process.env.HOME
     process.env.HOME = home
@@ -130,7 +130,7 @@ describe('import targets', () => {
   })
 
   it('pushToHub PUTs every tier into a running hub', async () => {
-    hubDir = mkdtempSync(join(tmpdir(), 'hub-import-target-'))
+    hubDir = mktmpdir('hub-import-target-')
     const store = new HubStore({ dataDir: hubDir })
     await store.init()
     server = createHubServer({ store, adminToken: 'adm', readToken: 'rd' })
@@ -154,7 +154,7 @@ k8s:
   })
 
   it('applyToStore writes entries offline and they persist', async () => {
-    hubDir = mkdtempSync(join(tmpdir(), 'hub-import-target-'))
+    hubDir = mktmpdir('hub-import-target-')
     const store = new HubStore({ dataDir: hubDir })
     await store.init()
     const { entries, stats } = await importRegistry(writeRegistry(`version: 1

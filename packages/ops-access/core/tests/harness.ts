@@ -10,19 +10,37 @@
  * "ro base + rw overlay" against one file.
  */
 
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
+import { afterAll } from 'vitest'
 import { apply } from '../src/index.ts'
 import type { OpsAccess } from '../src/index.ts'
+
+// Every setup() mkdtemps a scratch dir; without cleanup each test run litters
+// /tmp (thousands of stale dirs accumulated — 2026-09-11). Sweep them in
+// afterAll: vitest kills workers with no 'exit' event, so a process hook
+// alone never fires (the exit hook stays as a non-vitest fallback).
+const createdDirs: string[] = []
+const sweepTmpdirs = (): void => {
+  for (const d of createdDirs.splice(0)) rmSync(d, { recursive: true, force: true })
+}
+afterAll(sweepTmpdirs)
+process.once('exit', sweepTmpdirs)
+
+export function mktmpdir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix))
+  createdDirs.push(dir)
+  return dir
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 export function setup(opts: { registryFile?: string, credentialsDir?: string, hubCacheDir?: string, config?: Partial<Record<string, unknown>> } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'ops-access-'))
+  const dir = mktmpdir('ops-access-')
   const registryFile = opts.registryFile ?? join(dir, 'access.yaml')
   const credentialsDir = opts.credentialsDir ?? join(dir, 'credentials')
   // Hub mode's materialization cache: a SEPARATE dir from credentialsDir, so

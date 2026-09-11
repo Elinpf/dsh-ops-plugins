@@ -13,17 +13,16 @@
  *   DELETE /entries/:kind/:name/:tier            → { ok: true } | 404
  */
 
-import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync, mkdtempSync, utimesSync } from 'node:fs'
+import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync, utimesSync } from 'node:fs'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { z as zod } from 'zod'
 import * as plugin from '../src/index.ts'
 import type { AccessProvider } from '../src/index.ts'
 import { sweepMaterialized } from '../src/hub-backend.ts'
-import { setup } from './harness.ts'
+import { mktmpdir, setup } from './harness.ts'
 
 // ── Fixture provider (one file field, optional probe) ───────────────────────
 
@@ -485,7 +484,7 @@ describe('materialization sweep', () => {
   })
 
   it('hub mode startup sweeps pre-existing cache files (a restart must not outlive the grant ledger), yaml-mode files untouched', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ops-access-sweep-'))
+    const dir = mktmpdir('ops-access-sweep-')
     const stale = `${dir}/hub-cache/test/stale/rw/kubeconfig`
     const yamlFile = `${dir}/credentials/test/stale/rw/kubeconfig`
     plant(stale, 'stale')

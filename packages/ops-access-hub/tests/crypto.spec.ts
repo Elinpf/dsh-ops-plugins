@@ -4,8 +4,7 @@
  * generation with mode 0600.
  */
 
-import { mkdtempSync, statSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
@@ -15,6 +14,7 @@ import {
   loadMasterKey,
   parseMasterKey,
 } from '../src/crypto.ts'
+import { mktmpdir } from './tmpdir.ts'
 
 describe('encryptDoc/decryptDoc', () => {
   it('round-trips a JSON document', () => {
@@ -60,7 +60,7 @@ describe('parseMasterKey', () => {
 
 describe('loadMasterKey', () => {
   it('generates the key file on first start with mode 0600 and reuses it after', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'hub-crypto-'))
+    const dir = mktmpdir('hub-crypto-')
     const keyFile = join(dir, 'nested', 'hub.key')
     const first = await loadMasterKey({ keyFile })
     expect(first.length).toBe(32)
@@ -70,7 +70,7 @@ describe('loadMasterKey', () => {
   })
 
   it('prefers the env key and does not create the key file', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'hub-crypto-'))
+    const dir = mktmpdir('hub-crypto-')
     const keyFile = join(dir, 'hub.key')
     const envKey = generateMasterKey()
     const key = await loadMasterKey({ envKey: envKey.toString('base64'), keyFile })

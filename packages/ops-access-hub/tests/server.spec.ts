@@ -5,14 +5,14 @@
  * guarantee, audit append + limit, and validation errors.
  */
 
-import { mkdtempSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { HubStore } from '../src/store.ts'
 import { createHubServer } from '../src/server.ts'
+import { mktmpdir } from './tmpdir.ts'
 
 const ADMIN = 'test-admin-token'
 const READ = 'test-read-token'
@@ -41,7 +41,7 @@ async function api(path: string, opts: { method?: string; token?: string | null;
 }
 
 beforeEach(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'hub-server-'))
+  dir = mktmpdir('hub-server-')
   store = new HubStore({ dataDir: dir })
   await store.init()
   server = createHubServer({ store, adminToken: ADMIN, readToken: READ })

@@ -10,8 +10,7 @@
  * merges an rw overlay into the same file.
  */
 
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { z as zod } from 'zod'
@@ -20,7 +19,7 @@ import type { AccessProvider } from '../src/index.ts'
 import * as invariantPlugin from '../src/invariant.ts'
 import * as mentionModule from '../src/mention.ts'
 import * as typesModule from '../src/types.ts'
-import { setup } from './harness.ts'
+import { mktmpdir, setup } from './harness.ts'
 import { decodeAccessReferenceUri, formatAccessMention } from '../src/mention.ts'
 
 // ── Fixture provider ─────────────────────────────────────────────────────────
@@ -436,7 +435,7 @@ describe('registryFile', () => {
 
   it('expands a leading ~ to $HOME', async () => {
     // HOME must be set before apply — registryFile is expanded once at mount.
-    const dir = mkdtempSync(join(tmpdir(), 'ops-access-home-'))
+    const dir = mktmpdir('ops-access-home-')
     process.env.HOME = dir
     const { handle } = setup({ registryFile: '~/access.yaml' })
     handle.register(testProvider)

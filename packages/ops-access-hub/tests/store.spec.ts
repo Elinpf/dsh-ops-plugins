@@ -5,14 +5,14 @@
  * poison readAudit.
  */
 
-import { appendFileSync, mkdtempSync, readdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { appendFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { HubStore } from '../src/store.ts'
+import { mktmpdir } from './tmpdir.ts'
 
 function freshStore(): { store: HubStore; dir: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'hub-store-'))
+  const dir = mktmpdir('hub-store-')
   return { store: new HubStore({ dataDir: dir }), dir }
 }
 

@@ -21,14 +21,32 @@
  * reverse registration order, leaving core mounted.
  */
 
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z as zod } from 'zod'
+import { afterAll } from 'vitest'
 import { apply as coreApply } from '@elinpf/dsh-ops-access'
 import type { AccessProvider, OpsAccess } from '@elinpf/dsh-ops-access'
 import { apply as gateApply } from '../src/index.ts'
 import type { Config, OpsAccessGate } from '../src/index.ts'
+
+// Every setup() mkdtemps a scratch dir; without cleanup each test run litters
+// /tmp (thousands of stale dirs accumulated — 2026-09-11). Sweep them in
+// afterAll: vitest kills workers with no 'exit' event, so a process hook
+// alone never fires (the exit hook stays as a non-vitest fallback).
+const createdDirs: string[] = []
+const sweepTmpdirs = (): void => {
+  for (const d of createdDirs.splice(0)) rmSync(d, { recursive: true, force: true })
+}
+afterAll(sweepTmpdirs)
+process.once('exit', sweepTmpdirs)
+
+function mktmpdir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix))
+  createdDirs.push(dir)
+  return dir
+}
 
 /** A provider whose processed field betrays which tier a profile came from. */
 export const testProvider: AccessProvider = {
@@ -69,7 +87,7 @@ export interface SetupOptions {
 }
 
 export function setup(opts: SetupOptions = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'ops-access-gate-'))
+  const dir = mktmpdir('ops-access-gate-')
   const registryFile = join(dir, 'access.yaml')
   const auditFile = join(dir, 'audit.log')
   let opsAccess: OpsAccess | undefined
