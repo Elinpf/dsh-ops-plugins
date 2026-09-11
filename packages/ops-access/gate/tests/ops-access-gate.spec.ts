@@ -96,6 +96,12 @@ describe('export shape', () => {
     expect(registered[0].pkg).toBe('@elinpf/dsh-ops-access-gate')
     expect(registered[0].install()).toBeUndefined()
   })
+
+  it('config defaults include realistic grant TTL options (30 was the effective ceiling, 2026-09-10)', () => {
+    const parsed = (plugin.Config as any)({})
+    expect(parsed.grantTtlOptions).toEqual([10, 30, 60, 120])
+    expect(parsed.defaultTtlMinutes).toBe(30)
+  })
 })
 
 // ── Brokering: ro vs rw ──────────────────────────────────────────────────────
@@ -283,6 +289,9 @@ describe('request_access', () => {
     const result = await call
     expect(result.ok).toBe(false)
     expect(result.message).toContain('no operator decision')
+    // The silent-failure fix (2026-09-10): the message must tell the agent its
+    // next move — an unanswered request means nobody is watching the panel.
+    expect(result.message).toContain('/access-all')
     expect(h.readAudit().filter((l) => l.event === 'request-decide')[0]).toMatchObject({ outcome: 'timeout' })
     expect(h.gate.isAuthorized('sess-a', 'test', 'prod')).toBe(false)
   })

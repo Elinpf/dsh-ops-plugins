@@ -27,7 +27,7 @@ DeepSeek Harness 运维模式的按会话凭据代理（credential brokering）�
 | `defaultTtlMinutes` | `30` | `request_access` 省略 `ttlMinutes` 时的授权时长 |
 | `maxTtlMinutes` | `480` | 申请授权时长的上限 |
 | `auditFile` | `~/.dsh-ops/audit.log` | JSONL 审计日志路径（`~` 展开） |
-| `grantTtlOptions` | `[5, 10, 30]` | 授权面板提供的 TTL 选项 |
+| `grantTtlOptions` | `[10, 30, 60, 120]` | 授权面板提供的 TTL 选项 |
 | `pendingRequestTimeoutMinutes` | `5` | 驻留请求等待人工裁决的超时（超时自动拒绝） |
 | `deniedFile` | `~/.dsh-ops/denied.json` | 持久化封禁状态（重启保留） |
 

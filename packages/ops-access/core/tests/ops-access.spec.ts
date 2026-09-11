@@ -160,6 +160,26 @@ test:
     expect(profile.fields).toMatchObject({ endpoint: 'https://alpha-rw.internal' })
   })
 
+  it('tolerates a redundant kind prefix on the name (mention-syntax tokens passed whole)', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(VALID_REGISTRY)
+    // resolve('test', 'test/alpha') resolves exactly like ('test', 'alpha') —
+    // agents routinely pass the recall token `kind/name` as the bare name.
+    const profile = await handle.resolve('test', 'test/alpha')
+    expect(profile.name).toBe('alpha')
+    expect(profile.fields).toMatchObject({ endpoint: 'https://alpha.internal' })
+    // A genuinely unknown prefixed name still lists the real names.
+    await expect(handle.resolve('test', 'test/gamma')).rejects.toThrow(/available: alpha, beta/)
+  })
+
+  it('canResolve tolerates the same kind prefix', async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(VALID_REGISTRY)
+    expect((await handle.canResolve('test', 'test/alpha', 'ro')).ok).toBe(true)
+  })
+
   it('throws on unknown kind', async () => {
     const { handle, write } = setup()
     write(VALID_REGISTRY)
@@ -537,6 +557,28 @@ test:
     expect(injected).not.toContain('not found')
     // fields never cross
     expect(injected).not.toContain('rw-only.internal')
+  })
+
+  it('appends the provider-declared ro-tier limits once per referenced kind', async () => {
+    const h = setup()
+    h.handle.register({ ...testProvider, knownLimits: 'view does not cover nodes — expect Forbidden' })
+    h.write(VALID_REGISTRY)
+    const m1 = formatAccessMention({ kind: 'test', name: 'alpha' })
+    const m2 = formatAccessMention({ kind: 'test', name: 'beta' })
+    const decision: any = await drivePreStep(h, [textMessage(`${m1} 和 ${m2}`)])
+    const injected = decision.messages[1].content[0].text
+    const line = '- [test ro-tier limits] view does not cover nodes — expect Forbidden'
+    // Two referenced entries of one kind → exactly one limits line.
+    expect(injected.split(line).length - 1).toBe(1)
+  })
+
+  it('no limits line when the provider declares none', async () => {
+    const h = setup()
+    h.handle.register(testProvider)
+    h.write(VALID_REGISTRY)
+    const mention = formatAccessMention({ kind: 'test', name: 'alpha' })
+    const decision: any = await drivePreStep(h, [textMessage(`看 ${mention}`)])
+    expect(decision.messages[1].content[0].text).not.toContain('ro-tier limits')
   })
 
   it('unknown profile degrades to a note, not an error', async () => {

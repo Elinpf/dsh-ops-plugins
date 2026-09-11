@@ -98,6 +98,15 @@ export interface AccessProvider {
    */
   validateResolved?: (fields: Record<string, unknown>) => string | null | undefined
   /**
+   * Known limits of this kind's typical ro credential, in prose (e.g. "the
+   * view ClusterRole does not cover nodes/PVs — expect Forbidden"). Surfaced
+   * in the mention recall and help() so the agent learns the boundary BEFORE
+   * burning a call on a 403 it cannot fix — a mid-incident agent does not
+   * reliably infer a credential boundary from a bare Forbidden, and a
+   * compaction wipes the ones it learned the hard way (2026-09-10).
+   */
+  knownLimits?: string
+  /**
    * Capability probe (ticket 10): verify the credential's REAL
    * permissions against the claimed tier. Core runs it at save time,
    * after validation (credential files are on disk by then), and stores

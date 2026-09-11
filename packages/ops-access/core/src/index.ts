@@ -300,6 +300,18 @@ function parseProfile(raw: unknown): { kind: string, profileName: string } | und
 }
 
 /**
+ * Tolerate a redundant kind prefix on a profile name: the mention/recall
+ * syntax writes profiles as `kind/name` and agents routinely pass that whole
+ * token as the bare name (2026-09-10: ssh/ssh/b200-02 failed three times
+ * across the ssh tool and request_access). Registered names can never
+ * contain '/', so stripping `${kind}/` is unambiguous and idempotent.
+ */
+function stripKindPrefix(kind: string, profileName: string): string {
+  const prefix = kind + '/'
+  return profileName.startsWith(prefix) ? profileName.slice(prefix.length) : profileName
+}
+
+/**
  * Write credential CONTENT to managed files under
  * `<credentialsDir>/<kind>/<name>/<tier>/<field>` and record the resulting
  * paths in entryFields. Shared by the admin POST route (the human writer)
@@ -416,6 +428,7 @@ async function rollbackContentFiles(credentialsDir: string, kind: string, profil
  */
 async function renderAccessReferences(
   handle: OpsAccess,
+  providers: ReadonlyMap<string, AccessProvider>,
   references: readonly ParsedAccessReference[],
 ): Promise<string> {
   // A listAll failure (unreadable/corrupt registry file) degrades the mention
@@ -440,6 +453,17 @@ async function renderAccessReferences(
       ? ' (no ro tier registered yet — derivable from rw via the register_access tool)'
       : ''
     lines.push(`- ${key}${label}${env}${desc}${tierNote}`)
+  }
+  // Kind-level credential boundaries, once per referenced kind: the agent
+  // should learn "view does not cover nodes" from this line, not from a
+  // Forbidden it will misread as a cluster problem (and re-hit after every
+  // compaction).
+  const limitsSeen = new Set<string>()
+  for (const ref of references) {
+    if (limitsSeen.has(ref.kind)) continue
+    limitsSeen.add(ref.kind)
+    const limits = providers.get(ref.kind)?.knownLimits
+    if (limits) lines.push(`- [${ref.kind} ro-tier limits] ${limits}`)
   }
   return `<referenced-access>\nThe user explicitly referenced these access profiles (use them with the matching tools):\n${lines.join('\n')}\n</referenced-access>`
 }
@@ -530,6 +554,7 @@ export function apply(ctx: Context, config: Config): void {
     },
 
     async canResolve(kind: string, profileName: string, tier: 'ro' | 'rw'): Promise<AdminTierStatus> {
+      profileName = stripKindPrefix(kind, profileName)
       const provider = providers.get(kind)
       if (!provider) return { ok: false }
       // Load + locate the entry in its own try/catch: a missing source or
@@ -561,6 +586,7 @@ export function apply(ctx: Context, config: Config): void {
     },
 
     async resolve(kind: string, profileName: string, agent?: AccessAgent): Promise<AccessProfile> {
+      profileName = stripKindPrefix(kind, profileName)
       const provider = providers.get(kind)
       if (!provider) {
         const registered = [...providers.keys()].sort()
@@ -665,6 +691,7 @@ export function apply(ctx: Context, config: Config): void {
       for (const p of kinds) {
         lines.push(`- ${p.kind}: ${p.fieldsDoc ?? '(no field docs provided by this provider)'}`)
         if (p.derivationDoc) lines.push(`  derive ro: ${p.derivationDoc}`)
+        if (p.knownLimits) lines.push(`  ro-tier limits: ${p.knownLimits}`)
       }
       lines.push('')
       lines.push('Agents register ro tiers with the register_access tool; rw tiers are human-approved — the tool can submit an rw registration REQUEST (tier: "rw") which takes effect only after an operator approves it in the admin UI (hub mode).')
@@ -1183,7 +1210,7 @@ export function apply(ctx: Context, config: Config): void {
       out.push(freezeMessage({ ...message, content }))
       out.push(createUserMessage({
         source: { kind: 'plugin', plugin: name, form: 'recall' },
-        content: [{ type: 'text', text: await renderAccessReferences(handle, references) }],
+        content: [{ type: 'text', text: await renderAccessReferences(handle, providers, references) }],
       }))
     }
     return changed ? { kind: 'enter', messages: out } : decision

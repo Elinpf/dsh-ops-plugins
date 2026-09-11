@@ -41,6 +41,7 @@ export const provider: AccessProvider = {
   schema: entrySchema,
   fieldsDoc: 'kubeconfig: path to the kubeconfig file (~ is expanded)',
   fileFields: ['kubeconfig'],
+  knownLimits: 'the ro tier is a ServiceAccount bound to the built-in view ClusterRole: cluster-scoped resources (nodes, persistentvolumes, storageclasses, volumeattachments) and Secret contents are NOT readable — a Forbidden there is the credential boundary, not a cluster fault; do not retry it, inspect nodes over ssh instead',
   derivationDoc: "from the rw kubeconfig: create a ServiceAccount named <id>-ro (naming convention), bind it to the built-in view ClusterRole (read-most, no Secret contents), mint a long-lived token via a Secret of type kubernetes.io/service-account-token for the SA (kubectl create token output expires); extract the cluster server and CA with kubectl config view --raw (without --raw the CA shows as DATA+OMITTED); build the ro kubeconfig reusing the rw cluster entry, naming both context and user <id>-ro and setting current-context to <id>-ro (kubectl cannot select a context without it); register it via register_access; then verify BOTH directions — kubectl get pods must succeed and a write attempt (e.g. kubectl create configmap ro-write-check --dry-run=server) must be forbidden. If every rw call fails with 'context was not found', the rw kubeconfig's current-context is broken — report it to the operator instead of working around it with --context",
   process(entry) {
     const { kubeconfig } = entry as zod.infer<typeof entrySchema>

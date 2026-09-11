@@ -46,6 +46,7 @@ export const provider: AccessProvider = {
   schema: entrySchema,
   fieldsDoc: 'conf: ceph.conf content; keyring: keyring content; name: optional cephx user (e.g. client.dsh-test) — defaults to client.admin when omitted',
   fileFields: ['conf', 'keyring'],
+  knownLimits: "the ro credential (mon/osd/mds/mgr 'allow r') cannot run tell/fs-subvolume/rbd-management commands — they fail with EACCES at the mon, which is the caps boundary, not a tool bug; use metadata reads instead: health detail, osd tree, pg dump, fs status, rados omap",
   derivationDoc: "from the rw keyring: ceph auth add client.<id>-ro mon 'allow r' osd 'allow r' mds 'allow r' mgr 'allow r' (naming convention: client.<id>-ro), export it with ceph auth get client.<id>-ro, then register via register_access with the keyring content, a copy of conf, and name set to client.<id>-ro — verify with ceph status",
   process(entry) {
     const { conf, keyring, name } = entry as zod.infer<typeof entrySchema>

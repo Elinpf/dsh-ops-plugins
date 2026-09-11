@@ -67,7 +67,12 @@ export const Config: z<Config> = z.object({
   defaultTtlMinutes: z.number().default(30),
   maxTtlMinutes: z.number().default(480),
   auditFile: z.string().default('~/.dsh-ops/audit.log'),
-  grantTtlOptions: z.array(z.number()).default([5, 10, 30]),
+  // The panel can only grant one of these options. [5, 10, 30] once made 30
+  // the effective ceiling for every grant — agents asked 60/120 for
+  // hour-spanning recovery work and were cut to 30 every time, forcing
+  // repeat full-approval requests mid-incident (2026-09-10). Include the
+  // realistic durations so the human's adjustment is a choice, not a clamp.
+  grantTtlOptions: z.array(z.number()).default([10, 30, 60, 120]),
   pendingRequestTimeoutMinutes: z.number().default(5),
   deniedFile: z.string().default('~/.dsh-ops/denied.json'),
 })
@@ -775,7 +780,7 @@ export function apply(ctx: Context, config: Config): void {
       action: { type: 'string', enum: ['request', 'list', 'revoke'], required: true, description: 'request: ask a human for a timed grant; list: show this session\'s active grants; revoke: drop a grant immediately.' },
       profile: { type: 'string', description: '"kind/name", e.g. "k8s/prod". Required for request and revoke.' },
       reason: { type: 'string', description: 'Why the access is needed — shown verbatim to the human approver. Required for request.' },
-      ttlMinutes: { type: 'number', description: 'Requested grant lifetime in minutes (default ' + config.defaultTtlMinutes + ', max ' + config.maxTtlMinutes + '). The human may approve a shorter lifetime from the panel options: ' + config.grantTtlOptions.join(', ') + '.' },
+      ttlMinutes: { type: 'number', description: 'Requested grant lifetime in minutes (default ' + config.defaultTtlMinutes + ', max ' + config.maxTtlMinutes + '). Ask for the SMALLEST sufficient lifetime: the human approves one of the fixed panel options (' + config.grantTtlOptions.join(', ') + '), and a request beyond the largest option is almost always cut to it. If the grant lapses mid-work, simply request again.' },
     },
     output: {
       schema: {
@@ -889,7 +894,11 @@ export function apply(ctx: Context, config: Config): void {
 
       if (!settled.approved) {
         const why = settled.outcome === 'timeout'
-          ? 'no operator decision within ' + config.pendingRequestTimeoutMinutes + ' min'
+          // An unanswered request is a SILENT failure for the operator (they
+          // may simply not be watching the panel) — tell the agent its next
+          // move instead of leaving the work item hanging (2026-09-10: a
+          // next-day inspection lost its ssh wing to exactly this).
+          ? 'no operator decision within ' + config.pendingRequestTimeoutMinutes + ' min — the request expired. The operator may not be watching the access panel: tell the user a request is waiting (panel: /access-all), then re-request when they are ready'
           : settled.outcome === 'cancelled'
             ? 'cancelled'
             : 'rejected by the operator'

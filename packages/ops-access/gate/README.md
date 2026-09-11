@@ -27,7 +27,7 @@ The gate sits between the ops-access registry (`@elinpf/dsh-ops-access`) and eve
 | `defaultTtlMinutes` | `30` | Grant lifetime when `request_access` omits `ttlMinutes` |
 | `maxTtlMinutes` | `480` | Upper bound for a requested grant lifetime |
 | `auditFile` | `~/.dsh-ops/audit.log` | JSONL audit log path (`~` expands) |
-| `grantTtlOptions` | `[5, 10, 30]` | TTL choices the access panel offers |
+| `grantTtlOptions` | `[10, 30, 60, 120]` | TTL choices the access panel offers |
 | `pendingRequestTimeoutMinutes` | `5` | How long a parked request awaits a human before auto-rejecting |
 | `deniedFile` | `~/.dsh-ops/denied.json` | Persisted lockdown state (survives restarts) |
 
