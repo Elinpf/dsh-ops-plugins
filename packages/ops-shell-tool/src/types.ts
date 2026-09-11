@@ -52,6 +52,26 @@ export interface ProfiledShellToolSpec {
    */
   timeoutMs?: number
   /**
+   * When true the tool gains an optional `timeoutSec` parameter (1–600s) so
+   * the model can extend the per-call ceiling for one known-slow command
+   * (e.g. `rados ls` on a large pool) instead of being hard-killed at the
+   * configured timeoutMs. Absent/0/out-of-range values fall back to
+   * timeoutMs.
+   */
+  perCallTimeout?: boolean
+  /**
+   * When true, a command containing shell composition operators (`;`, `&&`,
+   * `||`, backticks, `$(`, newlines) is rejected with a teaching error
+   * BEFORE execution: everything after such an operator runs as a NEW local
+   * command without the tool's binary prefix and credentials, which the
+   * model reads as a mysterious 'get: command not found' and misattributes
+   * to the cluster (it did, repeatedly, 2026-09-10). A single `|` pipe is
+   * still allowed — it filters the wrapped command's output locally. Leave
+   * unset for tools whose command legitimately contains composition
+   * (ops-tool-ssh passes the whole string to the REMOTE shell).
+   */
+  rejectShellComposition?: boolean
+  /**
    * Known-noise stderr line patterns: any captured stderr line matching one
    * of these regexes is dropped from the result. For warnings the CLI prints
    * on every call that carry no information (e.g. ceph's missing-default-

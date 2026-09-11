@@ -14,6 +14,7 @@ Registers two model-facing tools:
 - **Thin consumer, shared machinery.** This package supplies only four identity pieces — tool name, resolved kind (`k8s`), profile-arg name (`cluster`), and `buildCommand`. The standard result shape (`{ exitCode, stdout, stderr, command, error? }`), output schema, render, and the resolve-per-call execute template (30 s default timeout, signal deaths normalized to exitCode -1) all live in `@elinpf/dsh-ops-shell-tool`, so kubectl/ceph/ssh tools behave identically.
 - **Resolve per call, never cached.** The ops-access seam is reached through `ctx.get('opsAccess')` inside `execute` — no static inject, no caching — so registry edits take effect without restart and the loader never deadlocks on a sibling service.
 - **No session state.** The tool appends no session events and owns no projection; every call is independent. The `./invariant` subpath ships a "no runtime invariant" companion that only reserves package ownership on the invariants service.
+- **One call = one kubectl subcommand.** Shell composition (`;`, `&&`, `||`, backticks, `$()`, newlines) is rejected with a teaching error before execution — everything after such an operator would run as a NEW local command without the kubectl prefix and credentials (a real session hit `get: command not found` 8+ times this way, 2026-09-10). A single `|` pipe stays allowed (filters the output locally). Slow clusters can raise the per-call ceiling with `timeoutSec` (1–600 s).
 
 ## Config
 

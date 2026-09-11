@@ -59,6 +59,8 @@ const NOT_WRAPPED = ['mount', 'umount', 'mount.ceph', 'ceph-fuse', 'ceph-volume'
 export function apply(ctx: Context, config: CephToolConfig): void {
   registerProfiledShellTool(ctx, {
     timeoutMs: config.timeoutMs,
+    perCallTimeout: true,
+    rejectShellComposition: true,
     name: 'ceph',
     kind: 'ceph',
     targetParam: 'cluster',

@@ -10,6 +10,7 @@ DeepSeek Harness 运维模式下的 `ceph` 工具 — 通过 ops-access 接缝�
 
 - **薄消费者,共享机制。** 本包只提供四件身份要素:工具名、解析类型(`ceph`)、档案参数名(`cluster`)、`buildCommand`。其余全部(结果形态、输出 schema、渲染、逐次解析的执行模板、超时与信号死亡归一化)都在 `@elinpf/dsh-ops-shell-tool`,保证三个消费工具(`kubectl` / `ceph` / `ssh`)不会各自漂移。
 - **首词选二进制。** `rbd` 和 `rados` 是独立二进制,不是 ceph 子命令 — `ceph rbd ls` 只会在 mon 侧报 "no valid command found"。按命令首词在白名单 `[ceph, rbd, rados]` 中选择;裸词视为 ceph 子命令。
+- **一次调用一条命令。** shell 组合符(`;`、`&&`、`||`、反引号、`$()`、换行)在执行前被拒并给出教学式报错——组合符之后的内容会作为不带 ceph 前缀和凭据的新本地命令裸奔,报出误导性的 `xxx: command not found`(真实会话中重复踩了 8+ 次,2026-09-10)。单个 `|` 管道仍然允许(本地过滤输出)。已知慢的命令(如大池 `rados ls`)可用 `timeoutSec`(1–600 秒)放宽单次超时。
 - **边界错误优于误导错误。** 跑在宿主机本地的 ceph 生态二进制(`mount.ceph`、`ceph-fuse`、`ceph-volume`、`rbd-nbd` 等)明确不包装;这类调用直接报清晰错误并指向 `ssh` 工具,而不是让 mon 的误导性报错带偏排查。
 - **stderr 噪音过滤。** 两条已知的" /etc/ceph 下找不到 keyring "警告(凭证都经注入的 `--keyring` 到达,纯属噪音)按精确模式剔除;其余 stderr 行原样透传。
 - **秘密不经过工具。** 档案只携带路径和连接参数;文件路径在拼装命令中变成 `<id@tier:field>` 令牌,cephx 实体名(非秘密)保持内联。只读强制由凭证 caps 在 mon/osd 侧执行,工具本身不做。

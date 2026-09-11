@@ -64,6 +64,8 @@ function toListedProfile(e: AdminEntry): ListedProfile {
 export function apply(ctx: Context, config: { timeoutMs: number }): void {
   registerProfiledShellTool(ctx, {
     timeoutMs: config.timeoutMs,
+    perCallTimeout: true,
+    rejectShellComposition: true,
     name: 'kubectl',
     kind: 'k8s',
     targetParam: 'cluster',

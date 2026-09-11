@@ -133,6 +133,28 @@ function diagnoseSandboxEnv(stderr: string): string | undefined {
   return 'local execution environment failure (NOT the credential, the network, or the remote host): a process on the dsh host could not open /dev/null read-write at startup. Check the host: `ls -la /dev/null` must be a `crw-rw-rw-` character device — if it is a regular file, recreate it: `rm -f /dev/null && mknod -m 666 /dev/null c 1 3`. If /dev/null is healthy, the execution sandbox made it read-only (old-kernel Landlock partial enforcement, or a custom sandbox runnerOverride) — fix the sandbox policy; retrying the command will not help.'
 }
 
+/**
+ * Shell composition operators that would split the model's command into a
+ * second LOCAL command without the tool's binary prefix and credentials.
+ * A single `|` is deliberately absent: piping the wrapped command's output
+ * to a local filter (get pods | grep Running) is a documented, useful case.
+ */
+const SHELL_COMPOSITION = /;|&&|\|\||`|\$\(|\r|\n/
+
+/**
+ * Reject a composed command with a teaching error. Returns the message when
+ * the command is rejected, undefined when it is clean. Names the operator
+ * and the exact failure it would have caused — the bare 'xxx: command not
+ * found' the shell would produce sends the model suspecting the cluster
+ * instead of its own command shape.
+ */
+export function shellCompositionError(toolName: string, command: string): string | undefined {
+  const m = SHELL_COMPOSITION.exec(command)
+  if (!m) return undefined
+  const op = m[0] === '\n' || m[0] === '\r' ? 'a newline' : `'${m[0]}'`
+  return `the command contains ${op} — everything after it would run as a NEW local command WITHOUT the ${toolName} prefix and injected credentials, failing with a misleading 'xxx: command not found'. One call = one ${toolName} command: split this into separate tool calls. (A single | pipe is allowed — it filters the output locally.)`
+}
+
 /** The shared output contract: schema + render, both pure. */
 const output = {
   schema: {
@@ -173,11 +195,31 @@ export function registerProfiledShellTool(ctx: Context, spec: ProfiledShellToolS
     parameters: {
       [spec.targetParam]: { type: 'string', required: true, description: spec.targetParamDescription },
       command: { type: 'string', required: true, description: spec.commandDescription },
+      ...(spec.perCallTimeout
+        ? { timeoutSec: { type: 'number', description: `Optional per-call timeout in seconds (default ${Math.round((spec.timeoutMs ?? 30000) / 1000)}, max 600). Use only for a command you KNOW is slow (e.g. listing a very large pool) — a longer wait does not fix a hung remote end.` } }
+        : {}),
     },
     output,
     async execute(args: Record<string, unknown>, exec: ShellToolExec): Promise<ShellToolResult> {
       let fullCommand = ''
       try {
+        // Reject shell composition before anything else — cheap, side-effect
+        // free, and the teaching message is most useful BEFORE the model has
+        // burned a credential resolve on a malformed call.
+        const command = args.command as string
+        if (spec.rejectShellComposition) {
+          const message = shellCompositionError(spec.name, command)
+          if (message) return { error: message, exitCode: -1, stdout: '', stderr: message, command: '' }
+        }
+        // Per-call timeout override (opt-in via spec.perCallTimeout):
+        // 1s–600s, anything else falls back to the configured ceiling.
+        let timeoutMs = spec.timeoutMs ?? 30000
+        if (spec.perCallTimeout) {
+          const override = args.timeoutSec
+          if (typeof override === 'number' && Number.isFinite(override) && override >= 1 && override <= 600) {
+            timeoutMs = Math.round(override * 1000)
+          }
+        }
         // Resolve the seam per call through ctx.get: the preset mounts the
         // group concurrently, so 'opsAccess' must not be a static inject
         // (deadlock risk against the definition row), and by tool-call time
@@ -195,8 +237,8 @@ export function registerProfiledShellTool(ctx: Context, spec: ProfiledShellToolS
         // ref(); the display command (model-visible, logged) keeps the tokens,
         // only the executed command carries the real values.
         const tokens = createCredentialTokens(profile.name, profile.tier, profile.fields)
-        fullCommand = tokens.scrub(spec.buildCommand(profile.fields, args.command as string, tokens.ref))
-        const request: ShellExecRequest = { command: tokens.executable(fullCommand), timeoutMs: spec.timeoutMs ?? 30000, signal: exec.signal }
+        fullCommand = tokens.scrub(spec.buildCommand(profile.fields, command, tokens.ref))
+        const request: ShellExecRequest = { command: tokens.executable(fullCommand), timeoutMs, signal: exec.signal }
         const resolved = ctx.shell.resolve(request)
         const result = await ctx.shell.run(resolved)
         // exitCode is null when the process died from a signal — normalize to

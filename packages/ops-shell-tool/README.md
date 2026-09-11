@@ -22,7 +22,7 @@ A pure library (not a plugin) — the single home for the boilerplate every ops 
 
 ## Configuration
 
-None — the package has no plugin `Config`. All behavior is parameterized per consumer through `ProfiledShellToolSpec`: `name`, `kind`, `targetParam`, the three description strings, `buildCommand`, `timeoutMs` (default 30000), and `stderrNoise`.
+None — the package has no plugin `Config`. All behavior is parameterized per consumer through `ProfiledShellToolSpec`: `name`, `kind`, `targetParam`, the three description strings, `buildCommand`, `timeoutMs` (default 30000), `perCallTimeout` (adds a 1–600s `timeoutSec` call parameter), `rejectShellComposition` (rejects `;` `&&` `||` backticks `$()` and newlines with a teaching error — a single `|` pipe stays allowed), and `stderrNoise`.
 
 ## Testing
 

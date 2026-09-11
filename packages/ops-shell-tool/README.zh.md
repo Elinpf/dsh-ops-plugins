@@ -22,7 +22,7 @@ ops-access 消费方工具共享的工厂：统一的 shell 结果形状 `{ exit
 
 ## 配置项
 
-无 —— 本包没有插件 `Config`。所有行为由消费方通过 `ProfiledShellToolSpec` 参数化：`name`、`kind`、`targetParam`、三段描述文案、`buildCommand`、`timeoutMs`（默认 30000）、`stderrNoise`。
+无 —— 本包没有插件 `Config`。所有行为由消费方通过 `ProfiledShellToolSpec` 参数化：`name`、`kind`、`targetParam`、三段描述文案、`buildCommand`、`timeoutMs`（默认 30000）、`perCallTimeout`（为工具增加 1–600 秒的 `timeoutSec` 调用参数）、`rejectShellComposition`（拒绝 `;` `&&` `||` 反引号 `$()` 与换行并给出教学式报错——单个 `|` 管道仍然允许）、`stderrNoise`。
 
 ## 测试方式
 

@@ -14,6 +14,7 @@ ops-access 能力缝的 kubectl 消费工具 — 把 `k8s` profile 解析成 kub
 - **瘦消费者,共享机制。** 本包只提供四个身份要素 — 工具名、解析 kind(`k8s`)、profile 参数名(`cluster`)、`buildCommand`。标准结果形状(`{ exitCode, stdout, stderr, command, error? }`)、输出 schema、render 和逐次解析的执行模板(默认 30s 超时、信号死亡归一为 exitCode -1)都在 `@elinpf/dsh-ops-shell-tool`,保证 kubectl/ceph/ssh 三个工具行为一致。
 - **逐次解析,绝不缓存。** ops-access 缝在 `execute` 内通过 `ctx.get('opsAccess')` 获取 — 不做静态 inject、不缓存 — 注册表改完即生效,也不会在加载器里和兄弟服务死锁。
 - **无会话状态。** 工具不追加会话事件、不拥有 projection,每次调用互相独立。`./invariant` 子路径只带一个"无运行时 invariant"的伴生插件,用于在 invariants 服务上登记包归属。
+- **一次调用一条 kubectl 子命令。** shell 组合符(`;`、`&&`、`||`、反引号、`$()`、换行)在执行前被拒并给出教学式报错——组合符之后的内容会作为不带 kubectl 前缀和凭据的新本地命令裸奔(真实会话因此反复出现 `get: command not found`,2026-09-10)。单个 `|` 管道仍然允许(本地过滤输出)。慢集群可用 `timeoutSec`(1–600 秒)放宽单次超时。
 
 ## 配置
 

@@ -369,6 +369,67 @@ describe('stderrNoise filtering', () => {
   })
 })
 
+describe('rejectShellComposition', () => {
+  it('rejects ;, &&, ||, backticks, $() and newlines with a teaching error, before any resolve or shell run', async () => {
+    const h = setup({ spec: { rejectShellComposition: true } })
+    for (const command of ['status; status2', 'status && status2', 'status || status2', 'status `x`', 'status $(x)', 'status\nstatus2']) {
+      const value = await h.tool.execute({ target: 'prod', command }, h.exec())
+      expect(value.exitCode).toBe(-1)
+      expect(value.error).toContain('NEW local command')
+      expect(value.error).toContain('separate tool calls')
+    }
+    // Rejection happens before the profile resolve: no credential touch, no shell.
+    expect(h.calls.resolve).toBe(0)
+    expect(h.calls.shellRun).toBe(0)
+  })
+
+  it('names a newline as such instead of printing a raw control char', async () => {
+    const h = setup({ spec: { rejectShellComposition: true } })
+    const value = await h.tool.execute({ target: 'prod', command: 'status\nstatus2' }, h.exec())
+    expect(value.error).toContain('a newline')
+  })
+
+  it('allows a single | pipe (documented local filter of the wrapped output)', async () => {
+    const h = setup({ spec: { rejectShellComposition: true } })
+    const value = await h.tool.execute({ target: 'prod', command: 'status | grep up' }, h.exec())
+    expect(value.exitCode).toBe(0)
+    expect(h.calls.shellRun).toBe(1)
+  })
+
+  it('unset flag leaves composition alone (ssh passes the whole string to the remote shell)', async () => {
+    const h = setup()
+    const value = await h.tool.execute({ target: 'prod', command: 'status; status2' }, h.exec())
+    expect(value.exitCode).toBe(0)
+    expect(h.shellRequests[0].command).toContain('status; status2')
+  })
+})
+
+describe('perCallTimeout', () => {
+  it('adds no timeoutSec parameter when disabled', () => {
+    const { tool } = setup()
+    expect(Object.keys(tool.parameters.properties).sort()).toEqual(['command', 'target'])
+  })
+
+  it('declares timeoutSec and honors an in-range override', async () => {
+    const h = setup({ spec: { perCallTimeout: true } })
+    expect(Object.keys(h.tool.parameters.properties).sort()).toEqual(['command', 'target', 'timeoutSec'])
+    await h.tool.execute({ target: 'prod', command: 'status', timeoutSec: 120 }, h.exec())
+    expect(h.shellRequests[0].timeoutMs).toBe(120000)
+  })
+
+  it('falls back to the configured ceiling for absent, zero, negative, or over-max values', async () => {
+    const h = setup({ spec: { perCallTimeout: true, timeoutMs: 45000 } })
+    const argSets: Array<Record<string, unknown>> = [
+      { target: 'prod', command: 'status' },
+      ...[0, -5, 601].map((timeoutSec) => ({ target: 'prod', command: 'status', timeoutSec })),
+    ]
+    for (const args of argSets) {
+      await h.tool.execute(args, h.exec())
+      expect(h.shellRequests.at(-1)!.timeoutMs).toBe(45000)
+    }
+  })
+})
+
 describe('shellQuote', () => {
   it('wraps in single quotes with POSIX escaping for embedded quotes', () => {
     expect(shellQuote('plain')).toBe('\'plain\'')
