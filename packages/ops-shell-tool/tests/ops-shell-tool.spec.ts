@@ -203,6 +203,25 @@ describe('registerProfiledShellTool', () => {
     expect(value.error).not.toContain('timeout')
   })
 
+  it('a /dev/null denial is translated into a local-environment diagnosis', async () => {
+    // ssh dies at startup with this stderr when the sandbox/host makes
+    // /dev/null unwritable — never a credential/network/remote problem.
+    const h = setup({
+      runImpl: async () => ({ exitCode: 1, stdoutText: '', stderrText: "Couldn't open /dev/null: Permission denied\n" }),
+    })
+    const value = await h.tool.execute({ target: 'prod', command: 'x' }, h.exec())
+    expect(value.exitCode).toBe(1)
+    expect(value.stderr).toContain("Couldn't open /dev/null")
+    expect(value.error).toContain('local execution environment failure')
+    expect(value.error).toContain('ls -la /dev/null')
+    expect(value.error).toContain('sandbox')
+
+    // Unrelated stderr stays undiagnosed.
+    const clean = setup({ runImpl: async () => ({ exitCode: 1, stdoutText: '', stderrText: 'Permission denied (publickey).\n' }) })
+    const cv = await clean.tool.execute({ target: 'prod', command: 'x' }, clean.exec())
+    expect(cv.error).toBeUndefined()
+  })
+
   it('the render surfaces the kill note through the error field', async () => {
     const h = setup({
       runImpl: async () => ({ exitCode: null, stdoutText: '', stderrText: '', timedOut: true, timeoutMs: 30000 }),

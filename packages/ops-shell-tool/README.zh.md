@@ -10,6 +10,7 @@ ops-access 消费方工具共享的工厂：统一的 shell 结果形状 `{ exit
 - **按调用解析** — profile 在 execute 内通过 `ctx.get('opsAccess')` 解析，不做静态 inject，不缓存。
 - **凭据 token** — `buildCommand` 用 `ref(field)` 标记含文件的字段，生成展示 token `<id@tier:field>`；实际执行的命令携带 shell 转义后的真实值，而展示命令和捕获的 stdout/stderr 全部洗回 token。凭据路径永远不进入模型上下文或会话事件日志。
 - **诚实的 kill 报告** — 默认 30s 超时；信号死亡归一为 `exitCode: -1`，并在 `error` 字段写明原因（超时 / 调用方取消 / 信号名），绝不留一个光秃秃的 -1。
+- **环境故障翻译** — stderr 命中已知环境签名（如 ssh 启动期 `Couldn't open /dev/null`——沙箱/宿主机把 /dev/null 变不可写，命令根本没出门）时，`error` 字段追加定位结论与修复指引，避免模型误查凭证/网络/远端。
 - **stderr 噪音过滤** — 消费方声明的正则在清洗之后丢弃已知噪音行（如 ceph keyring 唠叨）。
 - **`shellQuote`** — 导出给需要把整条远端命令作为单个参数嵌入的消费方（ops-tool-ssh）。
 

@@ -116,6 +116,23 @@ function dropNoiseLines(text: string, patterns: RegExp[] | undefined): string {
   return text.split('\n').filter((line) => !patterns.some((p) => p.test(line))).join('\n')
 }
 
+/**
+ * Recognize a broken LOCAL execution environment from stderr and translate it
+ * into actionable guidance. The trigger signature is ssh's startup open of
+ * /dev/null (O_RDWR) being denied — the command never reached the network,
+ * so without this note the model burns steps suspecting the credential, the
+ * network, and the remote host (it did, 2026-09-10). The real causes are a
+ * clobbered /dev/null on the dsh host (a regular file where the char device
+ * should be — classic in badly-built containers) or a sandbox profile that
+ * made /dev/null read-only (old-kernel Landlock partial enforcement, or a
+ * custom runnerOverride). Neither is fixable from here — the fix is the
+ * host's.
+ */
+function diagnoseSandboxEnv(stderr: string): string | undefined {
+  if (!stderr.includes('Couldn\'t open /dev/null')) return undefined
+  return 'local execution environment failure (NOT the credential, the network, or the remote host): a process on the dsh host could not open /dev/null read-write at startup. Check the host: `ls -la /dev/null` must be a `crw-rw-rw-` character device — if it is a regular file, recreate it: `rm -f /dev/null && mknod -m 666 /dev/null c 1 3`. If /dev/null is healthy, the execution sandbox made it read-only (old-kernel Landlock partial enforcement, or a custom sandbox runnerOverride) — fix the sandbox policy; retrying the command will not help.'
+}
+
 /** The shared output contract: schema + render, both pure. */
 const output = {
   schema: {
@@ -197,12 +214,15 @@ export function registerProfiledShellTool(ctx: Context, spec: ProfiledShellToolS
             : result.exitCode === null
               ? 'killed by signal ' + (result.signal ?? 'unknown') + ' — no normal exit code; the process was terminated externally (OOM killer, sandbox policy, or a deliberate kill).'
               : undefined
+        const stderrText = dropNoiseLines(tokens.scrub(result.stderr.text), spec.stderrNoise)
+        const envNote = diagnoseSandboxEnv(stderrText)
+        const errorNote = [killNote, envNote].filter(Boolean).join('\n')
         return {
           exitCode: result.exitCode ?? -1,
           stdout: tokens.scrub(result.stdout.text),
-          stderr: dropNoiseLines(tokens.scrub(result.stderr.text), spec.stderrNoise),
+          stderr: stderrText,
           command: fullCommand,
-          ...(killNote !== undefined ? { error: killNote } : {}),
+          ...(errorNote !== '' ? { error: errorNote } : {}),
         }
       } catch (e) {
         // Unknown profile names land here too — resolve's message already

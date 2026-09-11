@@ -10,6 +10,7 @@ A pure library (not a plugin) — the single home for the boilerplate every ops 
 - **Resolve per call** — the profile is resolved through `ctx.get('opsAccess')` inside execute, never statically injected, never cached.
 - **Credential tokens** — `buildCommand` marks file-bearing fields with `ref(field)`, which mints a display token `<id@tier:field>`; the executed command carries the shell-quoted real value, while the displayed command and all captured stdout/stderr are scrubbed back to tokens. Credential paths never reach the model or the session event log.
 - **Honest kill reporting** — 30 s default timeout; a signal death normalizes to `exitCode: -1` with the cause (timeout / caller abort / signal name) spelled out in the `error` field, never a bare -1.
+- **Environment-failure translation** — when stderr matches a known local-environment signature (e.g. ssh's startup `Couldn't open /dev/null` — the sandbox/host made /dev/null unwritable, so the command never left the machine), the `error` field carries the diagnosis and remediation instead of letting the model suspect credentials/network/remote.
 - **stderr noise filtering** — consumer-declared regexes drop known-noise stderr lines (e.g. ceph keyring chatter) after scrubbing.
 - **`shellQuote`** — exported for consumers that must embed a whole remote command as one argument (ops-tool-ssh).
 
