@@ -54,10 +54,14 @@ interface AccessBackend {
 | `PUT /entries/:kind/:name/:tier` | admin | `{fields,envelope?,probe?}`（body 上限 4 MiB） | `{ok:true}`。upsert；envelope 给了就**整体替换**（access 侧已做合并）；probe 随 tier 存 |
 | `DELETE /entries/:kind/:name/:tier` | admin | — | `{ok:true}` / 404；最后一个 tier 删除时整条删除 |
 | `GET /audit?limit=N` | admin | — | 最近 N 条审计，默认 100、上限 1000，旧在前 |
+| `POST /requests` | admin | `{kind,name,tier,fields,envelope?,reason?}` | `{ok:true,id}`。排队一个 tier 注册申请（ADR-0008），记 `request` 审计 |
+| `GET /requests?status=pending` | read+ | — | 申请列表，**只含元数据**（字段名 + 字节数，不含值） |
+| `GET /requests/:id` | admin | — | 完整申请含字段值（审批前审查用）；404 不存在 |
+| `POST /requests/:id/decide` | admin | `{approved:boolean}` | `{ok:true}`；批准即写入该 tier；非 pending 409。两种决定都**清空申请里的 fields** |
 
 - **kind/name 字符集**：`/^[a-zA-Z0-9][a-zA-Z0-9._@-]*$/`（与 access 侧 profile id 规则同源）；tier 只收 `ro`/`rw`。
-- **认证**：`Authorization: Bearer <token>`，双 token——admin（全部端点）与 read（仅 `GET /entries*`）。`crypto.timingSafeEqual` 比较；无/错 token 401，read token 触管理端点 403。token 来自 CLI flag 或 env（`ACCESS_HUB_ADMIN_TOKEN` / `ACCESS_HUB_READ_TOKEN`）；未配置的首启生成随机 token 并打印一次，无找回途径。
-- **审计**：append-only JSONL `<data-dir>/audit.log`（0600），每行 `{ts,role,action,kind,name,tier}`，action ∈ `resolve|put|delete`，只记成功操作，**永不记字段值**。
+- **认证**：`Authorization: Bearer <token>`，双 token——admin（全部端点）与 read（仅 `GET /entries*` 与 `GET /requests`）。`crypto.timingSafeEqual` 比较；无/错 token 401，read token 触管理端点 403。token 来自 CLI flag 或 env（`ACCESS_HUB_ADMIN_TOKEN` / `ACCESS_HUB_READ_TOKEN`）；未配置的首启生成随机 token 并打印一次，无找回途径。
+- **审计**：append-only JSONL `<data-dir>/audit.log`（0600），每行 `{ts,role,action,kind,name,tier}`，action ∈ `resolve|put|delete|request|approve|reject`，只记成功操作，**永不记字段值**。
 
 ## 数据模型与加密存储
 
@@ -77,7 +81,9 @@ interface AccessBackend {
 
 ## core 侧：物化规则（HubBackend）
 
-- `loadTier`（resolve 路径，`materialize: true`）：GET tier → 对 provider 声明的每个 `fileFields`，内容非空字符串则写 `credentialsDir/<kind>/<name>/<tier>/<field>`（0600、tmp+rename 原子写、**内容相同跳过**不刷 mtime），fields 值替换为该本地路径 → 之后照旧过 provider schema/process。空字符串 fileField 跳过（保持删除语义）。
+- **缓存目录独立**：hub 模式的本地文件一律落在 `hubCacheDir`（默认 `~/.dsh-ops/hub-cache`），与 yaml 模式的 `credentialsDir` 分开——清扫器永远只走缓存目录，yaml 注册表仍引用的文件（文档化的回退路径）绝不被碰。
+- **TTL 缓存纪律（2026-09-08 补）**：hub 模式下本地凭证文件**都是 TTL 缓存，没有永久文件**（ro  rw 同律）。启动时全量清扫缓存目录（grant 账本随重启清空，缓存的 rw 材料不得比账本活得久）；之后按 `materializeTtlMinutes`（默认 15）定时清扫过期文件。resolve 现取现物化，到期重建对消费方完全透明。写入路径的暂存文件也落缓存目录，同一纪律。
+- `loadTier`（resolve 路径，`materialize: true`）：GET tier → 对 provider 声明的每个 `fileFields`，内容非空字符串则写 `hubCacheDir/<kind>/<name>/<tier>/<field>`（0600、tmp+rename 原子写、**内容相同跳过**不刷 mtime），fields 值替换为该本地路径 → 之后照旧过 provider schema/process。空字符串 fileField 跳过（保持删除语义）。
 - `loadTier`（`materialize: false`，canResolve/list/getEntry）：只把值替换为**将然的**受管路径，零磁盘写——门批准前的预检等元数据读不落秘密文件。
 - `putTier`：对 fileField 读本地受管文件内容上传（读不到则失败 loud——hub 上留半份凭证不如不写）；路径永不出本机。
 - `deleteTier`：DELETE 后重新 list 判断整条是否连带删除，决定本地受管目录的清理范围。

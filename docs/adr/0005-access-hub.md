@@ -78,3 +78,4 @@ hub 不是 dsh 插件（无 cordis.patch.yml、不进 preset、package.json 无 
 - 迁移路径：`dsh-ops-access-hub import <access.yaml>` 把路径形态字段替换为文件内容后入库，在线（`--url`）或离线（`--data-dir`）。
 - 已知接受的风险：hub 单点故障即全来源不可用（yaml 回退是人工切配置）；明文 HTTP 部署暴露在内网时需操作员自觉套反代。
 - 后续集成（2026-09-08,ADR-0007 合入）：core 的引用机制（`references`，ssh-cred 共享凭证）对被引用条目走同一个 `loadTier`——hub 模式下引用展开点即物化点，`materialize` 标志随调用方传递，两条来源行为一致。
+- 后续加固（2026-09-08，应「rw 物化后须过期消失、ro 同律、防拷贝」的要求）：hub 模式本地凭证文件全部是 **TTL 缓存**——独立 `hubCacheDir`（不碰 yaml 回退文件）、启动全量清扫（rw 材料不得比内存 grant 账本活得久）、按 `materializeTtlMinutes` 定时过期；resolve 现取现物化，到期重建透明。

@@ -110,3 +110,24 @@ export interface PanelDenied {
 
 /** One cross-session grant row as reported by GET /ops-access/grants/all. */
 export interface OverviewGrant extends PanelGrant { session: string }
+
+// ── Registration-request wire shapes (agent-submitted tier writes, hub mode) ─
+
+/** One pending registration request as reported by GET /ops-access/admin/requests. */
+export interface RegistrationRequestMeta {
+  id: string
+  kind: string
+  name: string
+  tier: 'ro' | 'rw'
+  envelope: { name?: string, description?: string, environment?: string }
+  reason?: string
+  status: 'pending' | 'approved' | 'rejected'
+  createdAt: string
+  /** Field names → value sizes; field VALUES never ride the list. */
+  fields: Record<string, number>
+}
+
+/** The full request incl. field values — GET /ops-access/admin/requests/detail. */
+export interface RegistrationRequestDetail extends Omit<RegistrationRequestMeta, 'fields'> {
+  fields: Record<string, unknown>
+}

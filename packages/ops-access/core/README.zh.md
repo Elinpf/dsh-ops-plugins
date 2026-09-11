@@ -8,9 +8,10 @@
 - **分层条目**：每个 profile 携带 `ro` 层（agent 默认可读）和 `rw` 层（只有注册了 broker 授权后才发放）。
 - **Provider 缝**：每种凭据类型一个 provider（`k8s`/`ceph`/`ssh` 包），只提供 zod schema 加字段处理（`~` 展开、内容校验、能力探测）。provider 通过 `registerAccessProvider(ctx, provider)` 注册 — 绝不要手写 `ctx.inject` 依赖兄弟服务，会死锁 loader。
 - **引用字段**（`references`）：provider 可声明某字段指向另一个种类的条目（ssh 的 `cred` → `ssh-cred`），让多个条目共享一份凭证而不是各自复制。resolve 时 core 把被引用条目的字段合并到引用方**之下**（同注册表、同 tier、只展开一层）；broker 只被咨询一次，针对引用方条目。`validateResolved` 是合并后的校验钩子，承载只在合并形状上成立的要求（ssh 的登录用户可来自任一侧）。悬挂引用会让引用方的 resolve 及其 `canResolve` 预检一起失败。
-- **`register_access` 工具**：agent 自助写入 ro 层的路径（rw 层始终由人通过 admin HTTP 路由管理）。
+- **`register_access` 工具**：agent 自助写入 ro 层的路径；传 `tier: "rw"` 则**提交 rw 注册申请**（仅 hub 模式，ADR-0008）——申请排队在 hub 上，管理员在凭证管理设置区审查字段内容并批准后才真正写入。
 - **Mention 支持**：`@[kind/name](dsh-access:<payload>)` mention 在 `agent/pre-step` 上被解析、重写为可读引用并注入 envelope 上下文；`GET /ops-access/list` 给浏览器的 `@` 选择器供数。编码在 `./mention` 子路径。
 - **Admin 路由**：`GET /ops-access/admin/list`、`GET /ops-access/admin/kinds`、`GET|POST|DELETE /ops-access/admin/entry` — 只出 envelope + 校验状态，绝不出字段值。
+- **可插拔凭证来源**（`source`）：`yaml`（默认）读本地注册表文件；`hub` 每次调用都从独立部署的 [ops-access-hub](../../ops-access-hub/) 服务拉取。hub 模式下，文件类字段的内容物化到**独立的缓存目录**（`hubCacheDir`，默认 `~/.dsh-ops/hub-cache`），是受 TTL 约束的缓存（`materializeTtlMinutes`，默认 15 分钟），**绝不是永久副本**：启动时全量清扫（grant 账本随进程消亡，缓存的 rw 材料不得比它活得久），定时清扫按年龄过期，resolve 现取现物化、到期透明重建。yaml 模式的 `credentialsDir`（文档化的回退路径）永不被清扫。
 
 ## 设计要点
 
@@ -26,6 +27,12 @@
   name: '@elinpf/dsh-ops-access'
   registryFile: ~/.dsh-ops/access.yaml   # 默认值
   credentialsDir: ~/.dsh-ops/credentials # 默认值；托管凭据内容文件（0600）
+  # source: hub                          # 可选；默认 yaml
+  # hubUrl: http://127.0.0.1:3090        # hub 来源：hub 服务地址
+  # hubToken: ...                        # hub 来源：读 token（或用环境变量 ACCESS_HUB_READ_TOKEN）
+  # hubAdminToken: ...                   # hub 来源：写 token（或用环境变量 ACCESS_HUB_ADMIN_TOKEN）
+  # hubCacheDir: ~/.dsh-ops/hub-cache    # hub 来源：TTL 物化缓存目录（绝不用 credentialsDir）
+  # materializeTtlMinutes: 15            # hub 来源：缓存 TTL；启动时全量清扫
 ```
 
 ## 测试

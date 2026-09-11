@@ -21,10 +21,13 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-export function setup(opts: { registryFile?: string, credentialsDir?: string, config?: Partial<Record<string, unknown>> } = {}) {
+export function setup(opts: { registryFile?: string, credentialsDir?: string, hubCacheDir?: string, config?: Partial<Record<string, unknown>> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ops-access-'))
   const registryFile = opts.registryFile ?? join(dir, 'access.yaml')
   const credentialsDir = opts.credentialsDir ?? join(dir, 'credentials')
+  // Hub mode's materialization cache: a SEPARATE dir from credentialsDir, so
+  // tests mirror the production split (sweeps never touch yaml-mode files).
+  const hubCacheDir = opts.hubCacheDir ?? join(dir, 'hub-cache')
   let handle: OpsAccess | undefined
   const listeners: Array<{ event: string, listener: (...args: any[]) => unknown, options?: unknown }> = []
   const routes: any[] = []
@@ -102,7 +105,7 @@ export function setup(opts: { registryFile?: string, credentialsDir?: string, co
       },
     },
   }
-  apply(ctx, { registryFile, credentialsDir, ...opts.config })
+  apply(ctx, { registryFile, credentialsDir, hubCacheDir, ...opts.config })
   /** Minimal mock response that captures status + JSON body. */
   const mockResponse = (): { writeHead: (s: number) => void, end: (text: string) => void, status: () => number, body: () => any } => {
     let status = 0
@@ -140,6 +143,7 @@ export function setup(opts: { registryFile?: string, credentialsDir?: string, co
     hasService: (key: string) => services.has(key),
     callRegisterAccess,
     credentialsDir,
+    hubCacheDir,
     /** Drive the mention-candidate route; parses the JSON body. */
     async listRoute(query = ''): Promise<{ status: number, body: any }> {
       return driveRoute('/ops-access/list', { url: `/ops-access/list?query=${encodeURIComponent(query)}` })
@@ -165,6 +169,24 @@ export function setup(opts: { registryFile?: string, credentialsDir?: string, co
         req.url = `/ops-access/admin/entry${opts.query ?? ''}`
       }
       return driveRoute('/ops-access/admin/entry', req)
+    },
+    /** Drive the registration-request proxy routes (hub mode only). */
+    async adminRequestsRoute(): Promise<{ status: number, body: any }> {
+      return driveRoute('/ops-access/admin/requests', { method: 'GET' })
+    },
+    async adminRequestDetailRoute(id: string): Promise<{ status: number, body: any }> {
+      return driveRoute('/ops-access/admin/requests/detail', { method: 'GET', url: `/ops-access/admin/requests/detail?id=${encodeURIComponent(id)}` })
+    },
+    async adminRequestDecideRoute(body: unknown): Promise<{ status: number, body: any }> {
+      const bodyText = JSON.stringify(body)
+      const req: any = {
+        method: 'POST',
+        on: (event: string, cb: (chunk?: any) => void) => {
+          if (event === 'data') cb(bodyText)
+          if (event === 'end') cb()
+        },
+      }
+      return driveRoute('/ops-access/admin/requests/decide', req)
     },
     dir,
     registryFile,

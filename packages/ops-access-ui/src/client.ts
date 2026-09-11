@@ -45,6 +45,8 @@ import type {
   PanelPendingRequest,
   PanelDenied,
   OverviewGrant,
+  RegistrationRequestMeta,
+  RegistrationRequestDetail,
 } from './types.ts'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
@@ -151,6 +153,42 @@ async function fetchEntry(kind, name, tier) {
   } catch {
     return null
   }
+}
+
+// ── Registration-request API (agent-submitted rw writes; hub mode only) ──────
+// The routes exist only when the credential source is hub — a 404 means the
+// feature is unavailable and the approval block stays hidden (null, not []).
+
+/** Fetch pending registration requests. Null when unavailable. */
+async function fetchAdminRequests(signal?: AbortSignal): Promise<RegistrationRequestMeta[] | null> {
+  try {
+    const res = await fetch('/ops-access/admin/requests', { signal })
+    if (!res.ok) return null
+    const data = await res.json()
+    return Array.isArray(data) ? data as RegistrationRequestMeta[] : null
+  } catch {
+    return null
+  }
+}
+
+/** Fetch one request with full field values, for pre-approval review. */
+async function fetchRequestDetail(id: string): Promise<RegistrationRequestDetail | null> {
+  try {
+    const res = await fetch('/ops-access/admin/requests/detail?id=' + encodeURIComponent(id))
+    if (!res.ok) return null
+    return await res.json() as RegistrationRequestDetail
+  } catch {
+    return null
+  }
+}
+
+/** Approve (the hub writes the tier) or reject a pending request. */
+function decideRegistrationRequest(id: string, approved: boolean): Promise<ApiResult> {
+  return apiFetchResult('/ops-access/admin/requests/decide', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id, approved }),
+  }, 'decideRegistrationRequest')
 }
 
 
@@ -792,12 +830,15 @@ function TierBadge({ status }: { status: AdminTierStatus }): any {
 function AdminListView(props: {
   entries: AdminEntry[],
   loading: boolean,
+  /** Pending registration requests (null = feature unavailable / load failed). */
+  requests?: RegistrationRequestMeta[] | null,
+  onReview?: (request: RegistrationRequestMeta) => void,
   onRefresh: () => void,
   onAdd: () => void,
   onEdit: (entry: AdminEntry) => void,
   onDelete: (entry: AdminEntry) => void,
 }): any {
-  const { entries, loading, onRefresh, onAdd, onEdit, onDelete } = props
+  const { entries, loading, requests, onReview, onRefresh, onAdd, onEdit, onDelete } = props
   // Group entries by kind, preserving the order kinds first appear
   const kindOrder: string[] = []
   const byKind: Record<string, AdminEntry[]> = {}
@@ -822,6 +863,32 @@ function AdminListView(props: {
         }, h(PlusIcon), '新增'),
       ),
     ),
+    requests && requests.length > 0 &&
+      h('div', { className: 'ops-access-admin-card' },
+        h('div', { className: 'ops-access-admin-card-header' },
+          h('span', { className: 'ops-access-admin-card-title' }, '待审批注册申请'),
+          h('span', { className: 'ops-access-admin-card-count' }, String(requests.length) + ' 条'),
+        ),
+        ...requests.map((request) =>
+          h('div', { key: request.id, className: 'ops-access-admin-card-row' },
+            h('div', { className: 'ops-access-admin-card-row-main' },
+              h('div', { className: 'ops-access-admin-card-row-name' },
+                request.kind + '/' + request.name,
+                h('span', { className: 'ops-access-admin-card-row-id' }, request.tier),
+              ),
+              h('div', { className: 'ops-access-admin-card-row-desc' },
+                (request.reason ? request.reason + ' · ' : '') + new Date(request.createdAt).toLocaleString()),
+            ),
+            h('div', { className: 'ops-access-admin-row-actions' },
+              h('button', {
+                type: 'button',
+                className: 'ops-access-admin-btn ops-access-admin-btn-primary',
+                onClick: () => onReview?.(request),
+              }, '审查'),
+            ),
+          ),
+        ),
+      ),
     entries.length === 0
       ? h('div', { className: 'ops-access-admin-empty' },
           loading ? '加载中…' : '暂无凭证条目',
@@ -1168,6 +1235,85 @@ function AdminFormView(props: {
   )
 }
 
+// ── Registration-request review view ─────────────────────────────────────────
+// Pre-approval review of an agent-submitted tier registration: the ONLY place
+// field values are rendered in this UI — seeing the actual secret material is
+// the point of the approval. Approving writes the tier on the hub.
+
+function RequestReviewView(props: {
+  detail: RegistrationRequestDetail,
+  deciding: boolean,
+  error: string | null,
+  onDecide: (approved: boolean) => void,
+  onCancel: () => void,
+}): any {
+  const { detail, deciding, error, onDecide, onCancel } = props
+  const [confirming, setConfirming] = useState<null | 'approve' | 'reject'>(null)
+  const fieldEntries = Object.entries(detail.fields)
+  return h('div', { className: 'ops-access-admin-root' },
+    h('div', { className: 'ops-access-admin-header' },
+      h('span', { className: 'ops-access-admin-title' },
+        '审批注册申请: ' + detail.kind + '/' + detail.name + ' (' + detail.tier + ')'),
+    ),
+    h('div', { className: 'ops-access-admin-card-row-desc' },
+      (detail.reason ? '理由: ' + detail.reason + ' · ' : '') + '提交于 ' + new Date(detail.createdAt).toLocaleString()),
+    ...fieldEntries.map(([fieldName, value]) => {
+      const text = typeof value === 'string' ? value : JSON.stringify(value)
+      return h('div', { key: fieldName, style: { margin: '8px 0' } },
+        h('div', { className: 'ops-access-admin-card-row-name' }, fieldName),
+        text.includes('\n') || text.length > 80
+          ? h('textarea', {
+              readOnly: true,
+              rows: Math.min(text.split('\n').length + 1, 12),
+              style: { width: '100%', fontFamily: 'monospace' },
+              value: text,
+            })
+          : h('div', { style: { fontFamily: 'monospace' } }, text),
+      )
+    }),
+    fieldEntries.length === 0 && h('div', { className: 'ops-access-admin-empty' }, '(无字段)'),
+    error && h('div', { className: 'ops-access-admin-card-row-desc' }, error),
+    confirming
+      ? h('div', { className: 'ops-access-admin-confirm' },
+          h('div', null,
+            confirming === 'approve'
+              ? '确认批准？该 ' + detail.tier + ' tier 将立即写入凭证库并生效。'
+              : '确认拒绝？该申请将被标记为已拒绝,不会写入任何内容。'),
+          h('div', { className: 'ops-access-admin-actions' },
+            h('button', {
+              type: 'button',
+              className: 'ops-access-admin-btn ' + (confirming === 'approve' ? 'ops-access-admin-btn-primary' : 'ops-access-admin-btn-danger'),
+              disabled: deciding,
+              onClick: () => onDecide(confirming === 'approve'),
+            }, deciding ? '提交中…' : confirming === 'approve' ? '确认批准' : '确认拒绝'),
+            h('button', {
+              type: 'button',
+              className: 'ops-access-admin-btn',
+              disabled: deciding,
+              onClick: () => setConfirming(null),
+            }, '取消'),
+          ),
+        )
+      : h('div', { className: 'ops-access-admin-actions', style: { marginTop: '12px' } },
+          h('button', {
+            type: 'button',
+            className: 'ops-access-admin-btn ops-access-admin-btn-primary',
+            onClick: () => setConfirming('approve'),
+          }, '批准写入'),
+          h('button', {
+            type: 'button',
+            className: 'ops-access-admin-btn ops-access-admin-btn-danger',
+            onClick: () => setConfirming('reject'),
+          }, '拒绝'),
+          h('button', {
+            type: 'button',
+            className: 'ops-access-admin-btn',
+            onClick: onCancel,
+          }, '返回'),
+        ),
+  )
+}
+
 // ── Settings section component ───────────────────────────────────────────────
 
 function AdminSection(_props: { close?: () => void }): any {
@@ -1178,11 +1324,18 @@ function AdminSection(_props: { close?: () => void }): any {
   const [editEntry, setEditEntry] = useState<{ kind: string, name: string } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<AdminEntry | null>(null)
   const [deleting, setDeleting] = useState(false)
+  // Agent-submitted registration requests awaiting approval (hub mode only;
+  // null = route unavailable → the block stays hidden).
+  const [requests, setRequests] = useState<RegistrationRequestMeta[] | null>(null)
+  const [reviewDetail, setReviewDetail] = useState<RegistrationRequestDetail | null>(null)
+  const [reviewError, setReviewError] = useState<string | null>(null)
+  const [deciding, setDeciding] = useState(false)
 
   const refreshList = useCallback(async () => {
     setListLoading(true)
-    const result = await fetchAdminList()
-    setEntries(result)
+    const [list, pending] = await Promise.all([fetchAdminList(), fetchAdminRequests()])
+    setEntries(list)
+    setRequests(pending)
     setListLoading(false)
   }, [])
 
@@ -1226,6 +1379,31 @@ function AdminSection(_props: { close?: () => void }): any {
     refreshList()
   }, [deleteTarget, refreshList])
 
+  const handleReview = useCallback(async (request: RegistrationRequestMeta) => {
+    setReviewError(null)
+    const detail = await fetchRequestDetail(request.id)
+    if (!detail) {
+      setReviewError('加载申请详情失败 — 申请可能已被处理')
+      refreshList()
+      return
+    }
+    setReviewDetail(detail)
+  }, [refreshList])
+
+  const handleDecide = useCallback(async (approved: boolean) => {
+    if (!reviewDetail) return
+    setDeciding(true)
+    setReviewError(null)
+    const result = await decideRegistrationRequest(reviewDetail.id, approved)
+    setDeciding(false)
+    if (!result.ok) {
+      setReviewError(result.error ?? '操作失败')
+      return
+    }
+    setReviewDetail(null)
+    refreshList()
+  }, [reviewDetail, refreshList])
+
   // Delete confirmation overlay
   if (deleteTarget) {
     return h('div', { className: 'ops-access-admin-root' },
@@ -1249,6 +1427,17 @@ function AdminSection(_props: { close?: () => void }): any {
     )
   }
 
+  // Registration-request review overlay
+  if (reviewDetail) {
+    return h(RequestReviewView, {
+      detail: reviewDetail,
+      deciding,
+      error: reviewError,
+      onDecide: handleDecide,
+      onCancel: () => setReviewDetail(null),
+    })
+  }
+
   if (view === 'form') {
     return h(AdminFormView, {
       error: formError,
@@ -1262,6 +1451,8 @@ function AdminSection(_props: { close?: () => void }): any {
   return h(AdminListView, {
     entries,
     loading: listLoading,
+    requests,
+    onReview: handleReview,
     onRefresh: refreshList,
     onAdd: handleAdd,
     onEdit: handleEdit,

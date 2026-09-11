@@ -16,8 +16,9 @@
  *   local files at resolve time, so profiles still carry only paths.
  *
  * Also registers the `register_access` tool: the agent's self-service path
- * for writing the ro tier of a profile (rw tiers stay human-managed via the
- * admin HTTP routes below).
+ * for writing the ro tier of a profile. rw tiers stay human-approved — the
+ * tool can only QUEUE an rw registration request on the hub (hub mode);
+ * a human approves it in the admin UI before anything is written.
  *
  * Registry format (yaml source):
  *
@@ -65,7 +66,7 @@ import type {
 } from './types.js'
 import type { AccessBackend, BackendEntry, BackendTier } from './backend.js'
 import { YamlBackend, buildEnvelope, isPlainObject } from './backend.js'
-import { HubBackend } from './hub-backend.js'
+import { HubBackend, sweepMaterialized } from './hub-backend.js'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -96,6 +97,21 @@ export interface Config {
   hubToken?: string
   /** Hub admin token for write/delete (source: 'hub'); falls back to env ACCESS_HUB_ADMIN_TOKEN. Never logged. */
   hubAdminToken?: string
+  /**
+   * Minutes a materialized credential file may linger on this host (source:
+   * 'hub'). Materialized files are a TTL-bound cache of hub content, never a
+   * permanent copy — resolve re-materializes on demand, so expiry is
+   * transparent to consumers. Startup sweeps everything (a restart clears
+   * the grant ledger; cached rw material must not outlive it).
+   */
+  materializeTtlMinutes?: number
+  /**
+   * Cache root for hub-mode materialized files (source: 'hub'; default
+   * `~/.dsh-ops/hub-cache`). Deliberately separate from credentialsDir: the
+   * sweeper only ever walks this dir, so files the yaml registry references
+   * (the documented fallback) are never touched.
+   */
+  hubCacheDir?: string
 }
 
 export const Config: z<Config> = z.object({
@@ -105,6 +121,8 @@ export const Config: z<Config> = z.object({
   hubUrl: z.string().default(''),
   hubToken: z.string().default(''),
   hubAdminToken: z.string().default(''),
+  materializeTtlMinutes: z.number().default(15),
+  hubCacheDir: z.string().default('~/.dsh-ops/hub-cache'),
 })
 
 // ── Service contract ─────────────────────────────────────────────────────────
@@ -436,6 +454,11 @@ export function apply(ctx: Context, config: Config): void {
   // remote ops-access-hub on every call and materializes file-field content
   // to managed local files under credentialsDir.
   const source = config.source ?? 'yaml'
+  // In hub mode every local credential file — materialized reads AND staged
+  // writes — lives under hubCacheDir as a TTL-bound cache. credentialsDir
+  // stays yaml-mode territory: the sweeper must never touch files the yaml
+  // registry still references (the documented fallback).
+  const contentDir = source === 'hub' ? expandHome(config.hubCacheDir ?? '~/.dsh-ops/hub-cache') : credentialsDir
   let backend: AccessBackend
   if (source === 'hub') {
     const hubUrl = (config.hubUrl ?? '').replace(/\/+$/, '')
@@ -446,8 +469,25 @@ export function apply(ctx: Context, config: Config): void {
       baseUrl: hubUrl,
       readToken: config.hubToken || process.env.ACCESS_HUB_READ_TOKEN || '',
       adminToken: config.hubAdminToken || process.env.ACCESS_HUB_ADMIN_TOKEN || '',
-      credentialsDir,
+      cacheDir: contentDir,
       getProvider: (kind) => providers.get(kind),
+    })
+    // Hub mode: local credential files are a TTL-bound cache of hub content,
+    // never permanent copies. Startup sweeps EVERYTHING in the cache dir (the
+    // grant ledger is in-memory and cleared by this very restart — cached rw
+    // material must not outlive it); the interval sweep then expires files
+    // past the TTL. Both tiers: ro cache expiry is equally transparent
+    // (resolve re-fetches and re-materializes on demand). apply is sync — the
+    // boot sweep runs detached; a resolve re-materializes anything it needs
+    // anyway, so a slow boot sweep can only leave a stale file for seconds.
+    const ttlMs = (config.materializeTtlMinutes ?? 15) * 60_000
+    void sweepMaterialized(contentDir, 0).catch(() => {})
+    ctx.effect(() => {
+      const timer = setInterval(() => {
+        void sweepMaterialized(contentDir, ttlMs).catch(() => {})
+      }, Math.min(ttlMs, 60_000))
+      timer.unref?.()
+      return () => clearInterval(timer)
     })
   } else {
     backend = new YamlBackend(registryFile)
@@ -597,7 +637,7 @@ export function apply(ctx: Context, config: Config): void {
         lines.push(
           `Source: ${backend.label}`,
           'Entries are fetched from the hub on EVERY call — edits in the hub UI take effect immediately, no restart.',
-          `File-field contents live in the hub; at resolve time they are materialized to managed local files under ${credentialsDir} (0600) and profiles carry those paths — secret material never enters logs or model context.`,
+          `File-field contents live in the hub; at resolve time they are materialized to cache files under ${contentDir} (0600, TTL-bound — swept on expiry and at startup, re-materialized on demand) and profiles carry those paths — secret material never enters logs or model context.`,
         )
       } else {
         lines.push(
@@ -627,7 +667,7 @@ export function apply(ctx: Context, config: Config): void {
         if (p.derivationDoc) lines.push(`  derive ro: ${p.derivationDoc}`)
       }
       lines.push('')
-      lines.push('Agents register ro tiers with the register_access tool — rw tiers stay human-managed via the admin UI.')
+      lines.push('Agents register ro tiers with the register_access tool; rw tiers are human-approved — the tool can submit an rw registration REQUEST (tier: "rw") which takes effect only after an operator approves it in the admin UI (hub mode).')
       lines.push('Registering: pass the full file CONTENT for file fields, or a single-line path to an existing readable file (read server-side, content never passes through the model). Multi-line pastes are always treated as content.')
       lines.push('In the REGISTRY itself, file fields carry the managed file paths — secrets never go inline, so logs and model context never contain secret material.')
       return lines.join('\n')
@@ -669,12 +709,13 @@ export function apply(ctx: Context, config: Config): void {
       const outcome = await backend.deleteTier(kind, profileName, tier)
       if (outcome === 'missing') return false
       // Remove the tier's managed credential files; when the whole entry
-      // went, remove its credential directory too.
+      // went, remove its credential directory too. (contentDir: the hub cache
+      // in hub mode, the yaml-mode managed dir otherwise.)
       const provider = providers.get(kind)
       if (provider?.fileFields && provider.fileFields.length > 0) {
-        await rm(credentialsDir + '/' + kind + '/' + profileName + '/' + tier, { recursive: true, force: true })
+        await rm(contentDir + '/' + kind + '/' + profileName + '/' + tier, { recursive: true, force: true })
         if (outcome === 'entry') {
-          await rm(credentialsDir + '/' + kind + '/' + profileName, { recursive: true, force: true })
+          await rm(contentDir + '/' + kind + '/' + profileName, { recursive: true, force: true })
         }
       }
       return true
@@ -742,21 +783,26 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.provide('opsAccess', handle)
 
-  // ── register_access tool (agent-facing ro-tier writer) ────────────────────
+  // ── register_access tool (agent-facing ro writer / rw requester) ──────────
   // The agent's self-service registration path: it derives a read-only
   // credential from the rw one (per-kind recipe in the provider's
   // derivationDoc, surfaced by help()) and writes the ro tier here.
   // Deliberately ungated — the ro tier is the agent's default operating
-  // level and the operator can overwrite it from the admin UI at any time;
-  // the rw tier stays human-only (no tool writes it). Tool calls sit in the
-  // session event log, so every registration is reconstructable.
+  // level and the operator can overwrite it from the admin UI at any time.
+  // The rw tier stays approval-gated: tier:"rw" only QUEUES a registration
+  // request on the hub (validated like a real write); a human reviews the
+  // content in the admin UI and only an approval persists the tier.
+  // Tool calls sit in the session event log, so every registration and
+  // request is reconstructable.
   ctx.effect(() => ctx.tools.register(defineTool({
     name: 'register_access',
     description:
-      'Register or overwrite the read-only (ro) credential tier of an access profile — typically a credential you derived from the rw tier (a read-only ServiceAccount token, a read-only cephx keyring, a dedicated SSH key). The rw tier is human-managed via the admin UI; this tool writes ro only. File fields (kubeconfig, conf, keyring, key) take the full file CONTENT, stored to a managed path automatically; a path to an existing readable file also works and is read server-side, so the content never needs to pass through this call. Other fields are inline values. Run list_access with help: true for per-kind field docs and derivation recipes.',
+      'Register or overwrite the read-only (ro) credential tier of an access profile — typically a credential you derived from the rw tier (a read-only ServiceAccount token, a read-only cephx keyring, a dedicated SSH key). Pass tier: "rw" to instead SUBMIT an rw registration request for human approval (hub mode only) — it writes nothing until an operator approves it in the access admin UI. File fields (kubeconfig, conf, keyring, key) take the full file CONTENT, stored to a managed path automatically; a path to an existing readable file also works and is read server-side, so the content never needs to pass through this call. Other fields are inline values. Run list_access with help: true for per-kind field docs and derivation recipes.',
     parameters: {
       profile: { type: 'string', required: true, description: '"kind/id", e.g. "k8s/prod". The entry is created when it does not exist yet.' },
-      fields: { type: 'object', additionalProperties: true, required: true, description: 'The ro tier field values for this kind. File fields (kubeconfig, conf, keyring, key) take the full file CONTENT — or a single-line path to an existing readable file, which is read server-side. Multi-line pastes are always treated as content.' },
+      fields: { type: 'object', additionalProperties: true, required: true, description: 'The tier field values for this kind. File fields (kubeconfig, conf, keyring, key) take the full file CONTENT — or a single-line path to an existing readable file, which is read server-side. Multi-line pastes are always treated as content.' },
+      tier: { type: 'string', description: '"ro" (default) writes the read-only tier directly. "rw" does NOT write anything: in hub mode it submits a registration REQUEST that takes effect only after a human approves it in the access admin UI; in yaml mode it fails (rw stays human-managed).' },
+      reason: { type: 'string', description: 'For tier "rw": why this rw credential is needed — shown to the approving human.' },
       description: { type: 'string', description: 'Optional envelope description (empty string clears it).' },
       environment: { type: 'string', description: 'Optional envelope environment label (empty string clears it).' },
     },
@@ -785,7 +831,7 @@ export function apply(ctx: Context, config: Config): void {
         return { ok: false, message: `unknown kind "${kind}" (registered kinds: ${registered.join(', ') || '(none)'})` }
       }
       if (!isPlainObject(args.fields)) {
-        return { ok: false, message: 'fields must be an object of ro tier field values' }
+        return { ok: false, message: 'fields must be an object of tier field values' }
       }
       // File fields take CONTENT from the agent; everything else is inline.
       const entryFields: Record<string, unknown> = {}
@@ -799,24 +845,65 @@ export function apply(ctx: Context, config: Config): void {
       if (typeof args.description === 'string') envelope.description = args.description
       if (typeof args.environment === 'string') envelope.environment = args.environment
       // Reject a bad id BEFORE any file IO, and roll back written files when
-      // writeEntry fails — a rejected registration must not leave orphan
+      // the write fails — a rejected registration must not leave orphan
       // credential files on disk.
       try {
         assertValidProfileName(profileName)
       } catch (err) {
         return { ok: false, message: String((err as Error | null)?.message ?? err) }
       }
+
+      // ── rw tier: approval-gated registration request (hub mode only) ──────
+      // Nothing is written to the credential store here. The fields are
+      // validated exactly as a real write would be (staging + provider
+      // content hooks + zod schema), then queued on the hub; a human reviews
+      // the actual content in the admin UI and only an approval writes the
+      // tier. Staging files are removed before returning either way.
+      if (args.tier === 'rw') {
+        if (!(backend instanceof HubBackend)) {
+          return { ok: false, message: 'The rw tier is human-managed: ask the operator to register it in the admin UI (凭证管理 settings section). Agent-submitted rw registration requests require hub mode; this registry is local yaml.' }
+        }
+        const reason = typeof args.reason === 'string' ? args.reason : undefined
+        let written: string[] = []
+        try {
+          if (Object.keys(contentFiles).length > 0) {
+            written = await writeContentFiles(contentDir, kind, profileName, 'rw', descriptor.fileFields ?? [], contentFiles, entryFields, providers.get(kind))
+          }
+          const provider = providers.get(kind)!
+          buildProfile(provider, kind, profileName, 'rw', entryFields, backend.label)
+          // The hub stores CONTENT; convert the staged paths back.
+          const requestFields: Record<string, unknown> = { ...entryFields }
+          for (const ff of descriptor.fileFields ?? []) {
+            const p = requestFields[ff]
+            if (typeof p === 'string' && p !== '') requestFields[ff] = await readFile(expandHome(p), 'utf8')
+          }
+          const id = await backend.submitRequest({
+            kind,
+            name: profileName,
+            tier: 'rw',
+            fields: requestFields,
+            ...(Object.keys(envelope).length > 0 ? { envelope } : {}),
+            ...(reason !== undefined ? { reason } : {}),
+          })
+          return { ok: true, message: `rw registration request for ${kind}/${profileName} submitted (id ${id}). It takes effect ONLY after a human approves it in the access admin UI (凭证管理 settings section) — tell the operator it is waiting. Do not retry; poll list_access to see when the rw tier appears.` }
+        } catch (err) {
+          return { ok: false, message: `registration request failed: ${String((err as Error | null)?.message ?? err)}` }
+        } finally {
+          await rollbackContentFiles(contentDir, kind, profileName, 'rw', written)
+        }
+      }
+
       let written: string[] = []
       try {
         if (Object.keys(contentFiles).length > 0) {
-          written = await writeContentFiles(credentialsDir, kind, profileName, 'ro', descriptor.fileFields ?? [], contentFiles, entryFields, providers.get(kind))
+          written = await writeContentFiles(contentDir, kind, profileName, 'ro', descriptor.fileFields ?? [], contentFiles, entryFields, providers.get(kind))
         }
         // writeEntry validates against the provider schema BEFORE touching
         // the registry; its errors carry zod issue paths + messages, never
         // raw field values.
         await handle.writeEntry(kind, profileName, 'ro', entryFields, Object.keys(envelope).length > 0 ? envelope : undefined)
       } catch (err) {
-        await rollbackContentFiles(credentialsDir, kind, profileName, 'ro', written)
+        await rollbackContentFiles(contentDir, kind, profileName, 'ro', written)
         return { ok: false, message: `registration failed: ${String((err as Error | null)?.message ?? err)}` }
       }
       return { ok: true, message: `Registered the ro tier of ${kind}/${profileName}. Verify it with a read command before relying on it.` }
@@ -934,16 +1021,18 @@ export function apply(ctx: Context, config: Config): void {
             assertValidProfileName(name)
             let writtenFiles: string[] = []
             if (isPlainObject(contentFiles)) {
-              writtenFiles = await writeContentFiles(credentialsDir, kind, name, tier, provider?.fileFields ?? [], contentFiles, entryFields, provider)
+              writtenFiles = await writeContentFiles(contentDir, kind, name, tier, provider?.fileFields ?? [], contentFiles, entryFields, provider)
             }
             // Write-only-after-save preserve: file fields never come back
             // from the UI (getEntry withholds them), so an edit request
             // cannot carry them. Carry over the stored path for any declared
             // file field the request omits — otherwise the tier-replace
-            // write would silently drop the credential. (materialize: false
-            // — the path alone is what gets carried.)
+            // write would silently drop the credential. Hub mode materializes
+            // the carry-over (the hub backend's putTier re-uploads file
+            // CONTENT read from the path, so the file must actually exist;
+            // the cache dir is TTL-bound, so this leaves no permanent copy).
             if (provider?.fileFields?.length) {
-              const existing = await backend.loadTier(kind, name, tier, { materialize: false }).catch(() => null)
+              const existing = await backend.loadTier(kind, name, tier, { materialize: source === 'hub' }).catch(() => null)
               if (existing !== null) {
                 for (const ff of provider.fileFields) {
                   if (entryFields[ff] === undefined && typeof existing.fields[ff] === 'string') {
@@ -956,7 +1045,7 @@ export function apply(ctx: Context, config: Config): void {
             try {
               await handle.writeEntry(kind, name, tier, entryFields, Object.keys(envelope).length > 0 ? envelope : undefined)
             } catch (err) {
-              await rollbackContentFiles(credentialsDir, kind, name, tier, writtenFiles)
+              await rollbackContentFiles(contentDir, kind, name, tier, writtenFiles)
               throw err
             }
             res.writeHead(200, { 'content-type': 'application/json' })
@@ -999,6 +1088,73 @@ export function apply(ctx: Context, config: Config): void {
         }
       },
     }))
+    // ── Registration-request proxy routes (hub mode only) ──────────────────
+    // The approval UI for agent-submitted rw registration requests lives in
+    // the dsh settings section (ops-access-ui); these routes proxy the hub's
+    // /requests API so the browser never needs the hub's admin token. Yaml
+    // mode has no remote queue — the routes are simply not mounted there.
+    if (backend instanceof HubBackend) {
+      wctx.effect(() => (wctx as any).webServer.register({
+        kind: 'exact',
+        path: '/ops-access/admin/requests',
+        handler: async (req: any, res: any) => {
+          try {
+            if (req.method !== 'GET') { sendJsonError(res, 405, new Error('method not allowed')); return }
+            const list = await backend.listRequests('pending')
+            res.writeHead(200, { 'content-type': 'application/json' })
+            res.end(JSON.stringify(list))
+          } catch (err) {
+            sendJsonError(res, 500, err)
+          }
+        },
+      }))
+
+      wctx.effect(() => (wctx as any).webServer.register({
+        kind: 'exact',
+        path: '/ops-access/admin/requests/detail',
+        handler: async (req: any, res: any) => {
+          try {
+            if (req.method !== 'GET') { sendJsonError(res, 405, new Error('method not allowed')); return }
+            const id = new URL(req.url, 'http://localhost').searchParams.get('id')
+            if (!id) { sendJsonError(res, 400, new Error('id query parameter is required')); return }
+            // Full field values cross here — pre-approval review is exactly
+            // the moment a human must see the secret material being asked for.
+            const request = await backend.getRequest(id)
+            res.writeHead(200, { 'content-type': 'application/json' })
+            res.end(JSON.stringify(request))
+          } catch (err) {
+            sendJsonError(res, 500, err)
+          }
+        },
+      }))
+
+      wctx.effect(() => (wctx as any).webServer.register({
+        kind: 'exact',
+        path: '/ops-access/admin/requests/decide',
+        handler: async (req: any, res: any) => {
+          try {
+            if (req.method !== 'POST') { sendJsonError(res, 405, new Error('method not allowed')); return }
+            const body = await readRequestBody(req)
+            let parsed: Record<string, unknown>
+            try {
+              parsed = JSON.parse(body) as Record<string, unknown>
+            } catch {
+              sendJsonError(res, 400, new Error('request body must be valid JSON'))
+              return
+            }
+            if (typeof parsed.id !== 'string' || typeof parsed.approved !== 'boolean') {
+              sendJsonError(res, 400, new Error('id (string) and approved (boolean) are required'))
+              return
+            }
+            const decided = await backend.decideRequest(parsed.id, parsed.approved)
+            res.writeHead(200, { 'content-type': 'application/json' })
+            res.end(JSON.stringify(decided ? { ok: true } : { ok: false, error: 'request not found or already decided' }))
+          } catch (err) {
+            sendJsonError(res, 500, err)
+          }
+        },
+      }))
+    }
   })
 
   // ── Mention resolution (agent/pre-step) ───────────────────────────────────
