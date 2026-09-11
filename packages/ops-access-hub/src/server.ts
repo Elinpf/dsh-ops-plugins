@@ -11,6 +11,15 @@
  * - `PUT /entries/:kind/:name/:tier`     → upsert, body `{fields,envelope?,probe?}` (admin)
  * - `DELETE /entries/:kind/:name/:tier`  → `{ok:true}` / 404 (admin; last tier removes the entry)
  * - `GET /audit?limit=N`                 → recent N audit records (admin, default 100)
+ * - `POST /requests`                     → queue a tier-registration request, body
+ *                                          `{kind,name,tier,fields,envelope?,reason?}` (admin)
+ * - `GET /requests?status=pending`       → request list, metadata only — field
+ *                                          names + byte sizes, never values (read+)
+ * - `GET /requests/:id`                  → full request incl. field values, for
+ *                                          pre-approval review (admin)
+ * - `POST /requests/:id/decide`          → `{approved:boolean}`; approval writes the
+ *                                          tier, either way the request's fields are
+ *                                          wiped (admin; 409 unless pending)
  *
  * Auth: two Bearer tokens — admin (everything) and read (`GET /entries*`
  * only). Comparisons use `crypto.timingSafeEqual`. Every error response is
@@ -180,6 +189,75 @@ export function createHubServer(opts: HubServerOptions): Server {
     }
 
     const parts = path.split('/').filter((p) => p !== '')
+
+    if (parts[0] === 'requests' && parts.length === 1) {
+      if (method === 'GET') {
+        // Metadata only — the reviewer fetches values per request (admin).
+        const raw = url.searchParams.get('status')
+        if (raw !== null && raw !== 'pending' && raw !== 'approved' && raw !== 'rejected') {
+          throw new HttpError(400, "status must be 'pending', 'approved' or 'rejected'")
+        }
+        const list = store.listRequests(raw ?? undefined).map((r) => ({
+          id: r.id,
+          kind: r.kind,
+          name: r.name,
+          tier: r.tier,
+          envelope: r.envelope,
+          ...(r.reason !== undefined ? { reason: r.reason } : {}),
+          status: r.status,
+          createdAt: r.createdAt,
+          ...(r.decidedAt !== undefined ? { decidedAt: r.decidedAt } : {}),
+          fields: Object.fromEntries(
+            Object.entries(r.fields).map(([k, v]) => [k, typeof v === 'string' ? v.length : JSON.stringify(v).length]),
+          ),
+        }))
+        return send(res, 200, list)
+      }
+
+      if (role !== 'admin') throw new HttpError(403, 'read token cannot access admin endpoints')
+
+      if (method === 'POST') {
+        const body = await readBody(req)
+        const kind = segment(String(body.kind ?? ''), 'kind')
+        const name = segment(String(body.name ?? ''), 'name')
+        const tier = tierOf(String(body.tier ?? ''))
+        if (!isPlainObject(body.fields)) throw new HttpError(400, 'fields must be a JSON object')
+        const envelope = body.envelope === undefined ? {} : sanitizeEnvelope(body.envelope)
+        if (body.reason !== undefined && typeof body.reason !== 'string') throw new HttpError(400, 'reason must be a string')
+        const request = store.putRequest({ kind, name, tier, fields: body.fields, envelope, reason: body.reason as string | undefined })
+        await store.save()
+        await store.audit(role, 'request', kind, name, tier)
+        return send(res, 200, { ok: true, id: request.id })
+      }
+
+      throw new HttpError(405, 'method not allowed')
+    }
+
+    if (parts[0] === 'requests' && parts.length === 2 && method === 'GET') {
+      // Full field values for pre-approval review — admin only.
+      if (role !== 'admin') throw new HttpError(403, 'read token cannot review request contents')
+      const request = store.getRequest(parts[1])
+      if (!request) throw new HttpError(404, 'request not found')
+      return send(res, 200, request)
+    }
+
+    if (parts[0] === 'requests' && parts.length === 3 && parts[2] === 'decide') {
+      if (role !== 'admin') throw new HttpError(403, 'read token cannot access admin endpoints')
+      if (method !== 'POST') throw new HttpError(405, 'method not allowed')
+      const body = await readBody(req)
+      if (typeof body.approved !== 'boolean') throw new HttpError(400, 'approved must be a boolean')
+      const request = store.decideRequest(parts[1], body.approved)
+      if (!request) {
+        const existing = store.getRequest(parts[1])
+        throw existing
+          ? new HttpError(409, `request already ${existing.status}`)
+          : new HttpError(404, 'request not found')
+      }
+      await store.save()
+      await store.audit(role, body.approved ? 'approve' : 'reject', request.kind, request.name, request.tier)
+      return send(res, 200, { ok: true })
+    }
+
     if (parts[0] === 'entries' && parts.length === 4) {
       const kind = segment(parts[1], 'kind')
       const name = segment(parts[2], 'name')

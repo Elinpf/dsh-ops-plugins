@@ -229,3 +229,86 @@ describe('persistence', () => {
     expect(reopened.getEntry('k8s', 'prod')?.tiers.ro?.fields).toEqual({ password: 's3cr3t-on-disk' })
   })
 })
+
+describe('registration requests', () => {
+  const BODY = {
+    kind: 'ssh',
+    name: 'web-01',
+    tier: 'rw',
+    fields: { host: '10.0.0.1', key: 'PRIVATE-KEY-CONTENT' },
+    envelope: { description: 'web server' },
+    reason: 'need rw for disk resize',
+  }
+
+  it('runs the submit → review → approve lifecycle', async () => {
+    const submitted = await api('/requests', { method: 'POST', body: BODY })
+    expect(submitted.status).toBe(200)
+    const id = submitted.body.id as string
+    expect(typeof id).toBe('string')
+
+    // Listing carries metadata + field sizes, never values.
+    const list = await api('/requests?status=pending', { token: READ })
+    expect(list.status).toBe(200)
+    const item = (list.body as unknown as Array<Record<string, unknown>>)[0]
+    expect(item).toMatchObject({ id, kind: 'ssh', name: 'web-01', tier: 'rw', status: 'pending', reason: BODY.reason })
+    expect(item.fields).toEqual({ host: 8, key: 19 })
+    expect(JSON.stringify(list.body)).not.toContain('PRIVATE-KEY-CONTENT')
+
+    // Review (admin only) exposes values.
+    const denied = await api(`/requests/${id}`, { token: READ })
+    expect(denied.status).toBe(403)
+    const detail = await api(`/requests/${id}`)
+    expect(detail.status).toBe(200)
+    expect((detail.body.fields as Record<string, unknown>).key).toBe('PRIVATE-KEY-CONTENT')
+
+    // Approval writes the tier and wipes the request's fields.
+    const decided = await api(`/requests/${id}/decide`, { method: 'POST', body: { approved: true } })
+    expect(decided.status).toBe(200)
+    const entry = await api('/entries/ssh/web-01/rw', { token: READ })
+    expect(entry.status).toBe(200)
+    expect((entry.body.fields as Record<string, unknown>).key).toBe('PRIVATE-KEY-CONTENT')
+    const after = await api(`/requests/${id}`)
+    expect((after.body as Record<string, unknown>).status).toBe('approved')
+    expect((after.body as Record<string, unknown>).fields).toEqual({})
+  })
+
+  it('rejects without writing the tier', async () => {
+    const { body } = await api('/requests', { method: 'POST', body: BODY })
+    const r = await api(`/requests/${body.id}/decide`, { method: 'POST', body: { approved: false } })
+    expect(r.status).toBe(200)
+    const entry = await api('/entries/ssh/web-01/rw', { token: READ })
+    expect(entry.status).toBe(404)
+    const after = await api(`/requests/${body.id}`)
+    expect((after.body as Record<string, unknown>).status).toBe('rejected')
+  })
+
+  it('409s on re-deciding a settled request and 404s on unknown ids', async () => {
+    const { body } = await api('/requests', { method: 'POST', body: BODY })
+    await api(`/requests/${body.id}/decide`, { method: 'POST', body: { approved: true } })
+    const again = await api(`/requests/${body.id}/decide`, { method: 'POST', body: { approved: false } })
+    expect(again.status).toBe(409)
+    const missing = await api('/requests/nope/decide', { method: 'POST', body: { approved: true } })
+    expect(missing.status).toBe(404)
+  })
+
+  it('enforces auth and validation', async () => {
+    expect((await api('/requests', { method: 'POST', token: READ, body: BODY })).status).toBe(403)
+    expect((await api('/requests', { method: 'POST', token: null, body: BODY })).status).toBe(401)
+    const { body } = await api('/requests', { method: 'POST', body: BODY })
+    expect((await api(`/requests/${body.id}/decide`, { method: 'POST', token: READ, body: { approved: true } })).status).toBe(403)
+    expect((await api('/requests', { method: 'POST', body: { ...BODY, kind: 'bad/kind' } })).status).toBe(400)
+    expect((await api('/requests', { method: 'POST', body: { ...BODY, fields: 'x' } })).status).toBe(400)
+    expect((await api(`/requests/${body.id}/decide`, { method: 'POST', body: { approved: 'yes' } })).status).toBe(400)
+    expect((await api('/requests?status=bogus', { token: READ })).status).toBe(400)
+  })
+
+  it('audits request + decide without field values', async () => {
+    const { body } = await api('/requests', { method: 'POST', body: BODY })
+    await api(`/requests/${body.id}/decide`, { method: 'POST', body: { approved: true } })
+    const audit = await api('/audit')
+    const actions = (audit.body as unknown as Array<Record<string, unknown>>).map((r) => r.action)
+    expect(actions).toContain('request')
+    expect(actions).toContain('approve')
+    expect(JSON.stringify(audit.body)).not.toContain('PRIVATE-KEY-CONTENT')
+  })
+})
