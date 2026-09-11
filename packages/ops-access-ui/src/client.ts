@@ -284,70 +284,48 @@ function postPanelDecide(id: string, approved: boolean, ttlMinutes?: number): Pr
 
 // ── Pending-request badge (input dock) ─────────────────────────────────────
 
-/** Structural slice of the runtime conversation snapshot the badge reads. */
-interface SnapshotRunningCall { name: string }
-
 /**
- * Count this session's in-flight request_access calls: each parked call is
- * one pending human decision. The runtime pairs tool/call with tool/result
- * into runningCalls, so a decided or timed-out request drops out on its
- * own — zero polling, straight off the session snapshot the dock owner
- * already passes.
+ * Count the pending requests the gate route returns for one session: own
+ * parked request_access calls PLUS delegated sub-session ones (血缘). Since
+ * dsh 0.1.5 the input-dock owner no longer passes sessionId/runningCalls in
+ * the zone props — the badge polls this route for the whole pending set.
  */
-function pendingAccessCount(session: { runningCalls?: readonly SnapshotRunningCall[] } | null | undefined): number {
-  if (session === null || session === undefined || !Array.isArray(session.runningCalls)) return 0
-  return session.runningCalls.filter((c) => c.name === 'request_access').length
-}
-
-/**
- * Count one session's DELEGATED pending requests from an access-requests
- * response (which lists own + delegated): a sub-agent's parked request_access
- * lives in the sub-session, so the parent's runningCalls never sees it — the
- * badge polls for these instead (血缘).
- */
-function delegatedAccessCount(requests: readonly { session?: string, parentSession?: string }[] | null | undefined, sessionId: string): number {
+function pendingRequestCount(requests: readonly { session?: string, parentSession?: string }[] | null | undefined): number {
   if (!Array.isArray(requests)) return 0
-  return requests.filter((r) => r.parentSession === sessionId).length
+  return requests.length
 }
 
-/** Dock badge props: the InputZone owner share plus the framework sessionId. */
+/** Dock badge props: sessionId arrives via the slot entry's inject face. */
 interface AccessBadgeProps {
   sessionId?: string
-  session?: { runningCalls?: readonly SnapshotRunningCall[] }
   /** Open the access panel imperatively (ops-panel seam, ADR-0004 §9). */
   openPanel: (sessionId: string) => boolean
 }
 
 /**
  * Red-dot alert in the input dock while request_access calls await a human
- * decision. Own-session requests come off the runtime snapshot (instant,
- * zero polling); delegated sub-session requests are polled from the gate
- * every 4s (the route lists own + delegated — we count only delegated here
- * to avoid double-counting the snapshot). Renders nothing on an empty
- * pending set; clicking opens the access panel's approval deck.
+ * decision. Own + delegated pending requests are polled from the gate every
+ * 4s (the route already lists both). Renders nothing on an empty pending
+ * set; clicking opens the access panel's approval deck.
  */
 function AccessBadge(props: AccessBadgeProps): unknown {
-  const own = pendingAccessCount(props.session)
-  const [delegated, setDelegated] = useState(0)
   const sid = props.sessionId
+  const [count, setCount] = useState(0)
   useEffect(() => {
     if (sid === undefined) return
     let alive = true
     const poll = async () => {
       const data = await fetchPanelRequests(sid)
-      if (alive && data !== null) setDelegated(delegatedAccessCount(data.requests, sid))
+      if (alive && data !== null) setCount(pendingRequestCount(data.requests))
     }
     void poll()
     const timer = setInterval(() => { void poll() }, 4000)
     return () => { alive = false; clearInterval(timer) }
   }, [sid])
-  const count = own + delegated
   if (count === 0 || sid === undefined) return null
   return h('button', {
     className: 'ops-access-badge',
-    title: delegated > 0
-      ? '有待审批的提权申请（含委派子会话）— 点击打开授权面板'
-      : '有待审批的提权申请 — 点击打开授权面板',
+    title: '有待审批的提权申请 — 点击打开授权面板',
     onClick: () => props.openPanel(sid),
   },
     h('span', { className: 'ops-access-badge-dot' }),
@@ -1950,17 +1928,20 @@ function apply(ctx: Context): void {
       }),
     )
     // Pending-request badge in the input dock (ticket 03): lit while a
-    // request_access call parks — derived from the session snapshot, zero
-    // polling — click opens the approval deck through the seam's open().
+    // request_access call parks. dsh 0.1.5 moved sessionId off the dock zone
+    // props onto the entry's inject face, and the zone's session snapshot no
+    // longer carries runningCalls — the badge polls the gate's pending route.
     if (slots !== undefined) {
       effect(() =>
         slots.inject('conversation.input.dock', () =>
           slots.register(
-            { name: 'conversation.input.dock', id: 'ops-access-badge', order: 30 },
-            (props: { sessionId?: string, session?: { runningCalls?: readonly SnapshotRunningCall[] } }) =>
+            {
+              name: 'conversation.input.dock', id: 'ops-access-badge', order: 30,
+              inject: (sessionId: string) => ({ sessionId }),
+            },
+            (props: { sessionId?: string }) =>
               AccessBadge({
                 sessionId: props.sessionId,
-                session: props.session,
                 openPanel: (sid) => opsPanels.open(sid, 'access'),
               }),
           ),
@@ -1982,7 +1963,7 @@ export { apply, inject, name }
 export {
   apiFetchList, apiFetchResult, fetchAdminList, fetchKinds, submitEntry, deleteEntry, AdminSection,
   fetchPanelGrants, fetchPanelRequests, fetchPanelOverview, groupBySession, postPanelGrant, postPanelExtend, postPanelRevoke, postPanelRevokeAll, postPanelDecide, postPanelDeny, postPanelUndeny,
-  AccessPanel, AccessBadge, pendingAccessCount, delegatedAccessCount, defaultTtlChoice, liveGrantFor,
+  AccessPanel, AccessBadge, pendingRequestCount, defaultTtlChoice, liveGrantFor,
 }
 /** @internal */
 export type { AdminEntry, AdminTierStatus, KindDescriptor, SubmitEntryBody, ApiResult, PanelGrant, PanelPendingRequest, PanelDenied, OverviewGrant }

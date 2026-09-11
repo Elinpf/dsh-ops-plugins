@@ -530,35 +530,19 @@ describe('degradation: 404 and network failure never throw', () => {
 
 // ── Pending-request badge derivation ────────────────────────────────────────
 
-describe('pendingAccessCount', () => {
-  it('counts in-flight request_access calls only — a settled call has left runningCalls', () => {
-    expect(client.pendingAccessCount(undefined)).toBe(0)
-    expect(client.pendingAccessCount(null)).toBe(0)
-    expect(client.pendingAccessCount({})).toBe(0)
-    expect(client.pendingAccessCount({ runningCalls: [] })).toBe(0)
-    expect(client.pendingAccessCount({ runningCalls: [{ name: 'bash' }] })).toBe(0)
-    expect(client.pendingAccessCount({ runningCalls: [{ name: 'bash' }, { name: 'request_access' }] })).toBe(1)
-    expect(client.pendingAccessCount({ runningCalls: [{ name: 'request_access' }, { name: 'request_access' }] })).toBe(2)
-  })
-})
-
-describe('delegatedAccessCount', () => {
-  it('counts only requests delegated BY this session — own requests are the snapshot\'s job', () => {
-    const sid = 'sess-parent'
-    expect(client.delegatedAccessCount(undefined, sid)).toBe(0)
-    expect(client.delegatedAccessCount(null, sid)).toBe(0)
-    expect(client.delegatedAccessCount([], sid)).toBe(0)
-    // Own request (no parentSession): not counted here — runningCalls covers it.
-    expect(client.delegatedAccessCount([{ session: sid }], sid)).toBe(0)
-    // Another session's delegated child: not this session's business.
-    expect(client.delegatedAccessCount([{ session: 'sess-x', parentSession: 'sess-other' }], sid)).toBe(0)
-    // This session's delegated children: counted.
-    expect(client.delegatedAccessCount([{ session: 'sess-c1', parentSession: sid }], sid)).toBe(1)
-    expect(client.delegatedAccessCount([
-      { session: 'sess-c1', parentSession: sid },
-      { session: 'sess-c2', parentSession: sid },
-      { session: sid },
-    ], sid)).toBe(2)
+describe('pendingRequestCount', () => {
+  it('counts the whole pending set the gate route returns (own + delegated)', () => {
+    expect(client.pendingRequestCount(undefined)).toBe(0)
+    expect(client.pendingRequestCount(null)).toBe(0)
+    expect(client.pendingRequestCount([])).toBe(0)
+    // Own request (no parentSession): counted.
+    expect(client.pendingRequestCount([{ session: 'sess-parent' }])).toBe(1)
+    // Own + delegated children: all counted.
+    expect(client.pendingRequestCount([
+      { session: 'sess-c1', parentSession: 'sess-parent' },
+      { session: 'sess-c2', parentSession: 'sess-parent' },
+      { session: 'sess-parent' },
+    ])).toBe(3)
   })
 })
 
