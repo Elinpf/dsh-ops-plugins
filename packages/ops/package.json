@@ -26,6 +26,7 @@
     "@elinpf/dsh-ops-access-ceph": "workspace:^",
     "@elinpf/dsh-ops-access-gate": "workspace:^",
     "@elinpf/dsh-ops-access-k8s": "workspace:^",
+    "@elinpf/dsh-ops-access-prometheus": "workspace:^",
     "@elinpf/dsh-ops-access-ssh": "workspace:^",
     "@elinpf/dsh-ops-access-ui": "workspace:^",
     "@elinpf/dsh-ops-panel": "workspace:^",
@@ -33,6 +34,7 @@
     "@elinpf/dsh-ops-tool-ceph": "workspace:^",
     "@elinpf/dsh-ops-tool-environment": "workspace:^",
     "@elinpf/dsh-ops-tool-kubectl": "workspace:^",
+    "@elinpf/dsh-ops-tool-prometheus": "workspace:^",
     "@elinpf/dsh-ops-tool-ssh": "workspace:^",
     "@elinpf/dsh-ops-tool-trace": "workspace:^",
     "@elinpf/dsh-ops-trace-ui": "workspace:^"

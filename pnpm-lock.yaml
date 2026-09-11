@@ -26,6 +26,9 @@ importers:
       '@elinpf/dsh-ops-access-k8s':
         specifier: workspace:^
         version: link:../ops-access/k8s
+      '@elinpf/dsh-ops-access-prometheus':
+        specifier: workspace:^
+        version: link:../ops-access/prometheus
       '@elinpf/dsh-ops-access-ssh':
         specifier: workspace:^
         version: link:../ops-access/ssh
@@ -47,6 +50,9 @@ importers:
       '@elinpf/dsh-ops-tool-kubectl':
         specifier: workspace:^
         version: link:../ops-tool-kubectl
+      '@elinpf/dsh-ops-tool-prometheus':
+        specifier: workspace:^
+        version: link:../ops-tool-prometheus
       '@elinpf/dsh-ops-tool-ssh':
         specifier: workspace:^
         version: link:../ops-tool-ssh
@@ -227,6 +233,34 @@ importers:
       yaml:
         specifier: ^2.7.0
         version: 2.9.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: 4.0.1
+        version: 4.0.1(@deepseek-ai/cordis-plugin-include@1.0.7)(@deepseek-ai/cordis-plugin-loader@1.0.3)
+      '@elinpf/dsh-ops-access':
+        specifier: workspace:*
+        version: link:../core
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      typescript:
+        specifier: ^5.4.0
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@22.20.1)(jsdom@30.0.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.24.2)(yaml@2.9.0))
+
+  packages/ops-access/prometheus:
+    dependencies:
+      '@deepseek-ai/dsh-invariants':
+        specifier: ^0.1.0-rc.8
+        version: 0.1.0-rc.8(@deepseek-ai/cordis@4.0.1)
+      '@deepseek-ai/schemastery':
+        specifier: ^3.18.1
+        version: 3.18.1
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -447,6 +481,31 @@ importers:
       '@elinpf/dsh-ops-access':
         specifier: workspace:*
         version: link:../ops-access/core
+      typescript:
+        specifier: ^5.4.0
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@22.20.1)(jsdom@30.0.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.24.2)(yaml@2.9.0))
+
+  packages/ops-tool-prometheus:
+    dependencies:
+      '@deepseek-ai/schemastery':
+        specifier: ^3.18.1
+        version: 3.18.1
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: 4.0.1
+        version: 4.0.1(@deepseek-ai/cordis-plugin-include@1.0.7)(@deepseek-ai/cordis-plugin-loader@1.0.3)
+      '@deepseek-ai/dsh-tools':
+        specifier: 0.0.1-rc.1
+        version: 0.0.1-rc.1(7zqjdql3dtskjcqkk75fp3oope)
+      '@elinpf/dsh-ops-access':
+        specifier: workspace:*
+        version: link:../ops-access/core
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
       typescript:
         specifier: ^5.4.0
         version: 5.9.3
@@ -713,9 +772,6 @@ packages:
         optional: true
       '@deepseek-ai/cordis-plugin-loader':
         optional: true
-
-  '@deepseek-ai/cosmokit@1.8.2':
-    resolution: {integrity: sha512-muBOKtSrUKU5m/xpq8ZXWL6hQ/jgd4PhU2PqH97bcxIiLEJfNwZOGQEx4t/aS/GgxRAR+ra9pMHPMtTHU4sqqA==}
 
   '@deepseek-ai/cosmokit@1.8.3':
     resolution: {integrity: sha512-qBo+ronVM6Eu2WNVJXi8JcMiqZ19T9BRIpV+5qJUFPXjGH/Z0QKcQMC/IZJ7L394YTOtJgcovbk9qP0w2GsBXQ==}
@@ -2589,13 +2645,11 @@ snapshots:
 
   '@deepseek-ai/cordis@4.0.1(@deepseek-ai/cordis-plugin-include@1.0.7)(@deepseek-ai/cordis-plugin-loader@1.0.3)':
     dependencies:
-      '@deepseek-ai/cosmokit': 1.8.2
+      '@deepseek-ai/cosmokit': 1.8.3
       '@standard-schema/spec': 1.1.0
     optionalDependencies:
       '@deepseek-ai/cordis-plugin-include': 1.0.7(@deepseek-ai/cordis-plugin-loader@1.0.3)(@deepseek-ai/cordis@4.0.1)
       '@deepseek-ai/cordis-plugin-loader': 1.0.3(@deepseek-ai/cordis@4.0.1)
-
-  '@deepseek-ai/cosmokit@1.8.2': {}
 
   '@deepseek-ai/cosmokit@1.8.3': {}
 

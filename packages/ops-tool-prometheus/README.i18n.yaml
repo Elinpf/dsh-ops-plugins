@@ -1,0 +1,4 @@
+title: "@elinpf/dsh-ops-tool-prometheus"
+description:
+  zh: "运维模式 prometheus 工具 — 解析 prometheus 档案,直接对 Prometheus HTTP API 执行 PromQL 查询(instant/range),bearer token 自动注入"
+  en: "prometheus tool for ops mode — resolves prometheus profiles and runs PromQL instant/range queries over the Prometheus HTTP API, injecting the bearer token automatically"

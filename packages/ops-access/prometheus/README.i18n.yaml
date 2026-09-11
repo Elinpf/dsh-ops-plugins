@@ -1,0 +1,4 @@
+title: "@elinpf/dsh-ops-access-prometheus"
+description:
+  zh: "运维模式 Prometheus 凭证 provider — 校验 prometheus 注册表条目(服务器 URL + 可选 bearer token)并展开 token 路径"
+  en: "Prometheus credential provider for ops mode — validates prometheus registry entries (server URL + optional bearer token) and expands the token path"

@@ -292,6 +292,9 @@
     - id: ops-access-ssh
       name: '@elinpf/dsh-ops-access-ssh'
 
+    - id: ops-access-prometheus
+      name: '@elinpf/dsh-ops-access-prometheus'
+
     # The access gate: per-session credential brokering with human approval.
     # Sits in this realm so its deferred `ctx.inject(['opsAccess'])` broker
     # registration resolves THIS preset's opsAccess instance (registerAccessBroker
@@ -315,6 +318,12 @@
 
     - id: ops-tool-ssh
       name: '@elinpf/dsh-ops-tool-ssh'
+
+    # Prometheus query tool: resolves a `prometheus` profile (url + optional
+    # token file) through THIS realm's opsAccess, then talks plain read-only
+    # HTTP (query/query_range) — no shell, no kubectl port-forward.
+    - id: ops-tool-prometheus
+      name: '@elinpf/dsh-ops-tool-prometheus'
 
     # Environment inventory tool: overview/show/refresh over the scanned
     # cluster map. Needs THIS realm's opsAccess (resolves k8s ro profiles);

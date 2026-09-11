@@ -130,6 +130,21 @@ describe('the real bundled skills directory', () => {
       expect(definition.content).toContain(element)
     }
   })
+
+  it('offers the ib-rdma skill as a model-invocable investigation methodology', async () => {
+    const provider = createBundledSkillsProvider()
+    const candidates = await provider.list({} as any)
+    const ib = candidates.find(c => c.name === 'ib-rdma')
+    expect(ib).toBeDefined()
+    // 只读排查方法论:模型可以自助加载(与 change 的人审触发相反)
+    expect(ib!.invocation).toEqual({ modelInvocable: true, userInvocable: true })
+
+    const definition = await provider.get(ib!, {} as any)
+    // The two core lessons and the key discriminators must survive edits.
+    for (const section of ['第 0 步', 'SM 定位', 'SM 不可达 ≠ 网络黑洞', 'directed-route', '错误与 flap 计数器', '纪律']) {
+      expect(definition.content).toContain(section)
+    }
+  })
 })
 
 describe('apply: optional skills registration', () => {
