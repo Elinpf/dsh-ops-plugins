@@ -6,10 +6,7 @@
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "files": [
-    "lib/index.js",
-    "lib/invariant.js",
-    "lib/types.js",
-    "lib/mention.js",
+    "lib/**/*.js",
     "lib/**/*.d.ts",
     "cordis.patch.yml"
   ],
