@@ -1,5 +1,27 @@
 # @elinpf/dsh-ops
 
+## 0.3.0
+
+### Patch Changes
+
+- Updated dependencies [8583b23]
+  - @elinpf/dsh-ops-access@0.3.0
+  - @elinpf/dsh-ops-access-ceph@0.3.0
+  - @elinpf/dsh-ops-access-gate@0.3.0
+  - @elinpf/dsh-ops-access-k8s@0.3.0
+  - @elinpf/dsh-ops-access-prometheus@0.3.0
+  - @elinpf/dsh-ops-access-ssh@0.3.0
+  - @elinpf/dsh-ops-tool-ceph@0.3.0
+  - @elinpf/dsh-ops-tool-environment@0.3.0
+  - @elinpf/dsh-ops-tool-kubectl@0.3.0
+  - @elinpf/dsh-ops-tool-prometheus@0.3.0
+  - @elinpf/dsh-ops-tool-ssh@0.3.0
+  - @elinpf/dsh-ops-access-ui@0.3.0
+  - @elinpf/dsh-ops-panel@0.3.0
+  - @elinpf/dsh-ops-prompts@0.3.0
+  - @elinpf/dsh-ops-tool-trace@0.3.0
+  - @elinpf/dsh-ops-trace-ui@0.3.0
+
 ## 0.2.1
 
 ### Patch Changes

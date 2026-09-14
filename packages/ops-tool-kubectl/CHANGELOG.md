@@ -1,5 +1,13 @@
 # @elinpf/dsh-ops-tool-kubectl
 
+## 0.3.0
+
+### Patch Changes
+
+- Updated dependencies [8583b23]
+  - @elinpf/dsh-ops-access@0.3.0
+  - @elinpf/dsh-ops-shell-tool@0.3.0
+
 ## 0.2.1
 
 ### Patch Changes
