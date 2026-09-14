@@ -110,18 +110,18 @@ dsh --profile ops --dump-config | grep -A2 'id: session-reference'  # 应带 dis
 
    离线方式：用 `--data-dir <dir>` 替代 `--url`，直接写 hub 的数据文件。
 
-3. 在 `~/.dsh/profiles/ops/cordis.patch.yml` 加一行配置，把 ops-access 指向 hub：
+3. 通过 dsh 服务的**进程环境变量**把 ops-access 指向 hub——这是升级不丢的接缝。access core 在 agent preset 面：profile 的 `cordis.patch.yml` 只能打 host 面的补丁，而落盘的 preset 文件（`~/.dsh/.agent-presets/ops/agent.cordis.yml`）每次 `preset install` 都会被重写。systemd 场景：
 
-   ```yaml
-   - id: ops-access
-     config:
-       source: hub
-       hubUrl: http://127.0.0.1:3090
-       hubToken: <read token>          # 或用环境变量 ACCESS_HUB_READ_TOKEN
-       hubAdminToken: <admin token>    # 或用环境变量 ACCESS_HUB_ADMIN_TOKEN
+   ```ini
+   # /etc/systemd/system/<你的-dsh-unit>.service
+   Environment=ACCESS_HUB_URL=http://127.0.0.1:3090
+   Environment=ACCESS_HUB_READ_TOKEN=<read token>
+   Environment=ACCESS_HUB_ADMIN_TOKEN=<admin token>
    ```
 
-   改完重启 profile。文件字段内容在 resolve 时按需从 hub 拉取并物化到 `~/.dsh-ops/credentials` 下的本地文件（0600）；profile 仍只携路径，访问门、能力探针、管理 UI、各工具的行为与 YAML 模式完全一致。
+   只设 `ACCESS_HUB_URL` 即切换到 hub 模式；token 本就支持环境变量兜底。preset 条目里显式写的 `source`/`hubUrl` 优先级高于环境变量（临时实验可用，但 `preset install` 后会被冲掉）。
+
+   改完重启服务。文件字段内容在 resolve 时按需从 hub 拉取并物化到 `~/.dsh-ops/hub-cache` 下的 TTL 缓存文件（0600，过期与启动时清扫）；profile 仍只携路径，访问门、能力探针、管理 UI、各工具的行为与 YAML 模式完全一致。
 
 安全提示：v1 是明文 HTTP——保持默认的 loopback 绑定，或把 hub 放在 TLS 反向代理之后。hub 是单点：数据文件和 master key 都要备份。本地 YAML 模式随时可切回作为回退。
 

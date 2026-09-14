@@ -89,9 +89,12 @@ export interface Config {
    * Credential source: 'yaml' (default) reads the local registry file;
    * 'hub' fetches entries from a remote ops-access-hub service on every
    * call and materializes file-field content to managed local files.
+   * Unset + env ACCESS_HUB_URL present → 'hub' (upgrade-proof seam: the
+   * materialized preset file is rewritten on every suite upgrade, so the
+   * durable switch lives in the process environment, e.g. the systemd unit).
    */
   source?: 'yaml' | 'hub'
-  /** Hub base URL (source: 'hub'), e.g. http://127.0.0.1:3090. */
+  /** Hub base URL (source: 'hub'), e.g. http://127.0.0.1:3090. Falls back to env ACCESS_HUB_URL. */
   hubUrl?: string
   /** Hub read token (source: 'hub'); falls back to env ACCESS_HUB_READ_TOKEN. Never logged. */
   hubToken?: string
@@ -117,8 +120,10 @@ export interface Config {
 export const Config: z<Config> = z.object({
   registryFile: z.string().default('~/.dsh-ops/access.yaml'),
   credentialsDir: z.string().default('~/.dsh-ops/credentials'),
-  source: z.union(['yaml', 'hub']).default('yaml'),
-  hubUrl: z.string().default(''),
+  // No defaults here: an absent key must STAY absent so apply() can tell
+  // "unset" apart from an explicit value (the ACCESS_HUB_URL env seam).
+  source: z.union(['yaml', 'hub']),
+  hubUrl: z.string(),
   hubToken: z.string().default(''),
   hubAdminToken: z.string().default(''),
   materializeTtlMinutes: z.number().default(15),
@@ -477,7 +482,11 @@ export function apply(ctx: Context, config: Config): void {
   // default and behaves byte-for-byte as before; hub fetches entries from a
   // remote ops-access-hub on every call and materializes file-field content
   // to managed local files under credentialsDir.
-  const source = config.source ?? 'yaml'
+  // Env seam (ACCESS_HUB_URL): setting it flips an unconfigured deployment to
+  // hub mode. The ops preset file is re-materialized on every suite upgrade,
+  // so config written into it is silently dropped — the process env (systemd
+  // unit) is the only upgrade-proof seam.
+  const source = config.source ?? (process.env.ACCESS_HUB_URL ? 'hub' : 'yaml')
   // In hub mode every local credential file — materialized reads AND staged
   // writes — lives under hubCacheDir as a TTL-bound cache. credentialsDir
   // stays yaml-mode territory: the sweeper must never touch files the yaml
@@ -485,9 +494,9 @@ export function apply(ctx: Context, config: Config): void {
   const contentDir = source === 'hub' ? expandHome(config.hubCacheDir ?? '~/.dsh-ops/hub-cache') : credentialsDir
   let backend: AccessBackend
   if (source === 'hub') {
-    const hubUrl = (config.hubUrl ?? '').replace(/\/+$/, '')
+    const hubUrl = (config.hubUrl || process.env.ACCESS_HUB_URL || '').replace(/\/+$/, '')
     if (hubUrl === '') {
-      throw new Error('ops-access: source "hub" requires hubUrl (e.g. http://127.0.0.1:3090)')
+      throw new Error('ops-access: source "hub" requires hubUrl (e.g. http://127.0.0.1:3090) or env ACCESS_HUB_URL')
     }
     backend = new HubBackend({
       baseUrl: hubUrl,

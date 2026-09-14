@@ -110,18 +110,18 @@ By default credentials live in a local YAML registry on the dsh host. For a cent
 
    Offline alternative: `--data-dir <dir>` instead of `--url` writes the hub's data file directly.
 
-3. Point ops-access at the hub by adding a config row to `~/.dsh/profiles/ops/cordis.patch.yml`:
+3. Point ops-access at the hub via the dsh service's **process environment** — this is the upgrade-proof seam. The access core lives in the agent preset plane: the profile's `cordis.patch.yml` only patches the host plane, and the materialized preset file (`~/.dsh/.agent-presets/ops/agent.cordis.yml`) is rewritten by every `preset install`. With systemd:
 
-   ```yaml
-   - id: ops-access
-     config:
-       source: hub
-       hubUrl: http://127.0.0.1:3090
-       hubToken: <read token>          # or set env ACCESS_HUB_READ_TOKEN
-       hubAdminToken: <admin token>    # or set env ACCESS_HUB_ADMIN_TOKEN
+   ```ini
+   # /etc/systemd/system/<your-dsh-unit>.service
+   Environment=ACCESS_HUB_URL=http://127.0.0.1:3090
+   Environment=ACCESS_HUB_READ_TOKEN=<read token>
+   Environment=ACCESS_HUB_ADMIN_TOKEN=<admin token>
    ```
 
-   Restart the profile afterwards. File-field contents are pulled from the hub per resolve and materialized to local files under `~/.dsh-ops/credentials` (mode 0600); profiles still carry only paths, and the access gate, probes, admin UI, and tools behave exactly as in YAML mode.
+   `ACCESS_HUB_URL` alone flips the source to hub mode; the tokens already had env fallbacks. An explicit `source`/`hubUrl` in the preset's ops-access entry wins over the env when present (useful for temporary experiments — just remember it does not survive `preset install`).
+
+   Restart the service afterwards. File-field contents are pulled from the hub per resolve and materialized to TTL-bound cache files under `~/.dsh-ops/hub-cache` (mode 0600, swept on expiry and at startup); profiles still carry only paths, and the access gate, probes, admin UI, and tools behave exactly as in YAML mode.
 
 Security notes: v1 speaks plain HTTP — keep the default loopback bind or put the hub behind a TLS-terminating reverse proxy. The hub is a single point of custody: back up both the data file and the master key. The local YAML mode remains available as a fallback at any time.
 

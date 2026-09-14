@@ -226,6 +226,32 @@ describe('hub source', () => {
     expect(() => setup({ config: { source: 'hub' } })).toThrow(/requires hubUrl/)
   })
 
+  it('env ACCESS_HUB_URL alone flips an unconfigured deployment to hub mode', async () => {
+    // The upgrade-proof seam: the materialized preset file is rewritten on
+    // every suite install, so the durable hub switch is the process env.
+    seed(hub, 'test', 'alpha', 'ro', { kubeconfig: 'v1' })
+    process.env.ACCESS_HUB_URL = hub.url
+    try {
+      const s = setup() // no source, no hubUrl — env only
+      s.handle.register(fileProvider)
+      const profile = await s.handle.resolve('test', 'alpha')
+      expect(readFileSync(profile.fields.kubeconfig as string, 'utf8')).toBe('v1')
+    } finally {
+      delete process.env.ACCESS_HUB_URL
+    }
+  })
+
+  it('an explicit source: yaml wins over ACCESS_HUB_URL', async () => {
+    process.env.ACCESS_HUB_URL = hub.url
+    try {
+      const s = setup({ config: { source: 'yaml' } })
+      s.handle.register(fileProvider)
+      await expect(s.handle.resolve('test', 'alpha')).rejects.toThrow()
+    } finally {
+      delete process.env.ACCESS_HUB_URL
+    }
+  })
+
   it('resolve materializes file-field content to a managed 0600 path and serves paths in the profile', async () => {
     seed(hub, 'test', 'alpha', 'ro', { kubeconfig: 'clusters: []\n', endpoint: 'https://a' }, { description: 'alpha 环境' })
     const { handle, hubCacheDir, credentialsDir } = hubSetup()
