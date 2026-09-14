@@ -1,6 +1,6 @@
 {
   "name": "@elinpf/dsh-ops-access-hub",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Standalone credential hub for the dsh ops suite: encrypted-at-rest storage, token-authenticated REST API, minimal web UI, and a YAML registry importer. Not a dsh plugin.",
   "type": "module",
   "main": "lib/index.js",
