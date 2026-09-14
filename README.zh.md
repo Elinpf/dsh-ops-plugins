@@ -45,11 +45,11 @@
 
    `@deepseek-ai/dsh-web-app` 随 dsh 安装解析，不能用 `dsh plugin add` 安装。
 
-安装报 `minimumReleaseAge` 错误时，在 profile 的 `pnpm-workspace.yaml` 加排除项（版本与当前一致）：
+安装报 `minimumReleaseAge` 错误时，在 profile 的 `pnpm-workspace.yaml` 加排除项——用纯名字模式 `@elinpf/*`，不带版本号，升级时无需再改：
 
 ```yaml
 minimumReleaseAgeExclude:
-  - '@elinpf/*@0.1.5'
+  - '@elinpf/*'
 ```
 
 ## 部署

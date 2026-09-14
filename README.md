@@ -45,11 +45,11 @@ It installs as a single npm package, `@elinpf/dsh-ops`; the granular `@elinpf/ds
 
    `@deepseek-ai/dsh-web-app` resolves through the dsh installation; it cannot be installed via `dsh plugin add`.
 
-If the install fails with a `minimumReleaseAge` error, add an exclusion to the profile's `pnpm-workspace.yaml` (matching the current version):
+If the install fails with a `minimumReleaseAge` error, add a name-pattern exclusion to the profile's `pnpm-workspace.yaml` — plain `@elinpf/*`, with NO version qualifier, so upgrades never need the list edited again:
 
 ```yaml
 minimumReleaseAgeExclude:
-  - '@elinpf/*@0.1.5'
+  - '@elinpf/*'
 ```
 
 ## Deployment
