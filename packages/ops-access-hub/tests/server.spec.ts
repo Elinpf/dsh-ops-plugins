@@ -12,7 +12,7 @@ import type { Server } from 'node:http'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { HubStore } from '../src/store.ts'
 import { createHubServer } from '../src/server.ts'
-import { mktmpdir } from './tmpdir.ts'
+import { mktmpdir } from '@elinpf/dsh-ops-test-support/tmpdir'
 
 const ADMIN = 'test-admin-token'
 const READ = 'test-read-token'

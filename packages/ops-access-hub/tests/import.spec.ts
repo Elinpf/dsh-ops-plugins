@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyToStore, importRegistry, pushToHub } from '../src/import.ts'
 import { HubStore } from '../src/store.ts'
 import { createHubServer } from '../src/server.ts'
-import { mktmpdir } from './tmpdir.ts'
+import { mktmpdir } from '@elinpf/dsh-ops-test-support/tmpdir'
 
 let dir: string
 

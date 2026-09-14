@@ -155,8 +155,8 @@ export function shellCompositionError(toolName: string, command: string): string
   return `the command contains ${op} — everything after it would run as a NEW local command WITHOUT the ${toolName} prefix and injected credentials, failing with a misleading 'xxx: command not found'. One call = one ${toolName} command: split this into separate tool calls. (A single | pipe is allowed — it filters the output locally.)`
 }
 
-/** The shared output contract: schema + render, both pure. */
-const output = {
+/** The shared output contract: schema + render, both pure. Exported so non-shell tools (e.g. ops-tool-prometheus, which speaks HTTP but keeps the suite-standard result shape) can reuse it instead of copying. */
+export const shellToolOutput = {
   schema: {
     type: 'object',
     additionalProperties: false,
@@ -199,7 +199,7 @@ export function registerProfiledShellTool(ctx: Context, spec: ProfiledShellToolS
         ? { timeoutSec: { type: 'number', description: `Optional per-call timeout in seconds (default ${Math.round((spec.timeoutMs ?? 30000) / 1000)}, max 600). Use only for a command you KNOW is slow (e.g. listing a very large pool) — a longer wait does not fix a hung remote end.` } }
         : {}),
     },
-    output,
+    output: shellToolOutput,
     async execute(args: Record<string, unknown>, exec: ShellToolExec): Promise<ShellToolResult> {
       let fullCommand = ''
       try {

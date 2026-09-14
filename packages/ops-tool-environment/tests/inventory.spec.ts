@@ -13,7 +13,7 @@ import {
 } from '../src/inventory.js'
 import { scanCluster } from '../src/scanner.js'
 import { FAKE_KUBECONFIG, fakeExec, fakeFetch, fakeSpawn, failSpawn } from './helper.ts'
-import { mktmpdir } from './tmpdir.ts'
+import { mktmpdir } from '@elinpf/dsh-ops-test-support/tmpdir'
 
 const NOW = new Date('2026-08-27T00:00:00Z')
 const NO_USER_RULES = '/nonexistent/environment-rules.yaml'

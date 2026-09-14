@@ -528,24 +528,6 @@ describe('degradation: 404 and network failure never throw', () => {
   })
 })
 
-// ── Pending-request badge derivation ────────────────────────────────────────
-
-describe('pendingRequestCount', () => {
-  it('counts the whole pending set the gate route returns (own + delegated)', () => {
-    expect(client.pendingRequestCount(undefined)).toBe(0)
-    expect(client.pendingRequestCount(null)).toBe(0)
-    expect(client.pendingRequestCount([])).toBe(0)
-    // Own request (no parentSession): counted.
-    expect(client.pendingRequestCount([{ session: 'sess-parent' }])).toBe(1)
-    // Own + delegated children: all counted.
-    expect(client.pendingRequestCount([
-      { session: 'sess-c1', parentSession: 'sess-parent' },
-      { session: 'sess-c2', parentSession: 'sess-parent' },
-      { session: 'sess-parent' },
-    ])).toBe(3)
-  })
-})
-
 // ── Cross-session overview (ticket 13) ───────────────────────────────────────
 
 describe('cross-session overview panel', () => {

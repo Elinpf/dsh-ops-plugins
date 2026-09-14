@@ -27,7 +27,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import type { AccessProvider } from '@elinpf/dsh-ops-access'
-import { expandHome, registerAccessProvider } from '@elinpf/dsh-ops-access'
+import { expandHome, hasSingleLineBody, registerAccessProvider } from '@elinpf/dsh-ops-access'
 import type { SshCredEntry, SshEntry, SshProviderConfig } from './types.js'
 
 export type { SshCredEntry, SshEntry, SshProviderConfig } from './types.js'
@@ -121,8 +121,7 @@ function validateContent(keygenTimeoutMs: number) {
   return (field: string, content: string): string | null | Promise<string | null> => {
     if (field === 'key') return validateKeyContent(content, keygenTimeoutMs)
     if (field === 'password') {
-      const body = content.endsWith('\n') ? content.slice(0, -1) : content
-      if (body.includes('\n') || body.includes('\r')) {
+      if (!hasSingleLineBody(content)) {
         return 'a password must be a single line — sshpass -f reads only the first line of the file'
       }
       return null

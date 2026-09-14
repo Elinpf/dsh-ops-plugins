@@ -14,18 +14,3 @@ export interface PrometheusToolConfig {
   /** Per-call HTTP timeout for Prometheus queries (ms). Slow queries may need more. */
   timeoutMs: number
 }
-
-/**
- * The suite-standard tool result shape — identical to ShellToolResult in
- * @elinpf/dsh-ops-shell-tool. Duplicated here (with the output schema/render)
- * because this tool speaks HTTP, not shell: it does not go through
- * registerProfiledShellTool, and ops-shell-tool does not export the contract
- * separately.
- */
-export interface PrometheusToolResult {
-  exitCode: number
-  stdout: string
-  stderr: string
-  command: string
-  error?: string
-}

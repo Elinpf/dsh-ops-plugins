@@ -19,7 +19,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import type { AccessProvider } from '@elinpf/dsh-ops-access'
-import { expandHome, registerAccessProvider } from '@elinpf/dsh-ops-access'
+import { expandHome, hasSingleLineBody, registerAccessProvider } from '@elinpf/dsh-ops-access'
 import type { PrometheusEntry } from './types.js'
 
 // Pure types live in types.ts (zero runtime code); re-exported here so
@@ -61,8 +61,7 @@ export const provider: AccessProvider = {
   normalizeTrailingNewline: true,
   validateContent(field, content) {
     if (field !== 'token') return null
-    const body = content.endsWith('\n') ? content.slice(0, -1) : content
-    if (body.includes('\n') || body.includes('\r')) {
+    if (!hasSingleLineBody(content)) {
       return 'a bearer token must be a single line — it is sent verbatim in the Authorization header'
     }
     return null

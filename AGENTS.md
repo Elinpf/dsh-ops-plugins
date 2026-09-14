@@ -6,7 +6,7 @@ This repo lives inside a larger workspace (`../`) together with a test instance 
 
 ## Overview
 
-Eighteen of the 19 packages under `packages/` share one version number (changesets `fixed` group) and publish together as a lockstep suite ("插件集 vX"). The 19th, `ops-access-hub`, is the repo's one exception — not a dsh plugin, independently versioned (see Packages). npm names are `@elinpf/dsh-ops-*`, plus the single deployment package `@elinpf/dsh-ops`.
+Eighteen of the 20 packages under `packages/` share one version number (changesets `fixed` group) and publish together as a lockstep suite ("插件集 vX"). The two exceptions: `ops-access-hub` — not a dsh plugin, independently versioned (see Packages) — and `test-support` — private, never published (shared spec helpers). npm names are `@elinpf/dsh-ops-*`, plus the single deployment package `@elinpf/dsh-ops`.
 
 **`CONTEXT.md` is the domain glossary and the single source of truth for shared vocabulary** (in Chinese). If a code change alters the meaning of a term defined there, update `CONTEXT.md` in the same change. Design decisions and finalized specs live in `docs/adr/` and `docs/specs/`; planned work is broken into tickets under `.scratch/<feature>/issues/`.
 
@@ -26,6 +26,7 @@ The repo root carries a user-facing README trio (`README.md` / `README.zh.md` / 
 - `ops-trace-ui` — host-plane thin shell: registers the shared `trace` session projection and ships the web panel client bundle. Registers no tools and touches no prompts.
 - `ops-prompts` — prompt channel plugin: registers methodology sections (static system-prompt text) and reminders (pre-step check functions that inject ephemeral prompts). Also ships the repo's prompt-only skills into dsh's **native skill subsystem** via a bundled provider (`ops-prompts-bundled`, `src/skills.ts`): Markdown files in the package's `skills/` dir with native frontmatter (`name`/`description` required, `whenToUse` optional) become catalog candidates; bodies are pulled on demand through the `skill` tool. A prompt-only skill is a text file, never its own package (see CONTEXT.md「ops 专属 skill」). Beyond the bundled skills it carries no business content.
 - `ops-access-ui` — browser half of the `@`-mention access-profile picker; its host row exists only for client-bundle discovery.
+- `test-support` — private, unpublished spec helpers (`./tmpdir`: mkdtemp + afterAll sweep). Test-only workspace dependency; no build, no version cadence.
 
 `ops-preset.yml` at the repo root is the agent-plane composition (the `ops` preset) that mounts these plugins alongside upstream dsh tools.
 

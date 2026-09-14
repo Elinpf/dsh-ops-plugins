@@ -284,17 +284,6 @@ function postPanelDecide(id: string, approved: boolean, ttlMinutes?: number): Pr
 
 // ── Pending-request badge (input dock) ─────────────────────────────────────
 
-/**
- * Count the pending requests the gate route returns for one session: own
- * parked request_access calls PLUS delegated sub-session ones (血缘). Since
- * dsh 0.1.5 the input-dock owner no longer passes sessionId/runningCalls in
- * the zone props — the badge polls this route for the whole pending set.
- */
-function pendingRequestCount(requests: readonly { session?: string, parentSession?: string }[] | null | undefined): number {
-  if (!Array.isArray(requests)) return 0
-  return requests.length
-}
-
 /** Dock badge props: sessionId arrives via the slot entry's inject face. */
 interface AccessBadgeProps {
   sessionId?: string
@@ -316,7 +305,7 @@ function AccessBadge(props: AccessBadgeProps): unknown {
     let alive = true
     const poll = async () => {
       const data = await fetchPanelRequests(sid)
-      if (alive && data !== null) setCount(pendingRequestCount(data.requests))
+      if (alive && data !== null && Array.isArray(data.requests)) setCount(data.requests.length)
     }
     void poll()
     const timer = setInterval(() => { void poll() }, 4000)
@@ -1963,7 +1952,7 @@ export { apply, inject, name }
 export {
   apiFetchList, apiFetchResult, fetchAdminList, fetchKinds, submitEntry, deleteEntry, AdminSection,
   fetchPanelGrants, fetchPanelRequests, fetchPanelOverview, groupBySession, postPanelGrant, postPanelExtend, postPanelRevoke, postPanelRevokeAll, postPanelDecide, postPanelDeny, postPanelUndeny,
-  AccessPanel, AccessBadge, pendingRequestCount, defaultTtlChoice, liveGrantFor,
+  AccessPanel, AccessBadge, defaultTtlChoice, liveGrantFor,
 }
 /** @internal */
 export type { AdminEntry, AdminTierStatus, KindDescriptor, SubmitEntryBody, ApiResult, PanelGrant, PanelPendingRequest, PanelDenied, OverviewGrant }
