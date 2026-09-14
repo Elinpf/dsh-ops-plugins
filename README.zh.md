@@ -17,7 +17,7 @@
 
 ## 环境要求
 
-- DeepSeek Harness ≥ 0.1.0-rc（已在 0.1.0-rc、0.1.1-rc.2 验证）
+- DeepSeek Harness ≥ 0.1.0-rc（已在 0.1.0-rc、0.1.1-rc.2、0.1.5-rc.2 验证）
 - pnpm ≥ 10
 - 宿主机上有 `kubectl` 且集群网络可达；`ceph` / `ssh` 按需；使用密码登录的 ssh 档案（网络设备等）还需要 `sshpass`
 
