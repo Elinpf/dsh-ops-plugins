@@ -451,7 +451,11 @@ describe('materialization sweep', () => {
   }
 
   it('sweepMaterialized removes files older than the TTL, keeps fresh ones, prunes empty dirs', async () => {
-    const { hubCacheDir } = hubSetup()
+    // Bare dir, NOT hubSetup: mounting the plugin kicks off a detached boot
+    // sweep (maxAge 0) that races plant() on a slow machine and deletes the
+    // files under test (CI flake 2026-09-14). sweepMaterialized is a pure
+    // fs walk — it needs no backend.
+    const hubCacheDir = join(mktmpdir('ops-access-sweep-'), 'hub-cache')
     const oldFile = `${hubCacheDir}/test/old/ro/kubeconfig`
     const freshFile = `${hubCacheDir}/test/fresh/ro/kubeconfig`
     plant(oldFile, 'old', 20 * 60_000)
@@ -464,7 +468,8 @@ describe('materialization sweep', () => {
   })
 
   it('sweepMaterialized(0) removes everything — the startup sweep shape', async () => {
-    const { hubCacheDir } = hubSetup()
+    // Bare dir for the same detached-boot-sweep race reason as above.
+    const hubCacheDir = join(mktmpdir('ops-access-sweep-'), 'hub-cache')
     plant(`${hubCacheDir}/test/a/ro/kubeconfig`, 'a')
     plant(`${hubCacheDir}/test/b/rw/kubeconfig`, 'b')
     expect(await sweepMaterialized(hubCacheDir, 0)).toBe(2)
