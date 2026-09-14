@@ -32,10 +32,10 @@ import { timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import type { EntryEnvelope, HubStore, ProbeState, TierName } from './store.js'
+import { NAME_PATTERN } from './store.js'
 import { WEB_UI_HTML } from './web.js'
 
-/** Profile name / kind charset; kinds additionally can never contain `/` (path segment). */
-export const NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._@-]*$/
+export { NAME_PATTERN }
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024
 

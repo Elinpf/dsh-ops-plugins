@@ -41,6 +41,9 @@ import { decryptDoc, encryptDoc, loadMasterKey } from './crypto.js'
 
 export type TierName = 'ro' | 'rw'
 
+/** Profile name / kind charset; kinds additionally can never contain `/` (path segment). Shared by the HTTP surface and the offline importer. */
+export const NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._@-]*$/
+
 export interface ProbeState {
   status: 'verified' | 'mismatch' | 'unverifiable'
   detail?: string

@@ -6,7 +6,7 @@ This repo lives inside a larger workspace (`../`) together with a test instance 
 
 ## Overview
 
-Sixteen of the 17 packages under `packages/` share one version number (changesets `fixed` group) and publish together as a lockstep suite ("插件集 vX"). The 17th, `ops-access-hub`, is the repo's one exception — not a dsh plugin, independently versioned (see Packages). npm names are `@elinpf/dsh-ops-*`, plus the single deployment package `@elinpf/dsh-ops`.
+Eighteen of the 19 packages under `packages/` share one version number (changesets `fixed` group) and publish together as a lockstep suite ("插件集 vX"). The 19th, `ops-access-hub`, is the repo's one exception — not a dsh plugin, independently versioned (see Packages). npm names are `@elinpf/dsh-ops-*`, plus the single deployment package `@elinpf/dsh-ops`.
 
 **`CONTEXT.md` is the domain glossary and the single source of truth for shared vocabulary** (in Chinese). If a code change alters the meaning of a term defined there, update `CONTEXT.md` in the same change. Design decisions and finalized specs live in `docs/adr/` and `docs/specs/`; planned work is broken into tickets under `.scratch/<feature>/issues/`.
 
@@ -84,7 +84,7 @@ The test instance lives at `../../.dsh-target` (profile `dev-target`), which dep
 
 ## Release (changesets, fixed lockstep)
 
-All 16 fixed-group packages share one version number (`fixed` group in `.changeset/config.json`) — the suite ships as "插件集 vX". `ops-access-hub` stays outside the group and versions independently. Flow:
+All 18 fixed-group packages share one version number (`fixed` group in `.changeset/config.json`) — the suite ships as "插件集 vX". `ops-access-hub` stays outside the group and versions independently. Flow:
 
 1. With any user-facing change, run `pnpm changeset` and commit the generated `.changeset/*.md` file.
 2. On push to `master`, `.github/workflows/release.yml` (changesets/action) opens or updates a "chore: version packages" PR.

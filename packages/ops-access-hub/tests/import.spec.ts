@@ -171,4 +171,25 @@ ceph:
     await reopened.init()
     expect(reopened.getEntry('ceph', 'main')?.tiers.ro?.fields).toEqual({ mon: '10.0.0.1' })
   })
+
+  it('applyToStore rejects kind/name outside the API charset (offline path must match segment())', async () => {
+    hubDir = mktmpdir('hub-import-target-')
+    const store = new HubStore({ dataDir: hubDir })
+    await store.init()
+    const badName = await importRegistry(writeRegistry(`version: 1
+k8s:
+  ../escape:
+    ro:
+      endpoint: https://x
+`))
+    expect(() => applyToStore(store, badName.entries)).toThrow(/invalid name.*NAME_PATTERN|invalid name/)
+    const badKind = await importRegistry(writeRegistry(`version: 1
+"bad/kind":
+  main:
+    ro:
+      endpoint: https://x
+`))
+    expect(() => applyToStore(store, badKind.entries)).toThrow(/invalid kind/)
+    expect(store.getEntry('k8s', '../escape')).toBeUndefined()
+  })
 })
