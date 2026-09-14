@@ -1,5 +1,13 @@
 # @elinpf/dsh-ops-tool-environment
 
+## 0.2.1
+
+### Patch Changes
+
+- Updated dependencies [4d28c14]
+  - @elinpf/dsh-ops-access@0.2.1
+  - @elinpf/dsh-ops-prompts@0.2.1
+
 ## 0.2.0
 
 ### Patch Changes
