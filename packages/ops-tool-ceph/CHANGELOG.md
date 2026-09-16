@@ -1,5 +1,14 @@
 # @elinpf/dsh-ops-tool-ceph
 
+## 0.4.0
+
+### Patch Changes
+
+- Updated dependencies [5d1a604]
+- Updated dependencies [a684e10]
+- Updated dependencies [34bc97e]
+  - @elinpf/dsh-ops-shell-tool@0.4.0
+
 ## 0.3.0
 
 ### Patch Changes

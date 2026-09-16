@@ -1,5 +1,12 @@
 # @elinpf/dsh-ops-trace-ui
 
+## 0.4.0
+
+### Patch Changes
+
+- Updated dependencies [1015b6b]
+  - @elinpf/dsh-ops-tool-trace@0.4.0
+
 ## 0.3.0
 
 ### Patch Changes

@@ -1,5 +1,16 @@
 # @elinpf/dsh-ops-shell-tool
 
+## 0.4.0
+
+### Patch Changes
+
+- 5d1a604: access 支持每次调用显式声明凭证档位: 所有 shell 系消费工具(kubectl/ceph/ssh)和 prometheus 工具新增可选 `tier: 'ro'|'rw'` 参数。不传 = 按授权自动决定(现状); 显式 `'ro'` = 主动降级——持有 rw 授权的会话也可以用只读凭证执行纯查询, 授权不受影响也不记 rw-issue 审计; 显式 `'rw'` = 要求写档, 未授权时响亮报错并指引 request_access(不再静默给 ro)。对 approval-required 的 kind(ssh, 凭证只有一份)显式要 rw 会得到明确的"无 rw 档"教学错误。core 的 `resolve` 新增第 4 参 `AccessRequest`; 无 gate 时显式 rw 直接抛错(rw 永不在无 broker 时签发)。
+- a684e10: 修复沙箱内 ssh 启动失败 (`Couldn't open /dev/null: Permission denied`): 所有 shell 系消费工具 (kubectl/ceph/ssh) 现在像 dsh 自家 bash 工具一样, 把调用会话的 sandbox policy 显式透传给 shell 执行器。此前请求不带 policy, bash-sandbox 回退到 deployment 策略——其 workspace 根是 dsh 进程 cwd (systemd 服务为 `/`), 导致 bwrap 用 `--bind / /` 盖住自建 /dev tmpfs (/dev 设备节点全部 EACCES, ssh 必开的 /dev/null 打不开), 且 workspace-write 退化为整个容器根可写 (越权面)。修复后沙箱根回到会话工作区。confining 执行器挂载但 sandboxPolicy 服务缺失时, 工具响亮报错拒绝执行, 不再静默用错根。
+- 34bc97e: 内部去重清理(code-review 坏味项,无行为变化):expandHome 归位 core/backend.ts(消除 hub-backend 重复实现);单行粘贴守卫提取为 core 导出的 hasSingleLineBody(ssh/prometheus 两 provider 共用);ops-shell-tool 导出 shellToolOutput 契约,ops-tool-prometheus 复用替代逐字拷贝;hub-backend.listRequests 去掉从未使用的 status 参数;access-ui badge 的 pendingRequestCount 内联。另新增私有 test-support 包,合并三份逐字相同的 tests/tmpdir.ts。
+- Updated dependencies [5d1a604]
+- Updated dependencies [34bc97e]
+  - @elinpf/dsh-ops-access@0.4.0
+
 ## 0.3.0
 
 ### Patch Changes

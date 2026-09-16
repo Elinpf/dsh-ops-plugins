@@ -1,5 +1,31 @@
 # @elinpf/dsh-ops
 
+## 0.4.0
+
+### Patch Changes
+
+- 1015b6b: 新包 `@elinpf/dsh-ops-knowledge` — 排错知识库插件: `knowledge_search` / `knowledge_record` / `knowledge_hit` 三个模型工具(access hub `/cases` 后端), 经 ops-prompts 注册静态 methodology(先搜后沉淀、采用计数纪律) + 每会话一次的病例索引 reminder(按 hitCount 取 top 10)。病例除结论(症状/根因/修复)外还有可选 methodology(排查方法论: 关键判别步骤) 和 difficulty(1-5 难度自评) 字段; `knowledge_search` 支持 query="*" 浏览全量。无 hub 配置时整体 no-op; hub 不可达时工具返回错误结果而非抛出。trace 的 doctrine HELP_TEXT 新增「收口后的知识沉淀」段, ops 部署包的 preset 带上 `tool-ops-knowledge` 行(无 config, 走 `ACCESS_HUB_URL`/`ACCESS_HUB_READ_TOKEN` 环境变量)。
+- Updated dependencies [5d1a604]
+- Updated dependencies [1015b6b]
+- Updated dependencies [34bc97e]
+  - @elinpf/dsh-ops-access@0.4.0
+  - @elinpf/dsh-ops-access-gate@0.4.0
+  - @elinpf/dsh-ops-tool-prometheus@0.4.0
+  - @elinpf/dsh-ops-knowledge@0.4.0
+  - @elinpf/dsh-ops-tool-trace@0.4.0
+  - @elinpf/dsh-ops-access-ssh@0.4.0
+  - @elinpf/dsh-ops-access-prometheus@0.4.0
+  - @elinpf/dsh-ops-access-ui@0.4.0
+  - @elinpf/dsh-ops-access-ceph@0.4.0
+  - @elinpf/dsh-ops-access-k8s@0.4.0
+  - @elinpf/dsh-ops-tool-ceph@0.4.0
+  - @elinpf/dsh-ops-tool-environment@0.4.0
+  - @elinpf/dsh-ops-tool-kubectl@0.4.0
+  - @elinpf/dsh-ops-tool-ssh@0.4.0
+  - @elinpf/dsh-ops-panel@0.4.0
+  - @elinpf/dsh-ops-prompts@0.4.0
+  - @elinpf/dsh-ops-trace-ui@0.4.0
+
 ## 0.3.0
 
 ### Patch Changes
