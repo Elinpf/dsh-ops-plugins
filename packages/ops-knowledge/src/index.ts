@@ -191,7 +191,7 @@ function apply(ctx: Context, config: Config): void {
     parameters: {
       id: { type: 'string', description: '已有病例的 id — 带上它 = 更新那条 (查重后发现近似旧病例时用); 不带 = 新建。' },
       title: { type: 'string', required: true, description: '一句话概括, 如 "CSI 卡住因为 Ceph 存储满"。' },
-      symptoms: { type: 'array', items: { type: 'string' }, required: true, description: '当时观察到的具体现象: 报错原文片段、指标值、命令输出特征。是搜索的入口, 写具体。' },
+      symptoms: { type: 'array', items: { type: 'string' }, required: true, description: '搜索入口。每条 = 症状类关键词 + 当时观察到的具体值 (报错原文片段、指标值、命令输出特征), 如 "少盘: lsblk 应 7 块只识别 6 块"——类词让跨域同类问题也能命中。' },
       root_cause: { type: 'string', required: true, description: '根因, 到物理/基础设施层 (不是中间现象)。' },
       fix: { type: 'string', required: true, description: '可执行的修复动作。' },
       evidence: { type: 'string', description: '关键证据 (日志行、命令输出)。' },

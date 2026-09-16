@@ -18,7 +18,7 @@ export const RECORD_RULE =
 
 /** The case quality bar: the three questions a reusable case answers. */
 export const QUALITY_BAR =
-  '病例要回答三个问题: symptoms 让搜得到 (当时观察到的具体现象——报错原文、指标值), root_cause+fix 让直接用 (根因到物理层, 修复可执行), methodology 让相似场景复用方法 (哪一步判别了假设、哪条命令是关键)。排查的中间过程属于 trace 树, 知识库只存结晶'
+  '病例要回答三个问题: symptoms 让搜得到 (每条 = 症状类关键词 + 当时观察到的具体值, 如 "少盘: lsblk 应 7 块只识别 6 块"——类词让跨域同类问题也能命中, 具体值锚定报错原文/指标值), root_cause+fix 让直接用 (根因到物理层, 修复可执行), methodology 让相似场景复用方法 (哪一步判别了假设、哪条命令是关键)。排查的中间过程属于 trace 树, 知识库只存结晶'
 
 /** Difficulty anchor text, shared by the methodology section and the tool parameter description. */
 export const DIFFICULTY_ANCHORS =
