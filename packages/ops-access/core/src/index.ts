@@ -62,6 +62,7 @@ import type {
   KindDescriptor,
   AccessAgent,
   AccessBroker,
+  AccessRequest,
   OpsAccess,
 } from './types.js'
 import type { AccessBackend, BackendEntry, BackendTier } from './backend.js'
@@ -148,6 +149,7 @@ export type {
   AccessAgent,
   AccessBrokerDecision,
   AccessBroker,
+  AccessRequest,
   OpsAccess,
 } from './types.js'
 
@@ -600,7 +602,7 @@ export function apply(ctx: Context, config: Config): void {
       }
     },
 
-    async resolve(kind: string, profileName: string, agent?: AccessAgent): Promise<AccessProfile> {
+    async resolve(kind: string, profileName: string, agent?: AccessAgent, request?: AccessRequest): Promise<AccessProfile> {
       profileName = stripKindPrefix(kind, profileName)
       const provider = providers.get(kind)
       if (!provider) {
@@ -610,14 +612,20 @@ export function apply(ctx: Context, config: Config): void {
       // Once a broker is registered it is consulted on EVERY resolve —
       // including calls without an agent. The no-agent ruling (fail closed to
       // ro, or deny outright) is policy, and policy lives in the broker, not
-      // here. Without a broker, rw is never issued at all.
+      // here. Without a broker, rw is never issued at all — so an explicit rw
+      // request without a broker is an error, not a silent ro.
       let tier: 'ro' | 'rw' = 'ro'
       if (broker) {
-        const decision = broker(kind, profileName, agent)
+        const decision = broker(kind, profileName, agent, request)
         if (typeof decision === 'object') {
           throw new Error(`ops-access: access denied for ${kind}/${profileName}: ${decision.deny}`)
         }
-        if (decision === 'rw') tier = 'rw'
+        // An explicit 'ro' request caps the outcome at ro even when the broker
+        // would issue rw — the deliberate downgrade is the point: the caller
+        // declares "this call only reads".
+        tier = request?.tier === 'ro' ? 'ro' : decision
+      } else if (request?.tier === 'rw') {
+        throw new Error(`ops-access: rw tier requested for ${kind}/${profileName}, but no access gate is mounted — rw is never issued without one`)
       }
       // A missing SOURCE (yaml: no registry file) throws from the backend
       // verbatim (SourceUnavailableError); an unreadable source propagates

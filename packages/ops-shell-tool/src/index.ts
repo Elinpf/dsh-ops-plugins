@@ -195,6 +195,11 @@ export function registerProfiledShellTool(ctx: Context, spec: ProfiledShellToolS
     parameters: {
       [spec.targetParam]: { type: 'string', required: true, description: spec.targetParamDescription },
       command: { type: 'string', required: true, description: spec.commandDescription },
+      tier: {
+        type: 'string',
+        enum: ['ro', 'rw'],
+        description: 'Credential tier for THIS call. Omit = decided by the grant (rw when granted, else ro). "ro" = deliberate downgrade: use the read-only credential even while holding an rw grant — declare it for pure queries so you always know which power you are exercising. "rw" = require the write tier; without a session grant this fails loudly and points at request_access instead of silently reading.',
+      },
       ...(spec.perCallTimeout
         ? { timeoutSec: { type: 'number', description: `Optional per-call timeout in seconds (default ${Math.round((spec.timeoutMs ?? 30000) / 1000)}, max 600). Use only for a command you KNOW is slow (e.g. listing a very large pool) — a longer wait does not fix a hung remote end.` } }
         : {}),
@@ -232,7 +237,11 @@ export function registerProfiledShellTool(ctx: Context, spec: ProfiledShellToolS
         }
         // Pass the caller agent through so the access gate (if mounted) can
         // key grants on the session id. Without a gate this arg is inert.
-        const profile = await opsAccess.resolve(spec.kind, args[spec.targetParam] as string, exec.agent)
+        // An explicit tier arg is the per-call declaration: 'ro' downgrades
+        // deliberately even under an rw grant; 'rw' fails loudly when the
+        // session holds no grant (see core's resolve / the gate's broker).
+        const tierArg = args.tier === 'ro' || args.tier === 'rw' ? args.tier : undefined
+        const profile = await opsAccess.resolve(spec.kind, args[spec.targetParam] as string, exec.agent, tierArg ? { tier: tierArg } : undefined)
         // Mint per-call credential tokens: buildCommand marks file fields via
         // ref(); the display command (model-visible, logged) keeps the tokens,
         // only the executed command carries the real values.

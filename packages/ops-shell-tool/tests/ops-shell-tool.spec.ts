@@ -54,7 +54,7 @@ interface ShellRunOutcome {
 }
 
 function setup(opts: {
-  resolveImpl?: (kind: string, name: string, agent?: { id: string }) => Promise<AccessProfile>
+  resolveImpl?: (kind: string, name: string, agent?: { id: string }, request?: { tier?: 'ro' | 'rw' }) => Promise<AccessProfile>
   runImpl?: (spec: any) => Promise<ShellRunOutcome>
   withOpsAccess?: boolean
   spec?: Partial<ProfiledShellToolSpec>
@@ -65,9 +65,9 @@ function setup(opts: {
   const calls = { resolve: 0, shellRun: 0 }
 
   const opsAccess = {
-    resolve: (kind: string, name: string, agent?: { id: string }) => {
+    resolve: (kind: string, name: string, agent?: { id: string }, request?: { tier?: 'ro' | 'rw' }) => {
       calls.resolve++
-      return (opts.resolveImpl ?? (async () => PROFILE))(kind, name, agent)
+      return (opts.resolveImpl ?? (async () => PROFILE))(kind, name, agent, request)
     },
   }
 
@@ -122,11 +122,22 @@ describe('registerProfiledShellTool', () => {
     expect(h.tools.map((t) => t.name)).toEqual(['widget'])
   })
 
-  it('declares exactly the target param and the command param', () => {
+  it('declares the target, command and tier params', () => {
     const { tool } = setup()
     // defineTool normalizes parameters into JSON-schema shape.
-    expect(Object.keys(tool.parameters.properties).sort()).toEqual(['command', 'target'])
+    expect(Object.keys(tool.parameters.properties).sort()).toEqual(['command', 'target', 'tier'])
     expect([...tool.parameters.required].sort()).toEqual(['command', 'target'])
+    expect(tool.parameters.properties.tier.enum).toEqual(['ro', 'rw'])
+  })
+
+  it('forwards an explicit tier arg into opsAccess.resolve; omits the request otherwise', async () => {
+    const seen: Array<unknown> = []
+    const h = setup({
+      resolveImpl: async (_kind, _name, _agent, request) => { seen.push(request); return PROFILE },
+    })
+    await h.tool.execute({ target: 'prod', command: 'status', tier: 'ro' }, h.exec())
+    await h.tool.execute({ target: 'prod', command: 'status' }, h.exec())
+    expect(seen).toEqual([{ tier: 'ro' }, undefined])
   })
 
   it('happy path: resolves kind+target, builds the command, maps the result', async () => {
@@ -407,12 +418,12 @@ describe('rejectShellComposition', () => {
 describe('perCallTimeout', () => {
   it('adds no timeoutSec parameter when disabled', () => {
     const { tool } = setup()
-    expect(Object.keys(tool.parameters.properties).sort()).toEqual(['command', 'target'])
+    expect(Object.keys(tool.parameters.properties).sort()).toEqual(['command', 'target', 'tier'])
   })
 
   it('declares timeoutSec and honors an in-range override', async () => {
     const h = setup({ spec: { perCallTimeout: true } })
-    expect(Object.keys(h.tool.parameters.properties).sort()).toEqual(['command', 'target', 'timeoutSec'])
+    expect(Object.keys(h.tool.parameters.properties).sort()).toEqual(['command', 'target', 'tier', 'timeoutSec'])
     await h.tool.execute({ target: 'prod', command: 'status', timeoutSec: 120 }, h.exec())
     expect(h.shellRequests[0].timeoutMs).toBe(120000)
   })

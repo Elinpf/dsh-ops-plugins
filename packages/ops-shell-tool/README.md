@@ -12,6 +12,7 @@ A pure library (not a plugin) — the single home for the boilerplate every ops 
 - **Honest kill reporting** — 30 s default timeout; a signal death normalizes to `exitCode: -1` with the cause (timeout / caller abort / signal name) spelled out in the `error` field, never a bare -1.
 - **Environment-failure translation** — when stderr matches a known local-environment signature (e.g. ssh's startup `Couldn't open /dev/null` — the sandbox/host made /dev/null unwritable, so the command never left the machine), the `error` field carries the diagnosis and remediation instead of letting the model suspect credentials/network/remote.
 - **stderr noise filtering** — consumer-declared regexes drop known-noise stderr lines (e.g. ceph keyring chatter) after scrubbing.
+- **Per-call tier declaration** — every profiled tool carries an optional `tier: 'ro'|'rw'` parameter: omit = decided by the grant (rw when granted); `'ro'` = deliberate downgrade under an rw grant (declare it for pure queries); `'rw'` = require the write tier, failing loudly with request_access guidance when the session holds no grant. Forwarded to `opsAccess.resolve` as `AccessRequest`.
 - **`shellQuote`** — exported for consumers that must embed a whole remote command as one argument (ops-tool-ssh).
 
 ## Design notes
