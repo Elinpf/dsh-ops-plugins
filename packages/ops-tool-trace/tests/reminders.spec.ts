@@ -301,8 +301,15 @@ describe('nesting rule', () => {
 describe('buildReminderContext', () => {
   const store = () => new SessionForestStore(() => null, foldEvent, () => {})
 
+  /**
+   * The LIVE dsh session contract (≥0.1.2): the event log is read through
+   * `snapshotEvents()`; the old public `events` getter no longer exists. The
+   * reminder feature silently died when dsh removed it (2026-09-16) — these
+   * builders deliberately expose ONLY `snapshotEvents`, so any code reading
+   * `session.events` fails here instead of in production.
+   */
   function agentWith(events: any[], id = 's1') {
-    return { session: { id, events } }
+    return { session: { id, snapshotEvents: () => events } }
   }
 
   it('returns null without a session or events', () => {
@@ -310,17 +317,29 @@ describe('buildReminderContext', () => {
     expect(buildReminderContext(agentWith([]), store())).toBeNull()
   })
 
-  it('derives step positions without parsing call arguments', () => {
+  it('derives step positions without parsing call arguments (live snapshotEvents contract)', () => {
     const s = store()
     const ctx = buildReminderContext(agentWith([
       { type: 'step/start', data: { turn: 1, step: 2 } },
       { type: 'tool/call', data: { name: 'trace', arguments: '{broken json' } },
       { type: 'tool/call', data: { name: 'bash', arguments: '{}' } },
       { type: 'step/start', data: { turn: 1, step: 9 } },
-    ]), s)!
-    expect(ctx.currentStep).toBe(1009)
-    expect(ctx.lastTraceStep).toBe(1002)
-    expect(ctx.tree).toBeNull()
+    ]), s)
+    expect(ctx).not.toBeNull()
+    expect(ctx!.currentStep).toBe(1009)
+    expect(ctx!.lastTraceStep).toBe(1002)
+    expect(ctx!.tree).toBeNull()
+  })
+
+  it('still reads the legacy `events` getter (dsh ≤0.1.1)', () => {
+    const events = [
+      { type: 'step/start', data: { turn: 2, step: 3 } },
+      { type: 'tool/call', data: { name: 'trace', arguments: '{}' } },
+    ]
+    const ctx = buildReminderContext({ session: { id: 's1', events } }, store())
+    expect(ctx).not.toBeNull()
+    expect(ctx!.currentStep).toBe(2003)
+    expect(ctx!.lastTraceStep).toBe(2003)
   })
 
   it('reads the live tree from the store', () => {
@@ -331,5 +350,21 @@ describe('buildReminderContext', () => {
     ]), s)!
     expect(ctx.tree).not.toBeNull()
     expect(ctx.tree!.nodes[0].title).toBe('G')
+  })
+
+  // End-to-end regression for the reported outage: a live-shaped agent whose
+  // session exposes only snapshotEvents() must still produce a firing idle
+  // reminder once trace has gone quiet for the gap.
+  it('end to end: the idle reminder fires from a live-shaped agent session', () => {
+    const s = store()
+    s.apply({ id: 's1' }, { action: 'create_tree', goal_title: 'G' }, 1)
+    const events = [
+      { type: 'step/start', data: { turn: 1, step: 1 } },
+      { type: 'tool/call', data: { name: 'trace', arguments: '{}' } },
+      { type: 'step/start', data: { turn: 2, step: 1 } },
+    ]
+    const ctx = buildReminderContext({ session: { id: 's1', snapshotEvents: () => events } }, s)
+    expect(ctx).not.toBeNull()
+    expect(createIdleRule(new ReminderLatch(5, 5))(ctx!)).toContain('REMINDER')
   })
 })

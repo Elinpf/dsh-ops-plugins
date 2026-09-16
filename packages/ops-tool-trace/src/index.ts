@@ -63,6 +63,7 @@ import { activeTree, NODE_STATUSES } from './node-status.js'
 import { SessionForestStore } from './session-forests.js'
 import { buildReminderContext, createIdleRule, createNestingRule, createStaleStepRule, ReminderLatch } from './reminders.js'
 import type { ReminderContext } from './reminders.js'
+import { readSessionEvents } from './session-log.js'
 import { HELP_TEXT, STATIC_PROMPT, TOOL_DESCRIPTION, TRIGGER_NODE_RULE, milestoneFollowUpHint, resolveGateError } from './doctrine.js'
 import { buildTreeIndex, depthOf, flattenTree, sortChildren } from './tree-layout.js'
 
@@ -111,10 +112,13 @@ function canTransition(from: NodeStatus, to: NodeStatus): boolean {
 
 /** Extract the current turn number from the agent's session events. */
 function currentTurn(exec: ToolRunContext): number {
-  const events = exec.agent?.session?.events
+  // readSessionEvents, not session.events: dsh ≥0.1.2 dropped the getter and
+  // reading it returned undefined, so every node was stamped turn 0 (which
+  // also blinded the stale-step rule).
+  const events = readSessionEvents(exec.agent?.session)
   if (!events) return 0
   for (let i = events.length - 1; i >= 0; i--) {
-    const ev = events[i] as { type: string, data?: { turn?: number } }
+    const ev = events[i]
     if (ev.type === 'turn/start') return ev.data?.turn ?? 0
   }
   return 0
