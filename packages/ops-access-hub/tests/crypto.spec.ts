@@ -14,7 +14,7 @@ import {
   loadMasterKey,
   parseMasterKey,
 } from '../src/crypto.ts'
-import { mktmpdir } from './tmpdir.ts'
+import { mktmpdir } from '@elinpf/dsh-ops-test-support/tmpdir'
 
 describe('encryptDoc/decryptDoc', () => {
   it('round-trips a JSON document', () => {

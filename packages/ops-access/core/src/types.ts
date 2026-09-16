@@ -217,14 +217,28 @@ export interface AccessAgent {
 export type AccessBrokerDecision = 'ro' | 'rw' | { deny: string }
 
 /**
- * The pure decision function a gate registers. Receives only kind, profile
- * name, and the caller agent — never credential fields. Once a broker is
- * registered, resolve consults it on EVERY call; `agent` is `undefined` for
- * system-internal calls, and the no-agent ruling belongs to the broker (core
- * does not answer policy on its behalf). Without a registered broker, resolve
- * is unchanged from the broker-less behavior (ro).
+ * What the caller asked for on one resolve call, beyond the defaults.
  */
-export type AccessBroker = (kind: string, name: string, agent: AccessAgent | undefined) => AccessBrokerDecision
+export interface AccessRequest {
+  /**
+   * Explicit tier declaration. `'ro'` is a deliberate downgrade: the session
+   * may hold an rw grant, but this call only reads — the ro credential is
+   * served (a lockdown deny still applies). `'rw'` is an explicit elevation
+   * request: the broker must deny loudly (with guidance) when the session
+   * holds no grant, rather than silently serving ro.
+   */
+  tier?: 'ro' | 'rw'
+}
+
+/**
+ * The pure decision function a gate registers. Receives only kind, profile
+ * name, the caller agent, and the per-call request — never credential fields.
+ * Once a broker is registered, resolve consults it on EVERY call; `agent` is
+ * `undefined` for system-internal calls, and the no-agent ruling belongs to
+ * the broker (core does not answer policy on its behalf). Without a
+ * registered broker, resolve is unchanged from the broker-less behavior (ro).
+ */
+export type AccessBroker = (kind: string, name: string, agent: AccessAgent | undefined, request?: AccessRequest) => AccessBrokerDecision
 
 /** The ops access handle exposed via ctx.get('opsAccess'). */
 export interface OpsAccess {
@@ -258,7 +272,18 @@ export interface OpsAccess {
    * a broker the ro profile (from `registryFile`) is served, byte-for-byte
    * as before.
    */
-  resolve(kind: string, name: string, agent?: AccessAgent): Promise<AccessProfile>
+  /**
+   * Resolve one profile by kind and name. Throws on unknown kind, unknown
+   * name, or invalid entry. When a broker is registered it is consulted on
+   * every call — including calls without an `agent` (the broker owns the
+   * no-agent ruling) — and decides whether the rw profile is served. Without
+   * a broker the ro profile (from `registryFile`) is served, byte-for-byte
+   * as before. `request.tier` lets the caller declare the tier explicitly:
+   * `'ro'` caps the outcome at ro even under an rw grant (deliberate
+   * downgrade); `'rw'` demands the rw tier and fails loudly when it cannot
+   * be served.
+   */
+  resolve(kind: string, name: string, agent?: AccessAgent, request?: AccessRequest): Promise<AccessProfile>
   /** List all profiles across all registered kinds. Sections without a registered provider are skipped. */
   list(): Promise<AccessProfile[]>
   /**

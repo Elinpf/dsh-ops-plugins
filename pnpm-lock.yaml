@@ -35,6 +35,9 @@ importers:
       '@elinpf/dsh-ops-access-ui':
         specifier: workspace:^
         version: link:../ops-access-ui
+      '@elinpf/dsh-ops-knowledge':
+        specifier: workspace:^
+        version: link:../ops-knowledge
       '@elinpf/dsh-ops-panel':
         specifier: workspace:^
         version: link:../ops-panel
@@ -73,6 +76,9 @@ importers:
         specifier: ^2.7.0
         version: 2.9.0
     devDependencies:
+      '@elinpf/dsh-ops-test-support':
+        specifier: workspace:*
+        version: link:../test-support
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.1
@@ -306,6 +312,37 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@types/node@22.20.1)(jsdom@30.0.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.24.2)(yaml@2.9.0))
 
+  packages/ops-knowledge:
+    dependencies:
+      '@deepseek-ai/schemastery':
+        specifier: ^3.18.1
+        version: 3.18.1
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: 4.0.1
+        version: 4.0.1(@deepseek-ai/cordis-plugin-include@1.0.7)(@deepseek-ai/cordis-plugin-loader@1.0.3)
+      '@deepseek-ai/dsh-tools':
+        specifier: 0.0.1-rc.1
+        version: 0.0.1-rc.1(7zqjdql3dtskjcqkk75fp3oope)
+      '@elinpf/dsh-ops-access-hub':
+        specifier: workspace:*
+        version: link:../ops-access-hub
+      '@elinpf/dsh-ops-prompts':
+        specifier: workspace:*
+        version: link:../ops-prompts
+      '@elinpf/dsh-ops-test-support':
+        specifier: workspace:*
+        version: link:../test-support
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      typescript:
+        specifier: ^5.4.0
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@22.20.1)(jsdom@30.0.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.24.2)(yaml@2.9.0))
+
   packages/ops-panel:
     dependencies:
       '@deepseek-ai/schemastery':
@@ -447,6 +484,9 @@ importers:
       '@elinpf/dsh-ops-prompts':
         specifier: workspace:*
         version: link:../ops-prompts
+      '@elinpf/dsh-ops-test-support':
+        specifier: workspace:*
+        version: link:../test-support
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.1
@@ -493,6 +533,9 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: ^3.18.1
         version: 3.18.1
+      '@elinpf/dsh-ops-shell-tool':
+        specifier: workspace:*
+        version: link:../ops-shell-tool
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: 4.0.1
@@ -503,6 +546,9 @@ importers:
       '@elinpf/dsh-ops-access':
         specifier: workspace:*
         version: link:../ops-access/core
+      '@elinpf/dsh-ops-test-support':
+        specifier: workspace:*
+        version: link:../test-support
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.1
@@ -625,6 +671,12 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.11
+        version: 4.1.11(@types/node@22.20.1)(jsdom@30.0.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.24.2)(yaml@2.9.0))
+
+  packages/test-support:
+    dependencies:
+      vitest:
+        specifier: '*'
         version: 4.1.11(@types/node@22.20.1)(jsdom@30.0.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.24.2)(yaml@2.9.0))
 
 packages:

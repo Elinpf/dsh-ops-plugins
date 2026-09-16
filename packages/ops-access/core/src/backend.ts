@@ -18,6 +18,7 @@
  */
 
 import { readFile, writeFile } from 'node:fs/promises'
+import os from 'node:os'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import type { EntryEnvelope, ProbeState } from './types.js'
 
@@ -25,6 +26,14 @@ import type { EntryEnvelope, ProbeState } from './types.js'
 
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** Expand a leading `~` (or `~/`) to the user's home directory. */
+export function expandHome(p: string): string {
+  const home = process.env.HOME ?? os.homedir()
+  if (p === '~') return home
+  if (p.startsWith('~/')) return home + p.slice(1)
+  return p
 }
 
 /** Build an EntryEnvelope from raw entry data, taking each envelope field from the first source that has it. */

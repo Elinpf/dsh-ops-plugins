@@ -54,10 +54,12 @@ interface ShellRunOutcome {
 }
 
 function setup(opts: {
-  resolveImpl?: (kind: string, name: string, agent?: { id: string }) => Promise<AccessProfile>
+  resolveImpl?: (kind: string, name: string, agent?: { id: string }, request?: { tier?: 'ro' | 'rw' }) => Promise<AccessProfile>
   runImpl?: (spec: any) => Promise<ShellRunOutcome>
   withOpsAccess?: boolean
   spec?: Partial<ProfiledShellToolSpec>
+  sandboxMode?: string
+  sandboxPolicyService?: { resolve: (request?: { session?: unknown }) => unknown }
 } = {}) {
   const tools: any[] = []
   const effectCleanups: Array<() => void> = []
@@ -65,15 +67,20 @@ function setup(opts: {
   const calls = { resolve: 0, shellRun: 0 }
 
   const opsAccess = {
-    resolve: (kind: string, name: string, agent?: { id: string }) => {
+    resolve: (kind: string, name: string, agent?: { id: string }, request?: { tier?: 'ro' | 'rw' }) => {
       calls.resolve++
-      return (opts.resolveImpl ?? (async () => PROFILE))(kind, name, agent)
+      return (opts.resolveImpl ?? (async () => PROFILE))(kind, name, agent, request)
     },
   }
 
   const ctx: any = {
-    get: (key: string) => key === 'opsAccess' && opts.withOpsAccess !== false ? opsAccess : undefined,
+    get: (key: string) => {
+      if (key === 'opsAccess') return opts.withOpsAccess !== false ? opsAccess : undefined
+      if (key === 'sandboxPolicy') return opts.sandboxPolicyService
+      return undefined
+    },
     shell: {
+      ...(opts.sandboxMode !== undefined ? { sandboxMode: opts.sandboxMode } : {}),
       resolve: (request: any) => { shellRequests.push(request); return { ...request } },
       run: async (spec: any) => {
         calls.shellRun++
@@ -100,7 +107,7 @@ function setup(opts: {
 
   registerProfiledShellTool(ctx, { ...SPEC, ...opts.spec })
   const tool = tools[0]
-  const exec = (agent?: { id: string }) => ({ signal: new AbortController().signal, agent })
+  const exec = (agent?: { id: string, session?: unknown }) => ({ signal: new AbortController().signal, agent })
   return { ctx, tools, tool, shellRequests, calls, effectCleanups, exec }
 }
 
@@ -122,11 +129,22 @@ describe('registerProfiledShellTool', () => {
     expect(h.tools.map((t) => t.name)).toEqual(['widget'])
   })
 
-  it('declares exactly the target param and the command param', () => {
+  it('declares the target, command and tier params', () => {
     const { tool } = setup()
     // defineTool normalizes parameters into JSON-schema shape.
-    expect(Object.keys(tool.parameters.properties).sort()).toEqual(['command', 'target'])
+    expect(Object.keys(tool.parameters.properties).sort()).toEqual(['command', 'target', 'tier'])
     expect([...tool.parameters.required].sort()).toEqual(['command', 'target'])
+    expect(tool.parameters.properties.tier.enum).toEqual(['ro', 'rw'])
+  })
+
+  it('forwards an explicit tier arg into opsAccess.resolve; omits the request otherwise', async () => {
+    const seen: Array<unknown> = []
+    const h = setup({
+      resolveImpl: async (_kind, _name, _agent, request) => { seen.push(request); return PROFILE },
+    })
+    await h.tool.execute({ target: 'prod', command: 'status', tier: 'ro' }, h.exec())
+    await h.tool.execute({ target: 'prod', command: 'status' }, h.exec())
+    expect(seen).toEqual([{ tier: 'ro' }, undefined])
   })
 
   it('happy path: resolves kind+target, builds the command, maps the result', async () => {
@@ -164,6 +182,45 @@ describe('registerProfiledShellTool', () => {
     })
     await h.tool.execute({ target: 'prod', command: 'status' }, h.exec())
     expect(seen).toEqual([undefined])
+  })
+
+  it('confining executor: the calling session\'s resolved sandbox policy rides the shell request', async () => {
+    const policy = { mode: 'workspace-write', workspaceRoot: '/root/work' }
+    const seen: Array<unknown> = []
+    const h = setup({
+      sandboxMode: 'workspace-write',
+      sandboxPolicyService: { resolve: (req) => { seen.push(req); return policy } },
+    })
+    const session = { header: { cwd: '/root/work' } }
+    await h.tool.execute({ target: 'prod', command: 'status' }, h.exec({ id: 'sess-1', session }))
+    expect(seen).toEqual([{ session }])
+    expect(h.shellRequests[0].sandboxPolicy).toBe(policy)
+  })
+
+  it('confining executor, agentless call: policy resolves with the deployment fallback ({})', async () => {
+    const seen: Array<unknown> = []
+    const h = setup({
+      sandboxMode: 'workspace-write',
+      sandboxPolicyService: { resolve: (req) => { seen.push(req); return { mode: 'workspace-write' } } },
+    })
+    await h.tool.execute({ target: 'prod', command: 'status' }, h.exec())
+    expect(seen).toEqual([{}])
+    expect(h.shellRequests[0].sandboxPolicy).toBeDefined()
+  })
+
+  it('confining executor without the sandboxPolicy service fails loudly, shell untouched', async () => {
+    const h = setup({ sandboxMode: 'workspace-write' })
+    const value = await h.tool.execute({ target: 'prod', command: 'status' }, h.exec())
+    expect(value.error).toContain('sandboxPolicy')
+    expect(value.exitCode).toBe(-1)
+    expect(h.calls.shellRun).toBe(0)
+    expect(h.shellRequests).toHaveLength(0)
+  })
+
+  it('non-confining executor: no policy lookup, request carries no sandboxPolicy', async () => {
+    const h = setup()
+    await h.tool.execute({ target: 'prod', command: 'status' }, h.exec())
+    expect('sandboxPolicy' in h.shellRequests[0]).toBe(false)
   })
 
   it('a signal death always names its cause (signal or unknown), never a bare -1', async () => {
@@ -407,12 +464,12 @@ describe('rejectShellComposition', () => {
 describe('perCallTimeout', () => {
   it('adds no timeoutSec parameter when disabled', () => {
     const { tool } = setup()
-    expect(Object.keys(tool.parameters.properties).sort()).toEqual(['command', 'target'])
+    expect(Object.keys(tool.parameters.properties).sort()).toEqual(['command', 'target', 'tier'])
   })
 
   it('declares timeoutSec and honors an in-range override', async () => {
     const h = setup({ spec: { perCallTimeout: true } })
-    expect(Object.keys(h.tool.parameters.properties).sort()).toEqual(['command', 'target', 'timeoutSec'])
+    expect(Object.keys(h.tool.parameters.properties).sort()).toEqual(['command', 'target', 'tier', 'timeoutSec'])
     await h.tool.execute({ target: 'prod', command: 'status', timeoutSec: 120 }, h.exec())
     expect(h.shellRequests[0].timeoutMs).toBe(120000)
   })

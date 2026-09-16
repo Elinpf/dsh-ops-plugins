@@ -7,7 +7,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { builtinRules, classifySignals, classifyWorkload, isMiddlewareType, loadUserRules } from '../src/classify.js'
-import { mktmpdir } from './tmpdir.ts'
+import { mktmpdir } from '@elinpf/dsh-ops-test-support/tmpdir'
 
 function byImage(image: string, labels: Record<string, string> = {}): string {
   return classifySignals({ images: [image], labels }, builtinRules)

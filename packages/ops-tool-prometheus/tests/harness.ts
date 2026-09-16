@@ -9,7 +9,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { apply, createPrometheusTool } from '../src/index.ts'
 import type { AccessProfile } from '@elinpf/dsh-ops-access'
-import { mktmpdir } from './tmpdir.ts'
+import { mktmpdir } from '@elinpf/dsh-ops-test-support/tmpdir'
 
 export const DEFAULT_PROFILE: AccessProfile = {
   kind: 'prometheus',

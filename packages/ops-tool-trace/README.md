@@ -13,6 +13,7 @@ The agent maintains the tree through the `trace` model tool. Every call appends 
 - **`link`** records causal edges (`caused_by`) without changing status — proof is `complete` with a summary, not a link
 - **`resolve(goal)` is hard-gated**: every non-root node must be decided (`done`/`dead_end`) first. `force: true` is the escape hatch for ABANDONING an investigation mid-way — the result's WARN names every node it shelved and marks the closure an unverified assertion
 - **`view`** renders the full tree (default) or an indented outline (`format: tree`); **`help`** progressively discloses the full doctrine
+- **Knowledge precipitation** — after `resolve(goal)` closes an investigation, the doctrine (help text) points at `@elinpf/dsh-ops-knowledge`: when the root cause and fix are reusable, search for a near-duplicate case first, then `knowledge_record` the distilled conclusion (or update the old case by id)
 
 ## The one structural rule
 

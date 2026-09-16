@@ -1,0 +1,13 @@
+{
+  "name": "@elinpf/dsh-ops-test-support",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Private test helpers shared across the ops suite specs (never published).",
+  "type": "module",
+  "exports": {
+    "./tmpdir": "./tmpdir.ts"
+  },
+  "peerDependencies": {
+    "vitest": "*"
+  }
+}

@@ -27,7 +27,7 @@ import { dirname } from 'node:path'
 import os from 'node:os'
 import type { AccessProvider, EntryEnvelope, ProbeState } from './types.js'
 import type { AccessBackend, BackendEntry, BackendTier } from './backend.js'
-import { buildEnvelope, isPlainObject, mergeEnvelope, probeOf } from './backend.js'
+import { buildEnvelope, expandHome, isPlainObject, mergeEnvelope, probeOf } from './backend.js'
 
 export interface HubBackendOptions {
   /** Hub base URL, trailing slashes stripped (e.g. `http://127.0.0.1:3090`). */
@@ -45,14 +45,6 @@ export interface HubBackendOptions {
   cacheDir: string
   /** Provider lookup — file-field declarations drive the content ↔ path conversion. */
   getProvider: (kind: string) => AccessProvider | undefined
-}
-
-/** Expand a leading `~` (or `~/`) to the user's home directory. */
-function expandHome(p: string): string {
-  const home = process.env.HOME ?? os.homedir()
-  if (p === '~') return home
-  if (p.startsWith('~/')) return home + p.slice(1)
-  return p
 }
 
 /**
@@ -263,8 +255,8 @@ export class HubBackend implements AccessBackend {
   }
 
   /** Pending-request metadata for the approval UI — field values never cross. */
-  async listRequests(status?: 'pending' | 'approved' | 'rejected'): Promise<unknown> {
-    return this.request('GET', status === undefined ? '/requests' : `/requests?status=${status}`)
+  async listRequests(): Promise<unknown> {
+    return this.request('GET', '/requests?status=pending')
   }
 
   /** Full request incl. field values, for pre-approval review. Null when absent. */

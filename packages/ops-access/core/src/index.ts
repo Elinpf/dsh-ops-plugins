@@ -62,6 +62,7 @@ import type {
   KindDescriptor,
   AccessAgent,
   AccessBroker,
+  AccessRequest,
   OpsAccess,
 } from './types.js'
 import type { AccessBackend, BackendEntry, BackendTier } from './backend.js'
@@ -148,6 +149,7 @@ export type {
   AccessAgent,
   AccessBrokerDecision,
   AccessBroker,
+  AccessRequest,
   OpsAccess,
 } from './types.js'
 
@@ -187,12 +189,18 @@ export function registerAccessBroker(ctx: Context, broker: AccessBroker): void {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Expand a leading `~` (or `~/`) to the user's home directory. */
-export function expandHome(p: string): string {
-  const home = process.env.HOME ?? os.homedir()
-  if (p === '~') return home
-  if (p.startsWith('~/')) return home + p.slice(1)
-  return p
+import { expandHome } from './backend.js'
+export { expandHome }
+
+/**
+ * Single-line-secret check shared by provider validateContent hooks: a
+ * pasted value may carry one trailing newline; anything further (interior
+ * `\n`/`\r`) means a multi-line paste landed in a field whose reader only
+ * honors the first line (sshpass -f, an Authorization header).
+ */
+export function hasSingleLineBody(content: string): boolean {
+  const body = content.endsWith('\n') ? content.slice(0, -1) : content
+  return !body.includes('\n') && !body.includes('\r')
 }
 
 /**
@@ -594,7 +602,7 @@ export function apply(ctx: Context, config: Config): void {
       }
     },
 
-    async resolve(kind: string, profileName: string, agent?: AccessAgent): Promise<AccessProfile> {
+    async resolve(kind: string, profileName: string, agent?: AccessAgent, request?: AccessRequest): Promise<AccessProfile> {
       profileName = stripKindPrefix(kind, profileName)
       const provider = providers.get(kind)
       if (!provider) {
@@ -604,14 +612,20 @@ export function apply(ctx: Context, config: Config): void {
       // Once a broker is registered it is consulted on EVERY resolve —
       // including calls without an agent. The no-agent ruling (fail closed to
       // ro, or deny outright) is policy, and policy lives in the broker, not
-      // here. Without a broker, rw is never issued at all.
+      // here. Without a broker, rw is never issued at all — so an explicit rw
+      // request without a broker is an error, not a silent ro.
       let tier: 'ro' | 'rw' = 'ro'
       if (broker) {
-        const decision = broker(kind, profileName, agent)
+        const decision = broker(kind, profileName, agent, request)
         if (typeof decision === 'object') {
           throw new Error(`ops-access: access denied for ${kind}/${profileName}: ${decision.deny}`)
         }
-        if (decision === 'rw') tier = 'rw'
+        // An explicit 'ro' request caps the outcome at ro even when the broker
+        // would issue rw — the deliberate downgrade is the point: the caller
+        // declares "this call only reads".
+        tier = request?.tier === 'ro' ? 'ro' : decision
+      } else if (request?.tier === 'rw') {
+        throw new Error(`ops-access: rw tier requested for ${kind}/${profileName}, but no access gate is mounted — rw is never issued without one`)
       }
       // A missing SOURCE (yaml: no registry file) throws from the backend
       // verbatim (SourceUnavailableError); an unreadable source propagates
@@ -1136,7 +1150,7 @@ export function apply(ctx: Context, config: Config): void {
         handler: async (req: any, res: any) => {
           try {
             if (req.method !== 'GET') { sendJsonError(res, 405, new Error('method not allowed')); return }
-            const list = await backend.listRequests('pending')
+            const list = await backend.listRequests()
             res.writeHead(200, { 'content-type': 'application/json' })
             res.end(JSON.stringify(list))
           } catch (err) {

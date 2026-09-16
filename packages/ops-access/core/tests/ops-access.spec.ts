@@ -684,6 +684,35 @@ describe('broker + rw registry', () => {
     expect(profile.fields.endpoint).toBe('https://ro-alpha.internal')
   })
 
+  it("an explicit 'ro' request caps an 'rw' broker decision at ro (deliberate downgrade)", async () => {
+    const { handle, write, writeRw } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    writeRw(RW_REGISTRY)
+    handle.registerBroker(() => 'rw')
+    const profile = await handle.resolve('test', 'alpha', SESSION_A, { tier: 'ro' })
+    expect(profile.fields.endpoint).toBe('https://ro-alpha.internal')
+  })
+
+  it("the broker sees the requested tier, and its deny outranks an 'ro' request", async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    const seen: unknown[] = []
+    handle.registerBroker((_kind, _name, _agent, request) => { seen.push(request); return { deny: 'locked' } })
+    const err = await handle.resolve('test', 'alpha', SESSION_A, { tier: 'ro' }).catch((e) => e)
+    expect(err.message).toContain('locked')
+    expect(seen).toEqual([{ tier: 'ro' }])
+  })
+
+  it("an explicit 'rw' request without a broker throws — rw is never issued broker-less", async () => {
+    const { handle, write } = setup()
+    handle.register(testProvider)
+    write(RO_REGISTRY)
+    const err = await handle.resolve('test', 'alpha', SESSION_A, { tier: 'rw' }).catch((e) => e)
+    expect(err.message).toContain('no access gate')
+  })
+
   it('broker is consulted even without an agent — the no-agent ruling belongs to the broker', async () => {
     const { handle, write, writeRw } = setup()
     handle.register(testProvider)

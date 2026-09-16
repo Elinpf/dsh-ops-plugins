@@ -9,10 +9,10 @@
  * reaches the result, the displayed command, or any error text (every
  * returned string is scrubbed against it defensively).
  *
- * The result shape `{ exitCode, stdout, stderr, command, error? }`, output
- * schema, and render duplicate the ops-shell-tool contract verbatim — that
- * factory wraps ctx.shell commands, which this tool is not, and it does not
- * export the contract separately.
+ * The result shape `{ exitCode, stdout, stderr, command, error? }` and the
+ * output schema/render come from `shellToolOutput`/`ShellToolResult` in
+ * ops-shell-tool — the suite-standard contract, reused (that factory wraps
+ * ctx.shell commands, which this tool is not, but the contract stands alone).
  *
  * @module @elinpf/dsh-ops-tool-prometheus
  */
@@ -22,9 +22,12 @@ import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { readFile } from 'node:fs/promises'
 import type { OpsAccess } from '@elinpf/dsh-ops-access'
-import type { PrometheusToolConfig, PrometheusToolResult } from './types.js'
+import type { ShellToolResult } from '@elinpf/dsh-ops-shell-tool'
+import { shellToolOutput } from '@elinpf/dsh-ops-shell-tool'
+import type { PrometheusToolConfig } from './types.js'
 
-export type { PrometheusToolConfig, PrometheusToolResult } from './types.js'
+export type { PrometheusToolConfig } from './types.js'
+export type { ShellToolResult as PrometheusToolResult } from '@elinpf/dsh-ops-shell-tool'
 
 // ── Plugin identity ───────────────────────────────────────────────────────────
 
@@ -39,33 +42,9 @@ export const Config: z<PrometheusToolConfig> = z.object({
   timeoutMs: z.number().default(30000),
 })
 
-// ── Output contract (verbatim copy of the ops-shell-tool one) ────────────────
+// ── Output contract: the ops-shell-tool one, shared ──────────────────────────
 
-const output = {
-  schema: {
-    type: 'object',
-    additionalProperties: false,
-    properties: {
-      exitCode: { type: 'number', required: true },
-      stdout: { type: 'string', required: true },
-      stderr: { type: 'string', required: true },
-      command: { type: 'string', required: true },
-      error: { type: 'string' },
-    },
-  },
-  // Pure function of (args, value): same inputs, same text, no state touched.
-  render: (_args: unknown, value: PrometheusToolResult) => {
-    const parts: string[] = []
-    if (value.command) parts.push(`$ ${value.command}`)
-    if (value.stdout) parts.push(value.stdout)
-    if (value.stderr) parts.push(`[stderr]\n${value.stderr}`)
-    if (value.error) parts.push(`[error] ${value.error}`)
-    if (value.exitCode !== 0 && value.exitCode !== undefined && value.exitCode !== null) {
-      parts.push(`[exit code: ${value.exitCode}]`)
-    }
-    return [{ type: 'text' as const, text: parts.join('\n\n') || '(no output)' }]
-  },
-} as const
+const output = shellToolOutput
 
 // ── Formatting ───────────────────────────────────────────────────────────────
 
@@ -188,9 +167,10 @@ export function createPrometheusTool(ctx: Context, config: PrometheusToolConfig,
       end: { type: 'string', description: 'Range query end (RFC3339 or unix seconds). Requires start and step.' },
       step: { type: 'string', description: 'Range query resolution step, e.g. "15s", "1m". Requires start and end.' },
       timeoutSec: { type: 'number', description: 'Optional per-call timeout in seconds (default 30, max 600). Use only for a query you KNOW is slow (a wide range over many series) — a longer wait does not fix an unreachable server.' },
+      tier: { type: 'string', enum: ['ro', 'rw'], description: 'Credential tier for THIS call. Omit = decided by the grant. "ro" = deliberate downgrade under an rw grant (declare it for pure queries). "rw" = require the write tier; fails loudly without a session grant and points at request_access.' },
     },
     output,
-    async execute(args, exec): Promise<PrometheusToolResult> {
+    async execute(args, exec): Promise<ShellToolResult> {
       const cluster = args.cluster
       const query = args.query
       const time = args.time
@@ -198,7 +178,7 @@ export function createPrometheusTool(ctx: Context, config: PrometheusToolConfig,
       const end = args.end
       const step = args.step
 
-      const fail = (message: string, command = ''): PrometheusToolResult =>
+      const fail = (message: string, command = ''): ShellToolResult =>
         ({ error: message, exitCode: -1, stdout: '', stderr: message, command })
 
       // Argument shape first — cheap, side-effect free, and the teaching
@@ -231,8 +211,10 @@ export function createPrometheusTool(ctx: Context, config: PrometheusToolConfig,
         }
         // Pass the caller agent through so the access gate (if mounted) can
         // key grants on the session id. Core tolerates a `prometheus/` prefix
-        // on the name.
-        const profile = await opsAccess.resolve('prometheus', cluster, exec.agent)
+        // on the name. An explicit tier arg is the per-call declaration
+        // ('ro' = deliberate downgrade; 'rw' = fail loudly when ungranted).
+        const tierArg = args.tier === 'ro' || args.tier === 'rw' ? args.tier : undefined
+        const profile = await opsAccess.resolve('prometheus', cluster, exec.agent, tierArg ? { tier: tierArg } : undefined)
         const baseUrl = String(profile.fields.url ?? '')
         const endpoint = isRange ? '/api/v1/query_range' : '/api/v1/query'
         command = `${display} @ ${baseUrl}${endpoint}`

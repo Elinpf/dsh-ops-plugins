@@ -45,6 +45,14 @@ function errorMessage(e: unknown): string {
 }
 
 /**
+ * Structural slice of dsh-sandbox-policy's SandboxPolicyService — one method,
+ * typed off ShellExecRequest so this package needs no new dependency.
+ */
+interface SandboxPolicyLike {
+  resolve(request?: { session?: unknown }): NonNullable<ShellExecRequest['sandboxPolicy']>
+}
+
+/**
  * Single-quote a value for safe shell embedding. Used for ref-token
  * substitutes, and exported for consumers that must pass a whole remote
  * command as ONE argument (ops-tool-ssh).
@@ -155,8 +163,8 @@ export function shellCompositionError(toolName: string, command: string): string
   return `the command contains ${op} — everything after it would run as a NEW local command WITHOUT the ${toolName} prefix and injected credentials, failing with a misleading 'xxx: command not found'. One call = one ${toolName} command: split this into separate tool calls. (A single | pipe is allowed — it filters the output locally.)`
 }
 
-/** The shared output contract: schema + render, both pure. */
-const output = {
+/** The shared output contract: schema + render, both pure. Exported so non-shell tools (e.g. ops-tool-prometheus, which speaks HTTP but keeps the suite-standard result shape) can reuse it instead of copying. */
+export const shellToolOutput = {
   schema: {
     type: 'object',
     additionalProperties: false,
@@ -195,11 +203,16 @@ export function registerProfiledShellTool(ctx: Context, spec: ProfiledShellToolS
     parameters: {
       [spec.targetParam]: { type: 'string', required: true, description: spec.targetParamDescription },
       command: { type: 'string', required: true, description: spec.commandDescription },
+      tier: {
+        type: 'string',
+        enum: ['ro', 'rw'],
+        description: 'Credential tier for THIS call. Omit = decided by the grant (rw when granted, else ro). "ro" = deliberate downgrade: use the read-only credential even while holding an rw grant — declare it for pure queries so you always know which power you are exercising. "rw" = require the write tier; without a session grant this fails loudly and points at request_access instead of silently reading.',
+      },
       ...(spec.perCallTimeout
         ? { timeoutSec: { type: 'number', description: `Optional per-call timeout in seconds (default ${Math.round((spec.timeoutMs ?? 30000) / 1000)}, max 600). Use only for a command you KNOW is slow (e.g. listing a very large pool) — a longer wait does not fix a hung remote end.` } }
         : {}),
     },
-    output,
+    output: shellToolOutput,
     async execute(args: Record<string, unknown>, exec: ShellToolExec): Promise<ShellToolResult> {
       let fullCommand = ''
       try {
@@ -232,13 +245,35 @@ export function registerProfiledShellTool(ctx: Context, spec: ProfiledShellToolS
         }
         // Pass the caller agent through so the access gate (if mounted) can
         // key grants on the session id. Without a gate this arg is inert.
-        const profile = await opsAccess.resolve(spec.kind, args[spec.targetParam] as string, exec.agent)
+        // An explicit tier arg is the per-call declaration: 'ro' downgrades
+        // deliberately even under an rw grant; 'rw' fails loudly when the
+        // session holds no grant (see core's resolve / the gate's broker).
+        const tierArg = args.tier === 'ro' || args.tier === 'rw' ? args.tier : undefined
+        const profile = await opsAccess.resolve(spec.kind, args[spec.targetParam] as string, exec.agent, tierArg ? { tier: tierArg } : undefined)
         // Mint per-call credential tokens: buildCommand marks file fields via
         // ref(); the display command (model-visible, logged) keeps the tokens,
         // only the executed command carries the real values.
         const tokens = createCredentialTokens(profile.name, profile.tier, profile.fields)
         fullCommand = tokens.scrub(spec.buildCommand(profile.fields, command, tokens.ref))
-        const request: ShellExecRequest = { command: tokens.executable(fullCommand), timeoutMs, signal: exec.signal }
+        // A confining executor (bash-sandbox) defaults a missing policy from
+        // the DEPLOYMENT, whose fallback workspace root is the dsh process
+        // cwd — '/' for a systemd service. bwrap then bind-mounts '/' over
+        // its own /dev tmpfs: ssh dies with "Couldn't open /dev/null", and
+        // worse, workspace-write degrades into the whole container root being
+        // writable. Mirror tool-bash: pass the calling session's resolved
+        // policy explicitly. Resolved per call via ctx.get, never cached —
+        // same discipline as the opsAccess lookup above.
+        let sandboxPolicy: ShellExecRequest['sandboxPolicy']
+        if (ctx.shell.sandboxMode !== undefined) {
+          const policyService = ctx.get('sandboxPolicy') as SandboxPolicyLike | undefined
+          if (!policyService) {
+            const message = `${spec.name}: the mounted shell executor confines commands but the sandboxPolicy service is unavailable — refusing to run under the deployment fallback policy (wrong sandbox root). Mount dsh-sandbox-policy alongside the executor.`
+            return { error: message, exitCode: -1, stdout: '', stderr: message, command: '' }
+          }
+          const session = exec.agent?.session
+          sandboxPolicy = policyService.resolve(session !== undefined ? { session } : {})
+        }
+        const request: ShellExecRequest = { command: tokens.executable(fullCommand), timeoutMs, signal: exec.signal, ...(sandboxPolicy !== undefined ? { sandboxPolicy } : {}) }
         const resolved = ctx.shell.resolve(request)
         const result = await ctx.shell.run(resolved)
         // exitCode is null when the process died from a signal — normalize to

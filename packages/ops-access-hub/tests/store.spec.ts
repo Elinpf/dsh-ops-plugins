@@ -9,7 +9,7 @@ import { appendFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { HubStore } from '../src/store.ts'
-import { mktmpdir } from './tmpdir.ts'
+import { mktmpdir } from '@elinpf/dsh-ops-test-support/tmpdir'
 
 function freshStore(): { store: HubStore; dir: string } {
   const dir = mktmpdir('hub-store-')

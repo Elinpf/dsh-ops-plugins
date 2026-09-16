@@ -140,6 +140,62 @@ describe('brokering', () => {
   })
 })
 
+// ── Per-call tier declaration ───────────────────────────────────────────────
+
+describe('per-call tier declaration', () => {
+  it('explicit ro under an rw grant serves the ro tier (deliberate downgrade)', async () => {
+    const { opsAccess, gate, writeRegistry } = setup()
+    writeRegistry(REGISTRY)
+    gate.authorize(futureGrant(SESSION_A.id, 'test', 'prod'))
+    const profile = await opsAccess.resolve('test', 'prod', SESSION_A, { tier: 'ro' })
+    expect(profile.fields.endpoint).toBe('https://ro-prod.internal')
+    // The grant survives the downgrade — the next undeclared call gets rw again.
+    const again = await opsAccess.resolve('test', 'prod', SESSION_A)
+    expect(again.fields.endpoint).toBe('https://rw-prod.internal')
+  })
+
+  it('a downgrade still audits no rw-issue (the grant was never exercised)', async () => {
+    const { opsAccess, gate, writeRegistry, readAudit } = setup()
+    writeRegistry(REGISTRY)
+    gate.authorize(futureGrant(SESSION_A.id, 'test', 'prod'))
+    await opsAccess.resolve('test', 'prod', SESSION_A, { tier: 'ro' })
+    expect(readAudit().filter((l) => l.event === 'rw-issue')).toHaveLength(0)
+  })
+
+  it('explicit rw without a grant denies loudly, pointing at request_access', async () => {
+    const { opsAccess, writeRegistry } = setup()
+    writeRegistry(REGISTRY)
+    const err = await opsAccess.resolve('test', 'prod', SESSION_A, { tier: 'rw' }).catch((e) => e)
+    expect(err.message).toContain('access denied')
+    expect(err.message).toContain('request_access')
+  })
+
+  it('explicit rw with a grant serves rw', async () => {
+    const { opsAccess, gate, writeRegistry } = setup()
+    writeRegistry(REGISTRY)
+    gate.authorize(futureGrant(SESSION_A.id, 'test', 'prod'))
+    const profile = await opsAccess.resolve('test', 'prod', SESSION_A, { tier: 'rw' })
+    expect(profile.fields.endpoint).toBe('https://rw-prod.internal')
+  })
+
+  it('a lockdown refuses even a deliberate ro downgrade', async () => {
+    const { opsAccess, gate, writeRegistry } = setup()
+    writeRegistry(REGISTRY)
+    gate.deny('test', 'prod', 'incident', 'op')
+    const err = await opsAccess.resolve('test', 'prod', SESSION_A, { tier: 'ro' }).catch((e) => e)
+    expect(err.message).toContain('locked by the operator')
+  })
+
+  it('explicit rw on an approval-required kind (ssh) is a taught category error', async () => {
+    const { opsAccess, writeRegistry } = setup()
+    writeRegistry(REGISTRY + SSH_REGISTRY)
+    const err = await opsAccess.resolve('ssh', 'box', SESSION_A, { tier: 'rw' }).catch((e) => e)
+    expect(err.message).toContain('no rw tier')
+  })
+})
+
+
+
 // ── Session isolation ────────────────────────────────────────────────────────
 
 describe('session isolation', () => {

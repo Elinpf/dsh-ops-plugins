@@ -22,6 +22,7 @@ import os from 'node:os'
 import { dirname, isAbsolute, resolve } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import type { EntryEnvelope, HubStore, ProbeState, TierName } from './store.js'
+import { NAME_PATTERN } from './store.js'
 
 export interface ImportedEntry {
   kind: string
@@ -132,6 +133,12 @@ export async function pushToHub(hubUrl: string, adminToken: string, entries: Imp
 /** Write imported entries directly into a store (offline mode; caller owns init/save). */
 export function applyToStore(store: HubStore, entries: ImportedEntry[]): void {
   for (const entry of entries) {
+    // Same charset rule as the HTTP surface (spec 0006): an offline import
+    // bypasses segment(), so a hand-edited registry could otherwise smuggle
+    // a name the API can neither resolve nor delete into the store.
+    for (const [what, value] of [['kind', entry.kind], ['name', entry.name]] as const) {
+      if (!NAME_PATTERN.test(value)) throw new Error(`import: invalid ${what} ${JSON.stringify(value)}: must match ${NAME_PATTERN.source}`)
+    }
     for (const tier of ['ro', 'rw'] as TierName[]) {
       const tierData = entry.tiers[tier]
       if (!tierData) continue

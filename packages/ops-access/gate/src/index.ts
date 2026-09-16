@@ -148,7 +148,7 @@ type PendingQueue = ReturnType<typeof makePendingQueue>
 // ── Audit log ────────────────────────────────────────────────────────────────
 
 interface AuditEvent {
-  event: 'grant' | 'grant-extend' | 'expire' | 'revoke' | 'rw-issue' | 'gated-issue' | 'ledger-reset' | 'grant-request' | 'request-decide' | 'deny' | 'undeny' | 'deny-block'
+  event: 'grant' | 'grant-extend' | 'expire' | 'revoke' | 'rw-issue' | 'rw-denied' | 'gated-issue' | 'ledger-reset' | 'grant-request' | 'request-decide' | 'deny' | 'undeny' | 'deny-block'
   /** Absent on ledger-reset, which is process-scoped, not session-scoped. */
   session?: string
   /** The dispatching session, when the caller is a spawned sub-agent (血缘归因). */
@@ -418,7 +418,15 @@ export function apply(ctx: Context, config: Config): void {
   // never issued without a session to key the grant on); approval-required
   // kinds deny outright — their credential is effectively rw (there is no
   // read-only shell), so an untracked caller must not get it at all.
-  const broker: AccessBroker = (kind, profileName, agent) => {
+  //
+  // Per-call tier declaration (request.tier):
+  // - 'ro' = deliberate downgrade: the session may hold an rw grant, but this
+  //   call only reads. Serve ro; the grant is not exercised and no rw-issue
+  //   is audited. (Lockdown still refuses even this.)
+  // - 'rw' = explicit elevation: without a grant this denies LOUDLY with
+  //   request_access guidance — silently serving ro would leave the agent
+  //   believing it wrote when it only read.
+  const broker: AccessBroker = (kind, profileName, agent, request) => {
     // Deny (ticket 12) outranks every other state: a locked profile refuses
     // even ro, for session and internal callers alike.
     if (gate.isDenied(kind, profileName)) {
@@ -433,13 +441,23 @@ export function apply(ctx: Context, config: Config): void {
     }
     const authorized = gate.isAuthorized(agent.id, kind, profileName)
     // Approval-required kinds (ssh): the credential lives in the ro registry —
-    // the grant is a timed pass to use it at all.
+    // the grant is a timed pass to use it at all. There IS no rw tier, so an
+    // explicit rw request is a category error worth teaching.
     if (config.approvalRequiredKinds.includes(kind)) {
+      if (request?.tier === 'rw') {
+        return { deny: kind + ' has no rw tier — its single credential is effectively rw already, and the grant IS the access. Request timed access via the ' + REQUEST_ACCESS + ' tool (profile "' + kind + '/' + profileName + '", with a reason) and call WITHOUT a tier' }
+      }
       if (authorized) {
         audit({ event: 'gated-issue', session: agent.id, parentSession: parentSessionOf(agent), kind, name: profileName })
         return 'ro'
       }
       return { deny: kind + ' has no read-only tier; request timed access via the ' + REQUEST_ACCESS + ' tool (profile "' + kind + '/' + profileName + '", with a reason)' }
+    }
+    // Deliberate downgrade: serve ro without touching the grant.
+    if (request?.tier === 'ro') return 'ro'
+    if (request?.tier === 'rw' && !authorized) {
+      audit({ event: 'rw-denied', session: agent.id, parentSession: parentSessionOf(agent), kind, name: profileName })
+      return { deny: 'explicit rw requested for ' + kind + '/' + profileName + ' but this session holds no grant — request timed access via the ' + REQUEST_ACCESS + ' tool (with a reason), or drop the tier to use the read-only credential' }
     }
     if (authorized) {
       audit({ event: 'rw-issue', session: agent.id, parentSession: parentSessionOf(agent), kind, name: profileName })
