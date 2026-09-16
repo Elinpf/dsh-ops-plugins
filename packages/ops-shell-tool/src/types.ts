@@ -95,9 +95,12 @@ export type CredentialRef = (field: string) => string
  * dsh's ToolRunContext: `signal` (required there, optional here for tests)
  * and the optional caller `agent`, whose `id` is the session the access gate
  * keys grants on. The factory passes `agent` straight through to resolve —
- * consumers stay identity-only and need no changes.
+ * consumers stay identity-only and need no changes. The agent's `session`
+ * (opaque here) is forwarded to the sandboxPolicy service so a confining
+ * shell executor sandboxes against the CALLING session's workspace, not the
+ * deployment fallback root.
  */
 export interface ShellToolExec {
   signal?: ShellExecRequest['signal']
-  agent?: AccessAgent
+  agent?: AccessAgent & { session?: unknown }
 }

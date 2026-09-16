@@ -45,6 +45,14 @@ function errorMessage(e: unknown): string {
 }
 
 /**
+ * Structural slice of dsh-sandbox-policy's SandboxPolicyService — one method,
+ * typed off ShellExecRequest so this package needs no new dependency.
+ */
+interface SandboxPolicyLike {
+  resolve(request?: { session?: unknown }): NonNullable<ShellExecRequest['sandboxPolicy']>
+}
+
+/**
  * Single-quote a value for safe shell embedding. Used for ref-token
  * substitutes, and exported for consumers that must pass a whole remote
  * command as ONE argument (ops-tool-ssh).
@@ -247,7 +255,25 @@ export function registerProfiledShellTool(ctx: Context, spec: ProfiledShellToolS
         // only the executed command carries the real values.
         const tokens = createCredentialTokens(profile.name, profile.tier, profile.fields)
         fullCommand = tokens.scrub(spec.buildCommand(profile.fields, command, tokens.ref))
-        const request: ShellExecRequest = { command: tokens.executable(fullCommand), timeoutMs, signal: exec.signal }
+        // A confining executor (bash-sandbox) defaults a missing policy from
+        // the DEPLOYMENT, whose fallback workspace root is the dsh process
+        // cwd — '/' for a systemd service. bwrap then bind-mounts '/' over
+        // its own /dev tmpfs: ssh dies with "Couldn't open /dev/null", and
+        // worse, workspace-write degrades into the whole container root being
+        // writable. Mirror tool-bash: pass the calling session's resolved
+        // policy explicitly. Resolved per call via ctx.get, never cached —
+        // same discipline as the opsAccess lookup above.
+        let sandboxPolicy: ShellExecRequest['sandboxPolicy']
+        if (ctx.shell.sandboxMode !== undefined) {
+          const policyService = ctx.get('sandboxPolicy') as SandboxPolicyLike | undefined
+          if (!policyService) {
+            const message = `${spec.name}: the mounted shell executor confines commands but the sandboxPolicy service is unavailable — refusing to run under the deployment fallback policy (wrong sandbox root). Mount dsh-sandbox-policy alongside the executor.`
+            return { error: message, exitCode: -1, stdout: '', stderr: message, command: '' }
+          }
+          const session = exec.agent?.session
+          sandboxPolicy = policyService.resolve(session !== undefined ? { session } : {})
+        }
+        const request: ShellExecRequest = { command: tokens.executable(fullCommand), timeoutMs, signal: exec.signal, ...(sandboxPolicy !== undefined ? { sandboxPolicy } : {}) }
         const resolved = ctx.shell.resolve(request)
         const result = await ctx.shell.run(resolved)
         // exitCode is null when the process died from a signal — normalize to
