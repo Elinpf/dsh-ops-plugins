@@ -1,5 +1,13 @@
 # @elinpf/dsh-ops-access-ceph
 
+## 0.4.0
+
+### Patch Changes
+
+- Updated dependencies [5d1a604]
+- Updated dependencies [34bc97e]
+  - @elinpf/dsh-ops-access@0.4.0
+
 ## 0.3.0
 
 ### Patch Changes
