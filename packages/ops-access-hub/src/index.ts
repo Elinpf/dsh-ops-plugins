@@ -12,8 +12,8 @@
  */
 
 export { MASTER_KEY_BYTES, generateMasterKey, parseMasterKey, loadMasterKey, encryptDoc, decryptDoc } from './crypto.js'
-export { HubStore } from './store.js'
-export type { TierName, ProbeState, EntryEnvelope, TierData, HubEntry, AuditRecord, HubStoreOptions } from './store.js'
+export { HubStore, MAX_CASES } from './store.js'
+export type { TierName, ProbeState, EntryEnvelope, TierData, HubEntry, AuditRecord, HubStoreOptions, CaseRecord, CaseInput } from './store.js'
 export { createHubServer, NAME_PATTERN } from './server.js'
 export type { HubServerOptions } from './server.js'
 export { importRegistry, pushToHub, applyToStore } from './import.js'

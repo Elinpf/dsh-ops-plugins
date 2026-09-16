@@ -255,6 +255,14 @@
     - id: tool-ops-trace
       name: '@elinpf/dsh-ops-tool-trace'
 
+    # Troubleshooting knowledge base: knowledge_search / knowledge_record /
+    # knowledge_hit tools plus the session-start case-index reminder through
+    # opsPrompts (this realm). No config here — the hub address comes from the
+    # process env (ACCESS_HUB_URL / ACCESS_HUB_READ_TOKEN, e.g. the systemd
+    # unit); without them the plugin no-ops and the tools stay unmounted.
+    - id: tool-ops-knowledge
+      name: '@elinpf/dsh-ops-knowledge'
+
     # Prompt half of the environment inventory: registers the one-line
     # methodology section through opsPrompts (this realm). The tool half
     # sits in ops-access-registry — it needs opsAccess, not opsPrompts.

@@ -20,6 +20,14 @@
  * - `POST /requests/:id/decide`          → `{approved:boolean}`; approval writes the
  *                                          tier, either way the request's fields are
  *                                          wiped (admin; 409 unless pending)
+ * - `GET /cases`                         → case index rows, metadata only (read+)
+ * - `GET /cases/:id`                     → full case record (read+)
+ * - `POST /cases` / `PUT /cases/:id`     → create / update a troubleshooting case
+ *                                          (read+ — a deliberate relaxation: cases hold
+ *                                          no secrets and the agent only carries the
+ *                                          read token)
+ * - `POST /cases/:id/hit`                → bump a case's hit count (read+)
+ * - `DELETE /cases/:id`                  → remove a case (admin)
  *
  * Auth: two Bearer tokens — admin (everything) and read (`GET /entries*`
  * only). Comparisons use `crypto.timingSafeEqual`. Every error response is
@@ -31,7 +39,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
-import type { EntryEnvelope, HubStore, ProbeState, TierName } from './store.js'
+import type { CaseInput, EntryEnvelope, HubStore, ProbeState, TierName } from './store.js'
 import { NAME_PATTERN } from './store.js'
 import { WEB_UI_HTML } from './web.js'
 
@@ -140,6 +148,54 @@ function segment(raw: string, what: string): string {
 function tierOf(raw: string): TierName {
   if (raw === 'ro' || raw === 'rw') return raw
   throw new HttpError(400, "tier must be 'ro' or 'rw'")
+}
+
+/** One case record may not exceed this size once serialized (defense against an agent flooding the store). */
+const MAX_CASE_BYTES = 32 * 1024
+
+const CASE_STRING_FIELDS = ['title', 'rootCause', 'fix', 'evidence', 'methodology', 'environment'] as const
+const CASE_LIST_FIELDS = ['symptoms', 'tags'] as const
+
+/**
+ * Validate a case write body. `partial` (PUT) requires at least one known
+ * field; otherwise (POST) title/rootCause/fix are required non-empty.
+ */
+function sanitizeCaseInput(raw: unknown, partial: boolean): CaseInput {
+  if (!isPlainObject(raw)) throw new HttpError(400, 'request body must be a JSON object')
+  const out: Record<string, unknown> = {}
+  for (const key of CASE_STRING_FIELDS) {
+    const value = raw[key]
+    if (value === undefined) continue
+    if (typeof value !== 'string') throw new HttpError(400, `${key} must be a string`)
+    out[key] = value
+  }
+  for (const key of CASE_LIST_FIELDS) {
+    const value = raw[key]
+    if (value === undefined) continue
+    if (!Array.isArray(value) || value.some((v) => typeof v !== 'string')) {
+      throw new HttpError(400, `${key} must be an array of strings`)
+    }
+    out[key] = value
+  }
+  if (raw.difficulty !== undefined) {
+    const d = raw.difficulty
+    if (typeof d !== 'number' || !Number.isInteger(d) || d < 1 || d > 5) {
+      throw new HttpError(400, 'difficulty must be an integer between 1 and 5')
+    }
+    out.difficulty = d
+  }
+  if (Object.keys(out).length === 0) throw new HttpError(400, 'no case fields to write')
+  if (!partial) {
+    for (const key of ['title', 'rootCause', 'fix'] as const) {
+      if (typeof out[key] !== 'string' || (out[key] as string).trim() === '') {
+        throw new HttpError(400, `${key} is required and must be non-empty`)
+      }
+    }
+  }
+  if (JSON.stringify(out).length > MAX_CASE_BYTES) {
+    throw new HttpError(400, `case exceeds ${MAX_CASE_BYTES} bytes`)
+  }
+  return out as CaseInput
 }
 
 export function createHubServer(opts: HubServerOptions): Server {
@@ -255,6 +311,69 @@ export function createHubServer(opts: HubServerOptions): Server {
       }
       await store.save()
       await store.audit(role, body.approved ? 'approve' : 'reject', request.kind, request.name, request.tier)
+      return send(res, 200, { ok: true })
+    }
+
+    if (parts[0] === 'cases' && parts.length === 1) {
+      if (method === 'GET') {
+        // Index rows only — full text comes from GET /cases/:id.
+        return send(res, 200, store.listCases())
+      }
+
+      if (method === 'POST') {
+        // Deliberate role relaxation: cases hold no secrets, and the agent
+        // only carries the read token — read+ may write the knowledge base.
+        const input = sanitizeCaseInput(await readBody(req), false)
+        let record
+        try {
+          record = store.putCase(input)
+        } catch (err) {
+          throw new HttpError(400, (err as Error).message)
+        }
+        await store.save()
+        await store.auditCase(role, 'case-put', record!)
+        return send(res, 200, { ok: true, id: record!.id })
+      }
+
+      throw new HttpError(405, 'method not allowed')
+    }
+
+    if (parts[0] === 'cases' && parts.length === 2) {
+      const id = parts[1]
+
+      if (method === 'GET') {
+        const record = store.getCase(id)
+        if (!record) throw new HttpError(404, 'case not found')
+        return send(res, 200, record)
+      }
+
+      if (method === 'PUT') {
+        const input = sanitizeCaseInput(await readBody(req), true)
+        const record = store.putCase(input, id)
+        if (!record) throw new HttpError(404, 'case not found')
+        await store.save()
+        await store.auditCase(role, 'case-put', record)
+        return send(res, 200, { ok: true })
+      }
+
+      if (method === 'DELETE') {
+        if (role !== 'admin') throw new HttpError(403, 'read token cannot access admin endpoints')
+        const existing = store.getCase(id)
+        if (!existing || !store.deleteCase(id)) throw new HttpError(404, 'case not found')
+        await store.save()
+        await store.auditCase(role, 'case-delete', existing)
+        return send(res, 200, { ok: true })
+      }
+
+      throw new HttpError(405, 'method not allowed')
+    }
+
+    if (parts[0] === 'cases' && parts.length === 3 && parts[2] === 'hit') {
+      if (method !== 'POST') throw new HttpError(405, 'method not allowed')
+      const record = store.getCase(parts[1])
+      if (!record || !store.hitCase(parts[1])) throw new HttpError(404, 'case not found')
+      await store.save()
+      await store.auditCase(role, 'case-hit', record)
       return send(res, 200, { ok: true })
     }
 

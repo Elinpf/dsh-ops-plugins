@@ -29,6 +29,7 @@
     "@elinpf/dsh-ops-access-prometheus": "workspace:^",
     "@elinpf/dsh-ops-access-ssh": "workspace:^",
     "@elinpf/dsh-ops-access-ui": "workspace:^",
+    "@elinpf/dsh-ops-knowledge": "workspace:^",
     "@elinpf/dsh-ops-panel": "workspace:^",
     "@elinpf/dsh-ops-prompts": "workspace:^",
     "@elinpf/dsh-ops-tool-ceph": "workspace:^",

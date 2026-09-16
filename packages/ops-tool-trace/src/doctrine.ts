@@ -52,6 +52,10 @@ export function resolveGateError(undecided: Array<{ id: string, status: string }
 /** Where the full documentation lives. */
 export const HELP_POINTER = '完整用法与纪律: 调 `trace` action=help。'
 
+/** Post-resolve knowledge precipitation, quoted by HELP_TEXT. */
+export const KNOWLEDGE_PRECIPITATION =
+  '全案收口后, 若根因+修复有可复用价值且 knowledge 工具可用: 先 knowledge_search 查重, 再 knowledge_record 沉淀(有近似旧病例则带 id 更新)'
+
 /**
  * Soft hint for add_step: the parent is a milestone that already has
  * completed steps with findings, so the new step may belong under one of
@@ -123,6 +127,9 @@ export const HELP_TEXT = [
   '- 有 → 在该 step 下 add_step 追问, 收敛发生在追问之后',
   '- 没有(已到物理/基础设施层事实: 磁盘满、内存耗尽、网络分区…) → 这一步收敛',
   '没有新报错指引方向时, 回到最近一个还悬着 "为什么" 的节点继续。',
+  '',
+  '### 收口后的知识沉淀',
+  `${KNOWLEDGE_PRECIPITATION}。`,
   '',
   '### 其他',
   '- 死路 abandon, 保留在树上; 迷失方向先 view; 每 5 步排查至少更新 1 次 trace。',

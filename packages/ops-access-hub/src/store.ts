@@ -17,12 +17,18 @@
  *     "tiers": { "ro": { "fields": { ... }, "probe": { ... } }, "rw": { "fields": { ... } } },
  *     "updatedAt": "<ISO>" } },
  *   "requests": { "<uuid>": { "kind": "...", "name": "...", "tier": "rw",
- *     "fields": { ... }, "status": "pending", ... } } }
+ *     "fields": { ... }, "status": "pending", ... } },
+ *   "cases": { "<uuid>": { "title": "...", "symptoms": [...],
+ *     "rootCause": "...", "fix": "...", "hitCount": 0, ... } } }
  * ```
  *
  * `requests` is the agent-registration approval queue (see server.ts
  * `/requests` routes); a decided request keeps its metadata but its `fields`
  * are wiped.
+ *
+ * `cases` is the troubleshooting knowledge base (see server.ts `/cases`
+ * routes): distilled postmortems an agent records after an investigation
+ * resolves, searchable by later sessions. Cases hold no secret material.
  *
  * The hub is dumb storage: file fields hold their *content* (inlined at
  * import time) and no kind-specific schema validation happens here.
@@ -94,15 +100,49 @@ interface HubDoc {
   entries: Record<string, HubEntry>
   /** Absent in data files written before the approval flow existed. */
   requests?: Record<string, RegistrationRequest>
+  /** Absent in data files written before the knowledge base existed. */
+  cases?: Record<string, CaseRecord>
 }
+
+/** Hard caps on the knowledge base, enforced by the store (it owns the doc). */
+export const MAX_CASES = 500
+
+/**
+ * A distilled troubleshooting postmortem. `hitCount` rises every time a
+ * later session reports the case as useful, so the valuable cases float to
+ * the top of the index and the rest sink.
+ */
+export interface CaseRecord {
+  id: string
+  title: string
+  symptoms: string[]
+  rootCause: string
+  fix: string
+  evidence?: string
+  /** How the root cause was found — the discriminating steps/commands, for reuse in similar-but-not-identical situations. */
+  methodology?: string
+  /** Self-assessed diagnosis difficulty, 1 (obvious at a glance) to 5 (multi-day, cross-system). */
+  difficulty?: number
+  tags: string[]
+  environment?: string
+  hitCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+/** Fields a client may write on a case; the server owns id/hitCount/timestamps. */
+export type CaseInput = Partial<Omit<CaseRecord, 'id' | 'hitCount' | 'createdAt' | 'updatedAt'>>
 
 export interface AuditRecord {
   ts: string
   role: 'admin' | 'read'
-  action: 'resolve' | 'put' | 'delete' | 'request' | 'approve' | 'reject'
+  action: 'resolve' | 'put' | 'delete' | 'request' | 'approve' | 'reject' | 'case-put' | 'case-hit' | 'case-delete'
   kind: string
   name: string
-  tier: TierName
+  /** Absent on `case-*` actions (cases have no tiers). */
+  tier?: TierName
+  /** Case title, recorded on `case-*` actions only. */
+  title?: string
 }
 
 export interface HubStoreOptions {
@@ -250,9 +290,89 @@ export class HubStore {
     return request
   }
 
+  /** The cases map, created lazily (old data files predate the knowledge base). */
+  private cases(): Record<string, CaseRecord> {
+    return (this.doc.cases ??= {})
+  }
+
+  /** Case index rows — metadata only, never the full text fields. */
+  listCases(): Array<Pick<CaseRecord, 'id' | 'title' | 'symptoms' | 'tags' | 'hitCount' | 'updatedAt'>> {
+    return Object.values(this.cases()).map((c) => ({
+      id: c.id,
+      title: c.title,
+      symptoms: c.symptoms,
+      tags: c.tags,
+      hitCount: c.hitCount,
+      updatedAt: c.updatedAt,
+    }))
+  }
+
+  getCase(id: string): CaseRecord | undefined {
+    return this.cases()[id]
+  }
+
+  /**
+   * Create a case, or update one when `id` is given (only the provided
+   * fields change; hitCount/createdAt survive). Returns null when updating
+   * an absent id. Throws when the knowledge base is at MAX_CASES.
+   */
+  putCase(input: CaseInput, id?: string): CaseRecord | null {
+    const now = new Date().toISOString()
+    if (id !== undefined) {
+      const existing = this.cases()[id]
+      if (!existing) return null
+      Object.assign(existing, input)
+      existing.updatedAt = now
+      return existing
+    }
+    if (Object.keys(this.cases()).length >= MAX_CASES) {
+      throw new Error(`knowledge base is full (${MAX_CASES} cases); delete stale cases first`)
+    }
+    const record: CaseRecord = {
+      id: randomUUID(),
+      title: input.title ?? '',
+      symptoms: input.symptoms ?? [],
+      rootCause: input.rootCause ?? '',
+      fix: input.fix ?? '',
+      ...(input.evidence !== undefined ? { evidence: input.evidence } : {}),
+      ...(input.methodology !== undefined ? { methodology: input.methodology } : {}),
+      ...(input.difficulty !== undefined ? { difficulty: input.difficulty } : {}),
+      tags: input.tags ?? [],
+      ...(input.environment !== undefined ? { environment: input.environment } : {}),
+      hitCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    }
+    this.cases()[record.id] = record
+    return record
+  }
+
+  /** Bump a case's hit count. Returns false when absent. */
+  hitCase(id: string): boolean {
+    const record = this.cases()[id]
+    if (!record) return false
+    record.hitCount += 1
+    return true
+  }
+
+  /** Delete a case. Returns false when absent. */
+  deleteCase(id: string): boolean {
+    if (!this.cases()[id]) return false
+    delete this.cases()[id]
+    return true
+  }
+
+  /** Append one audit line for a case action (kind fixed to 'case', name = case id). */
+  async auditCase(role: AuditRecord['role'], action: 'case-put' | 'case-hit' | 'case-delete', record: { id: string; title: string }): Promise<void> {
+    await this.appendAudit({ ts: new Date().toISOString(), role, action, kind: 'case', name: record.id, title: record.title })
+  }
+
   /** Append one audit line. Field values are never recorded. */
   async audit(role: AuditRecord['role'], action: AuditRecord['action'], kind: string, name: string, tier: TierName): Promise<void> {
-    const record: AuditRecord = { ts: new Date().toISOString(), role, action, kind, name, tier }
+    await this.appendAudit({ ts: new Date().toISOString(), role, action, kind, name, tier })
+  }
+
+  private async appendAudit(record: AuditRecord): Promise<void> {
     await mkdir(this.dataDir, { recursive: true })
     // A crash mid-append can leave a torn tail line without a newline; a
     // naive append would fuse the next record onto it and lose both. Start

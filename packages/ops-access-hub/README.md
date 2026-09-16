@@ -36,6 +36,11 @@ Every `serve` flag has an env counterpart (`ACCESS_HUB_PORT`, `ACCESS_HUB_HOST`,
 | `PUT /entries/:kind/:name/:tier` | admin | upsert `{fields, envelope?, probe?}`; envelope replaces wholesale |
 | `DELETE /entries/:kind/:name/:tier` | admin | removing the last tier deletes the whole entry |
 | `GET /audit?limit=N` | admin | recent N audit records (default 100, cap 1000) |
+| `GET /cases` | read+ | troubleshooting case index rows — metadata only, never full text |
+| `GET /cases/:id` | read+ | one full case record |
+| `POST /cases` / `PUT /cases/:id` | read+ | create / update a case — **deliberate role relaxation**: cases hold no secrets and the agent only carries the read token |
+| `POST /cases/:id/hit` | read+ | bump a case's hit count |
+| `DELETE /cases/:id` | admin | remove a case |
 
 ## Security notes
 
