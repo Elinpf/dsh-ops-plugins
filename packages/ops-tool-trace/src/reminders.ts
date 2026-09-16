@@ -22,6 +22,8 @@ import type { ForestState, TreeState } from './types.js'
 import type { SessionForestStore } from './session-forests.js'
 import { TRIGGER_NODE_QUESTION } from './doctrine.js'
 import { depthOf } from './tree-layout.js'
+import { readSessionEvents } from './session-log.js'
+import type { SessionLike } from './session-log.js'
 
 /** What a reminder rule sees. Derived once per pre-step, shared by all rules. */
 export interface ReminderContext {
@@ -38,19 +40,21 @@ export interface ReminderContext {
 
 /** Minimal agent shape the context builder reads. */
 interface AgentLike {
-  session?: {
-    id?: string
-    events?: Array<{ type: string, data?: { name?: string, turn?: number, step?: number } }>
-  }
+  session?: SessionLike
 }
 
 /**
  * Derive the reminder context for one pre-step. Returns null when there is no
  * session event stream to judge from.
+ *
+ * The log is read through {@link readSessionEvents}, NOT `session.events`
+ * directly: dsh ≥0.1.2 removed that getter, and reading it yielded `undefined`
+ * so this function returned null on every pre-step — the outage this guards
+ * against.
  */
 export function buildReminderContext(agent: unknown, store: SessionForestStore): ReminderContext | null {
   const session = (agent as AgentLike)?.session
-  const events = session?.events
+  const events = readSessionEvents(session)
   if (!session?.id || !events || events.length === 0) return null
 
   let currentStep = 0

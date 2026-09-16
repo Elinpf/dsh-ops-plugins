@@ -87,9 +87,15 @@ export function setup(opts: {
   apply(ctx, { idleReminderGapSteps: 5, idleReminderBackoffCeilingSteps: 40, nestingReminderFlatSteps: 3 })
 
   const tool = tools[0]
-  /** exec context; `events` drives currentTurn (turn/start) — empty means turn 0. */
+  /**
+   * exec context; `events` drives currentTurn (turn/start) — empty means turn 0.
+   * The session exposes the LIVE dsh contract (≥0.1.2): the log is read through
+   * `snapshotEvents()`. The legacy `events` getter no longer exists in dsh, so
+   * this harness deliberately withholds it — a regression to `session.events`
+   * must fail here rather than silently in production.
+   */
   const exec = (events: any[] = []) => ({
-    agent: { id: 'agent-1', session: { id: sessionId, events } },
+    agent: { id: 'agent-1', session: { id: sessionId, snapshotEvents: () => events } },
   })
   const run = (args: Record<string, unknown>, events: any[] = []): Promise<TraceResult> =>
     tool.execute(args, exec(events))
