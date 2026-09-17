@@ -28,10 +28,23 @@
  *                                          read token)
  * - `POST /cases/:id/hit`                → bump a case's hit count (read+)
  * - `DELETE /cases/:id`                  → remove a case (admin)
+ * - `GET /whoami`                        → `{ok,role,actor,source}` for the presented
+ *                                          token (read+)
+ * - `POST /tokens`                       → issue a named token, body `{name,role,expiresAt?}`;
+ *                                          the plaintext is in this response only (admin)
+ * - `GET /tokens`                        → issued-token roster, metadata only — never
+ *                                          the digest or the plaintext (admin)
+ * - `DELETE /tokens/:id`                 → revoke a named token; 404 unknown, 409 already
+ *                                          revoked (admin)
  *
- * Auth: two Bearer tokens — admin (everything) and read (`GET /entries*`
- * only). Comparisons use `crypto.timingSafeEqual`. Every error response is
- * JSON `{ok:false,error}` and `error` never contains field values.
+ * Auth: `Authorization: Bearer <token>`, compared with `crypto.timingSafeEqual`.
+ * Two roles — admin (everything) and read (resolving, case writes, the
+ * requests list). A token is either one of the two static bootstrap tokens
+ * (CLI flag / env, always accepted, the break-glass path) or a named token
+ * issued through `POST /tokens` (ADR-0009): independently revocable,
+ * optionally expiring, and recorded as the audit `actor`. Named tokens are
+ * stored as SHA-256 digests only. Every error response is JSON
+ * `{ok:false,error}` and `error` never contains field values.
  *
  * @module
  */
@@ -41,6 +54,16 @@ import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import type { CaseInput, EntryEnvelope, HubStore, ProbeState, TierName } from './store.js'
 import { NAME_PATTERN } from './store.js'
+import {
+  generateToken,
+  hashToken,
+  parseExpiresAt,
+  parseTokenName,
+  parseTokenRole,
+  toTokenView,
+  tokenPrefix,
+} from './tokens.js'
+import type { TokenRole } from './tokens.js'
 import { WEB_UI_HTML } from './web.js'
 
 export { NAME_PATTERN }
@@ -49,11 +72,29 @@ const MAX_BODY_BYTES = 4 * 1024 * 1024
 
 export interface HubServerOptions {
   store: HubStore
+  /**
+   * Static bootstrap admin token (flag/env). Always accepted — the
+   * break-glass path that keeps the hub reachable after every named token
+   * has been revoked, and the credential from before ADR-0009 existed.
+   */
   adminToken: string
+  /** Static bootstrap read token (flag/env); same bootstrap role as `adminToken`. */
   readToken: string
 }
 
 type Role = 'admin' | 'read'
+
+/**
+ * The authenticated caller: its role plus the label the audit log records.
+ * Static bootstrap tokens carry no label of their own, so they stay
+ * un-attributed in the audit (`actor` absent) — the label exists to tell
+ * *people* apart, and named tokens are what people are issued.
+ */
+interface Principal {
+  role: Role
+  actor: string
+  source: 'static' | 'named'
+}
 
 class HttpError extends Error {
   constructor(
@@ -75,13 +116,34 @@ function tokenEqual(a: string, b: string): boolean {
   return timingSafeEqual(ba, bb)
 }
 
-function roleOf(req: IncomingMessage, opts: HubServerOptions): Role | null {
+/** The presented Bearer token, or null when the header is absent/malformed. */
+function bearerToken(req: IncomingMessage): string | null {
   const header = req.headers.authorization
   if (!header || !header.startsWith('Bearer ')) return null
-  const token = header.slice('Bearer '.length).trim()
-  if (tokenEqual(token, opts.adminToken)) return 'admin'
-  if (tokenEqual(token, opts.readToken)) return 'read'
+  return header.slice('Bearer '.length).trim()
+}
+
+/**
+ * Resolve the presented Bearer token to a principal, or null.
+ *
+ * Static bootstrap tokens win first (a plain constant-time string compare);
+ * otherwise the digest is matched against the named-token roster. A token
+ * whose only match is revoked or expired is *not* a principal — it fails
+ * authentication like any unknown token.
+ */
+function principalOf(req: IncomingMessage, opts: HubServerOptions): Principal | null {
+  const token = bearerToken(req)
+  if (token === null) return null
+  if (tokenEqual(token, opts.adminToken)) return { role: 'admin', actor: 'admin', source: 'static' }
+  if (tokenEqual(token, opts.readToken)) return { role: 'read', actor: 'read', source: 'static' }
+  const named = opts.store.findActiveTokenByHash(hashToken(token))
+  if (named) return { role: named.role, actor: named.name, source: 'named' }
   return null
+}
+
+/** The audit `actor` of a principal: named tokens only (see `Principal`). */
+function actorOf(principal: Principal): string | undefined {
+  return principal.source === 'named' ? principal.actor : undefined
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {
@@ -214,8 +276,19 @@ export function createHubServer(opts: HubServerOptions): Server {
       return
     }
 
-    const role = roleOf(req, opts)
-    if (!role) throw new HttpError(401, 'missing or invalid bearer token')
+    const principal = principalOf(req, opts)
+    if (!principal) {
+      // A digest that matches a revoked/expired record deserves a clearer
+      // message than an outright unknown token (the holder already has it).
+      const token = bearerToken(req)
+      const known = token !== null && opts.store.hasTokenHash(hashToken(token))
+      throw new HttpError(401, known ? 'token revoked or expired' : 'missing or invalid bearer token')
+    }
+    const actor = actorOf(principal)
+
+    if (method === 'GET' && path === '/whoami') {
+      return send(res, 200, { ok: true, role: principal.role, actor: principal.actor, source: principal.source })
+    }
 
     if (method === 'GET' && path === '/entries') {
       // Listing never exposes field values — tiers carry only probe state.
@@ -233,7 +306,7 @@ export function createHubServer(opts: HubServerOptions): Server {
     }
 
     if (method === 'GET' && path === '/audit') {
-      if (role !== 'admin') throw new HttpError(403, 'read token cannot access admin endpoints')
+      if (principal.role !== 'admin') throw new HttpError(403, 'read role cannot access admin endpoints')
       const raw = url.searchParams.get('limit')
       let limit = 100
       if (raw !== null) {
@@ -245,6 +318,62 @@ export function createHubServer(opts: HubServerOptions): Server {
     }
 
     const parts = path.split('/').filter((p) => p !== '')
+
+    if (parts[0] === 'tokens' && parts.length === 1) {
+      if (principal.role !== 'admin') throw new HttpError(403, 'read role cannot access admin endpoints')
+
+      if (method === 'GET') {
+        // Roster metadata only — the digest never leaves the store, and the
+        // plaintext cannot be reconstructed from anything here.
+        return send(res, 200, store.listTokens().map(toTokenView))
+      }
+
+      if (method === 'POST') {
+        const body = await readBody(req)
+        let name: string
+        let role: TokenRole
+        let expiresAt: string | undefined
+        try {
+          name = parseTokenName(body.name)
+          role = parseTokenRole(body.role)
+          expiresAt = parseExpiresAt(body.expiresAt)
+        } catch (err) {
+          throw new HttpError(400, (err as Error).message)
+        }
+        if (store.findTokenByName(name)) throw new HttpError(409, `token name '${name}' is already in use`)
+        // Mint, store only the digest, and hand the plaintext back exactly once.
+        const plaintext = generateToken()
+        let issued
+        try {
+          issued = store.putToken({
+            name,
+            role,
+            hash: hashToken(plaintext),
+            prefix: tokenPrefix(plaintext),
+            createdBy: principal.actor,
+            ...(expiresAt !== undefined ? { expiresAt } : {}),
+          })
+        } catch (err) {
+          throw new HttpError(400, (err as Error).message)
+        }
+        await store.save()
+        await store.auditToken(principal.role, 'token-create', issued, actor)
+        return send(res, 200, { ok: true, ...toTokenView(issued), token: plaintext })
+      }
+
+      throw new HttpError(405, 'method not allowed')
+    }
+
+    if (parts[0] === 'tokens' && parts.length === 2) {
+      if (principal.role !== 'admin') throw new HttpError(403, 'read role cannot access admin endpoints')
+      if (method !== 'DELETE') throw new HttpError(405, 'method not allowed')
+      const token = store.getToken(parts[1])
+      if (!token) throw new HttpError(404, 'token not found')
+      if (!store.revokeToken(parts[1])) throw new HttpError(409, 'token already revoked')
+      await store.save()
+      await store.auditToken(principal.role, 'token-revoke', token, actor)
+      return send(res, 200, { ok: true })
+    }
 
     if (parts[0] === 'requests' && parts.length === 1) {
       if (method === 'GET') {
@@ -270,7 +399,7 @@ export function createHubServer(opts: HubServerOptions): Server {
         return send(res, 200, list)
       }
 
-      if (role !== 'admin') throw new HttpError(403, 'read token cannot access admin endpoints')
+      if (principal.role !== 'admin') throw new HttpError(403, 'read role cannot access admin endpoints')
 
       if (method === 'POST') {
         const body = await readBody(req)
@@ -282,7 +411,7 @@ export function createHubServer(opts: HubServerOptions): Server {
         if (body.reason !== undefined && typeof body.reason !== 'string') throw new HttpError(400, 'reason must be a string')
         const request = store.putRequest({ kind, name, tier, fields: body.fields, envelope, reason: body.reason as string | undefined })
         await store.save()
-        await store.audit(role, 'request', kind, name, tier)
+        await store.audit(principal.role, 'request', kind, name, tier, actor)
         return send(res, 200, { ok: true, id: request.id })
       }
 
@@ -291,14 +420,14 @@ export function createHubServer(opts: HubServerOptions): Server {
 
     if (parts[0] === 'requests' && parts.length === 2 && method === 'GET') {
       // Full field values for pre-approval review — admin only.
-      if (role !== 'admin') throw new HttpError(403, 'read token cannot review request contents')
+      if (principal.role !== 'admin') throw new HttpError(403, 'read role cannot review request contents')
       const request = store.getRequest(parts[1])
       if (!request) throw new HttpError(404, 'request not found')
       return send(res, 200, request)
     }
 
     if (parts[0] === 'requests' && parts.length === 3 && parts[2] === 'decide') {
-      if (role !== 'admin') throw new HttpError(403, 'read token cannot access admin endpoints')
+      if (principal.role !== 'admin') throw new HttpError(403, 'read role cannot access admin endpoints')
       if (method !== 'POST') throw new HttpError(405, 'method not allowed')
       const body = await readBody(req)
       if (typeof body.approved !== 'boolean') throw new HttpError(400, 'approved must be a boolean')
@@ -310,7 +439,7 @@ export function createHubServer(opts: HubServerOptions): Server {
           : new HttpError(404, 'request not found')
       }
       await store.save()
-      await store.audit(role, body.approved ? 'approve' : 'reject', request.kind, request.name, request.tier)
+      await store.audit(principal.role, body.approved ? 'approve' : 'reject', request.kind, request.name, request.tier, actor)
       return send(res, 200, { ok: true })
     }
 
@@ -331,7 +460,7 @@ export function createHubServer(opts: HubServerOptions): Server {
           throw new HttpError(400, (err as Error).message)
         }
         await store.save()
-        await store.auditCase(role, 'case-put', record!)
+        await store.auditCase(principal.role, 'case-put', record!, actor)
         return send(res, 200, { ok: true, id: record!.id })
       }
 
@@ -352,16 +481,16 @@ export function createHubServer(opts: HubServerOptions): Server {
         const record = store.putCase(input, id)
         if (!record) throw new HttpError(404, 'case not found')
         await store.save()
-        await store.auditCase(role, 'case-put', record)
+        await store.auditCase(principal.role, 'case-put', record, actor)
         return send(res, 200, { ok: true })
       }
 
       if (method === 'DELETE') {
-        if (role !== 'admin') throw new HttpError(403, 'read token cannot access admin endpoints')
+        if (principal.role !== 'admin') throw new HttpError(403, 'read role cannot access admin endpoints')
         const existing = store.getCase(id)
         if (!existing || !store.deleteCase(id)) throw new HttpError(404, 'case not found')
         await store.save()
-        await store.auditCase(role, 'case-delete', existing)
+        await store.auditCase(principal.role, 'case-delete', existing, actor)
         return send(res, 200, { ok: true })
       }
 
@@ -373,7 +502,7 @@ export function createHubServer(opts: HubServerOptions): Server {
       const record = store.getCase(parts[1])
       if (!record || !store.hitCase(parts[1])) throw new HttpError(404, 'case not found')
       await store.save()
-      await store.auditCase(role, 'case-hit', record)
+      await store.auditCase(principal.role, 'case-hit', record, actor)
       return send(res, 200, { ok: true })
     }
 
@@ -386,7 +515,7 @@ export function createHubServer(opts: HubServerOptions): Server {
         const entry = store.getEntry(kind, name)
         const tierData = entry?.tiers[tier]
         if (!entry || !tierData) throw new HttpError(404, 'entry not found')
-        await store.audit(role, 'resolve', kind, name, tier)
+        await store.audit(principal.role, 'resolve', kind, name, tier, actor)
         return send(res, 200, {
           kind,
           name,
@@ -397,7 +526,7 @@ export function createHubServer(opts: HubServerOptions): Server {
         })
       }
 
-      if (role !== 'admin') throw new HttpError(403, 'read token cannot access admin endpoints')
+      if (principal.role !== 'admin') throw new HttpError(403, 'read role cannot access admin endpoints')
 
       if (method === 'PUT') {
         const body = await readBody(req)
@@ -406,14 +535,14 @@ export function createHubServer(opts: HubServerOptions): Server {
         const probe = body.probe === undefined ? undefined : sanitizeProbe(body.probe)
         store.putTier(kind, name, tier, { fields: body.fields, envelope, probe })
         await store.save()
-        await store.audit(role, 'put', kind, name, tier)
+        await store.audit(principal.role, 'put', kind, name, tier, actor)
         return send(res, 200, { ok: true })
       }
 
       if (method === 'DELETE') {
         if (!store.deleteTier(kind, name, tier)) throw new HttpError(404, 'entry not found')
         await store.save()
-        await store.audit(role, 'delete', kind, name, tier)
+        await store.audit(principal.role, 'delete', kind, name, tier, actor)
         return send(res, 200, { ok: true })
       }
 

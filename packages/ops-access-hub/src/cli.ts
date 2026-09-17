@@ -9,6 +9,9 @@
  * - `import <access.yaml>` — convert an ops-access YAML registry and push it
  *   into a running hub (`--url` + `--admin-token`) or straight into a data
  *   directory (`--data-dir`, needs the master key).
+ * - `token create|list|revoke` — issue, list and revoke named tokens
+ *   (ADR-0009), against a running hub (`--url` + `--admin-token`) or directly
+ *   in a data directory (`--data-dir`).
  * - `--help` — usage.
  *
  * @module
@@ -20,12 +23,25 @@ import { join } from 'node:path'
 import { HubStore } from './store.js'
 import { createHubServer } from './server.js'
 import { applyToStore, importRegistry, pushToHub } from './import.js'
+import {
+  generateToken,
+  hashToken,
+  parseExpiresAt,
+  parseTokenName,
+  parseTokenRole,
+  toTokenView,
+  tokenPrefix,
+} from './tokens.js'
+import type { TokenView } from './tokens.js'
 
 const USAGE = `dsh-ops-access-hub — standalone credential hub for the dsh ops suite
 
 Usage:
   dsh-ops-access-hub serve [options]
   dsh-ops-access-hub import <access.yaml> (--url <hubUrl> --admin-token <token> | --data-dir <dir>) [--key-file <file>]
+  dsh-ops-access-hub token create --name <name> --role <admin|read> [--expires-at <ISO>] (--url <hubUrl> --admin-token <token> | --data-dir <dir>) [--key-file <file>]
+  dsh-ops-access-hub token list (--url <hubUrl> --admin-token <token> | --data-dir <dir>) [--key-file <file>]
+  dsh-ops-access-hub token revoke --id <id> (--url <hubUrl> --admin-token <token> | --data-dir <dir>) [--key-file <file>]
   dsh-ops-access-hub --help
 
 serve options (flag / env / default):
@@ -35,6 +51,11 @@ serve options (flag / env / default):
   --key-file     ACCESS_HUB_KEY_FILE      <data-dir>/hub.key
   --admin-token  ACCESS_HUB_ADMIN_TOKEN   (generated + printed once when unset)
   --read-token   ACCESS_HUB_READ_TOKEN    (generated + printed once when unset)
+
+Named tokens (ADR-0009): issue one per holder with 'token create' and hand the
+printed value over out of band — it is shown once and stored only as a digest.
+--admin-token is the issuing credential (the static bootstrap token).
+The static admin/read tokens stay valid as break-glass credentials.
 
 Master key: env ACCESS_HUB_KEY (base64/hex) wins; otherwise the key file is
 used and generated (0600) on first start.
@@ -69,6 +90,129 @@ function expandHome(p: string): string {
 
 function pick(flags: Record<string, string>, flag: string, env: string | undefined, fallback: string): string {
   return flags[flag] ?? env ?? fallback
+}
+
+interface Target {
+  hubUrl?: string
+  adminToken?: string
+  dataDir?: string
+}
+
+/**
+ * Resolve the shared `--url <hubUrl> --admin-token <t>` vs `--data-dir <dir>`
+ * target. The two are mutually exclusive; the HTTP form needs the admin token.
+ * Errors carry the caller's command name as prefix.
+ */
+function resolveTarget(flags: Record<string, string>, command: string): Target {
+  const hubUrl = flags.url
+  const dataDir = flags['data-dir'] ? expandHome(flags['data-dir']) : undefined
+  const adminToken = flags['admin-token'] ?? process.env.ACCESS_HUB_ADMIN_TOKEN
+  if (!hubUrl && !dataDir) throw new Error(`${command}: specify either --url <hubUrl> or --data-dir <dir>`)
+  if (hubUrl && dataDir) throw new Error(`${command}: --url and --data-dir are mutually exclusive`)
+  if (hubUrl && !adminToken) throw new Error(`${command}: --url mode requires --admin-token (or ACCESS_HUB_ADMIN_TOKEN)`)
+  return { hubUrl, adminToken, dataDir }
+}
+
+/** Open the encrypted store behind a `--data-dir` target. */
+async function openStore(flags: Record<string, string>, dataDir: string): Promise<HubStore> {
+  const keyFile = expandHome(pick(flags, 'key-file', process.env.ACCESS_HUB_KEY_FILE, join(dataDir, 'hub.key')))
+  const store = new HubStore({ dataDir, keyFile, envKey: process.env.ACCESS_HUB_KEY })
+  await store.init()
+  return store
+}
+
+/**
+ * One HTTP call against a running hub with the admin token. Errors never
+ * embed the token, and a non-2xx response surfaces the hub's own `error`.
+ */
+async function hubRequest(hubUrl: string, adminToken: string, path: string, init?: { method?: string; body?: unknown }): Promise<unknown> {
+  const res = await fetch(`${hubUrl.replace(/\/$/, '')}${path}`, {
+    method: init?.method ?? 'GET',
+    headers: {
+      authorization: `Bearer ${adminToken}`,
+      ...(init?.body === undefined ? {} : { 'content-type': 'application/json' }),
+    },
+    body: init?.body === undefined ? undefined : JSON.stringify(init.body),
+  })
+  const text = await res.text()
+  let body: unknown
+  try {
+    body = JSON.parse(text)
+  } catch {
+    body = undefined
+  }
+  if (!res.ok) {
+    const detail = body && typeof body === 'object' && 'error' in body ? String((body as { error: unknown }).error) : text.slice(0, 200)
+    throw new Error(`hub returned ${res.status}: ${detail}`)
+  }
+  return body
+}
+
+/** One roster line for `token list`. */
+function formatToken(t: TokenView): string {
+  const state = t.revokedAt !== undefined ? `REVOKED ${t.revokedAt}` : t.expiresAt !== undefined ? `expires ${t.expiresAt}` : 'active'
+  return `${t.id}  ${t.role.padEnd(5)}  ${t.prefix}...  ${t.name}  (created ${t.createdAt} by ${t.createdBy})  ${state}`
+}
+
+/** `token create|list|revoke` — issue and manage named tokens (ADR-0009). */
+async function tokenCmd(args: ParsedArgs): Promise<void> {
+  const { positional, flags } = args
+  const action = positional[1]
+  if (action !== 'create' && action !== 'list' && action !== 'revoke') {
+    throw new Error('token: expected one of create | list | revoke')
+  }
+  const { hubUrl, adminToken, dataDir } = resolveTarget(flags, `token ${action}`)
+  const store = dataDir === undefined ? undefined : await openStore(flags, dataDir)
+
+  if (action === 'list') {
+    const tokens = store ? store.listTokens().map(toTokenView) : ((await hubRequest(hubUrl!, adminToken!, '/tokens')) as TokenView[])
+    if (tokens.length === 0) console.log('no named tokens issued')
+    else for (const t of tokens) console.log(formatToken(t))
+    return
+  }
+
+  if (action === 'create') {
+    const name = parseTokenName(flags.name ?? '')
+    const role = parseTokenRole(flags.role ?? '')
+    const expiresAt = parseExpiresAt(flags['expires-at'])
+    const entity = store
+      ? createTokenInStore(store, { name, role, expiresAt })
+      : ((await hubRequest(hubUrl!, adminToken!, '/tokens', {
+          method: 'POST',
+          body: { name, role, ...(expiresAt !== undefined ? { expiresAt } : {}) },
+        })) as { id: string; token: string })
+    if (store) await store.save()
+    console.log(`issued ${role} token '${name}' (id ${entity.id}) — hand it over out of band; it will not be shown again:`)
+    console.log(`  ${entity.token}`)
+    return
+  }
+
+  const id = flags.id
+  if (!id) throw new Error('token revoke: missing --id <id>')
+  if (store) {
+    const token = store.getToken(id)
+    if (!token) throw new Error(`token revoke: token ${id} not found`)
+    if (!store.revokeToken(id)) throw new Error(`token revoke: token ${id} is already revoked`)
+    await store.save()
+  } else {
+    await hubRequest(hubUrl!, adminToken!, `/tokens/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  }
+  console.log(`revoked token ${id}`)
+}
+
+/** Mint + record one token in an offline store (the caller saves). */
+function createTokenInStore(store: HubStore, input: { name: string; role: 'admin' | 'read'; expiresAt?: string }): { id: string; token: string } {
+  if (store.findTokenByName(input.name)) throw new Error(`token create: name '${input.name}' is already in use`)
+  const token = generateToken()
+  const issued = store.putToken({
+    name: input.name,
+    role: input.role,
+    hash: hashToken(token),
+    prefix: tokenPrefix(token),
+    createdBy: 'cli',
+    ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+  })
+  return { id: issued.id, token }
 }
 
 async function serve(args: ParsedArgs): Promise<void> {
@@ -108,22 +252,13 @@ async function importCmd(args: ParsedArgs): Promise<void> {
   const { positional, flags } = args
   const registryFile = positional[1]
   if (!registryFile) throw new Error('import: missing <access.yaml> argument')
-  const hubUrl = flags.url
-  const adminToken = flags['admin-token'] ?? process.env.ACCESS_HUB_ADMIN_TOKEN
-  const dataDir = flags['data-dir'] ? expandHome(flags['data-dir']) : undefined
-  if (!hubUrl && !dataDir) throw new Error('import: specify either --url <hubUrl> or --data-dir <dir>')
-  if (hubUrl && dataDir) throw new Error('import: --url and --data-dir are mutually exclusive')
-  if (hubUrl && !adminToken) throw new Error('import: --url mode requires --admin-token (or ACCESS_HUB_ADMIN_TOKEN)')
+  const { hubUrl, adminToken, dataDir } = resolveTarget(flags, 'import')
 
   const { entries, stats } = await importRegistry(expandHome(registryFile))
   if (hubUrl) {
     await pushToHub(hubUrl, adminToken as string, entries)
   } else {
-    const keyFile = expandHome(
-      pick(flags, 'key-file', process.env.ACCESS_HUB_KEY_FILE, join(dataDir as string, 'hub.key')),
-    )
-    const store = new HubStore({ dataDir: dataDir as string, keyFile, envKey: process.env.ACCESS_HUB_KEY })
-    await store.init()
+    const store = await openStore(flags, dataDir as string)
     applyToStore(store, entries)
     await store.save()
   }
@@ -135,6 +270,7 @@ async function main(): Promise<void> {
   const command = args.positional[0]
   if (command === 'serve') return serve(args)
   if (command === 'import') return importCmd(args)
+  if (command === 'token') return tokenCmd(args)
   if (command === 'help' || args.flags.help === 'true' || args.flags.h === 'true' || command === undefined) {
     console.log(USAGE)
     return
