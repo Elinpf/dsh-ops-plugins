@@ -1,6 +1,6 @@
 {
   "name": "@elinpf/dsh-ops-tool-prometheus",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "prometheus tool consumer of the ops-access seam — resolves prometheus profiles and runs PromQL instant/range queries over the Prometheus HTTP API, injecting the bearer token automatically.",
   "type": "module",
   "main": "lib/index.js",
@@ -45,7 +45,7 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.8",
-    "@elinpf/dsh-ops-access": "^0.4.0"
+    "@elinpf/dsh-ops-access": "^0.4.1"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",

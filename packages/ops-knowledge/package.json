@@ -1,6 +1,6 @@
 {
   "name": "@elinpf/dsh-ops-knowledge",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Troubleshooting knowledge base for ops mode — distilled postmortem cases stored in the access hub, searched before diagnosing and recorded after resolving.",
   "type": "module",
   "main": "lib/index.js",
@@ -37,7 +37,7 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.8",
-    "@elinpf/dsh-ops-prompts": "^0.4.0"
+    "@elinpf/dsh-ops-prompts": "^0.4.1"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
