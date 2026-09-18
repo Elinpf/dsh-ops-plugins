@@ -1,6 +1,7 @@
 # ADR-0009: 具名 token —— 按人分发、单独吊销、审计归属
 
 - 状态:已接受(已实现 — hub 名册/API/CLI/UI 全部落地,单测全绿;静态 token 行为不变)
+- 后续:`docs/adr/0010-token-admin.md` 在本文的管理面上补"就地编辑 + 状态四分 + 名册筛选"(`PATCH /tokens/:id`、CLI `token update`);本文的边界(两种角色、不做用户体系/RBAC、吊销终态)全部不变
 - 日期:2026-09-17
 - 背景会话:任务看板 `t-mu5bphyz-77gnvj`「access-hub 中新增对 token 的区分」;修订 ADR-0005「明确不做 — 多用户/RBAC」的边界
 

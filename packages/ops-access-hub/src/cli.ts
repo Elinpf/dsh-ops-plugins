@@ -9,9 +9,9 @@
  * - `import <access.yaml>` — convert an ops-access YAML registry and push it
  *   into a running hub (`--url` + `--admin-token`) or straight into a data
  *   directory (`--data-dir`, needs the master key).
- * - `token create|list|revoke` — issue, list and revoke named tokens
- *   (ADR-0009), against a running hub (`--url` + `--admin-token`) or directly
- *   in a data directory (`--data-dir`).
+ * - `token create|list|update|revoke` — issue, list, edit and revoke named
+ *   tokens (ADR-0009 / ADR-0010), against a running hub (`--url` +
+ *   `--admin-token`) or directly in a data directory (`--data-dir`).
  * - `--help` — usage.
  *
  * @module
@@ -27,12 +27,14 @@ import {
   generateToken,
   hashToken,
   parseExpiresAt,
+  parseExpiresAtPatch,
   parseTokenName,
   parseTokenRole,
   toTokenView,
   tokenPrefix,
+  tokenStatus,
 } from './tokens.js'
-import type { TokenView } from './tokens.js'
+import type { TokenChange, TokenView } from './tokens.js'
 
 const USAGE = `dsh-ops-access-hub — standalone credential hub for the dsh ops suite
 
@@ -41,6 +43,7 @@ Usage:
   dsh-ops-access-hub import <access.yaml> (--url <hubUrl> --admin-token <token> | --data-dir <dir>) [--key-file <file>]
   dsh-ops-access-hub token create --name <name> --role <admin|read> [--expires-at <ISO>] (--url <hubUrl> --admin-token <token> | --data-dir <dir>) [--key-file <file>]
   dsh-ops-access-hub token list (--url <hubUrl> --admin-token <token> | --data-dir <dir>) [--key-file <file>]
+  dsh-ops-access-hub token update --id <id> [--name <name>] [--role <admin|read>] [--expires-at <ISO> | --clear-expires] (--url <hubUrl> --admin-token <token> | --data-dir <dir>) [--key-file <file>]
   dsh-ops-access-hub token revoke --id <id> (--url <hubUrl> --admin-token <token> | --data-dir <dir>) [--key-file <file>]
   dsh-ops-access-hub --help
 
@@ -55,6 +58,10 @@ serve options (flag / env / default):
 Named tokens (ADR-0009): issue one per holder with 'token create' and hand the
 printed value over out of band — it is shown once and stored only as a digest.
 --admin-token is the issuing credential (the static bootstrap token).
+'token update' edits a live record in place (label / role / expiry) — the
+secret itself never changes, so the holder keeps working without re-issuing
+(pass --clear-expires to drop an expiry). 'token list' marks each record
+active / expiring / EXPIRED / REVOKED.
 The static admin/read tokens stay valid as break-glass credentials.
 
 Master key: env ACCESS_HUB_KEY (base64/hex) wins; otherwise the key file is
@@ -148,18 +155,60 @@ async function hubRequest(hubUrl: string, adminToken: string, path: string, init
   return body
 }
 
-/** One roster line for `token list`. */
-function formatToken(t: TokenView): string {
-  const state = t.revokedAt !== undefined ? `REVOKED ${t.revokedAt}` : t.expiresAt !== undefined ? `expires ${t.expiresAt}` : 'active'
+/** Whole days until an ISO expiry, rounded up so a live token never reads "0d left". */
+function daysLeft(expiresAt: string, now: Date): number {
+  return Math.ceil((Date.parse(expiresAt) - now.getTime()) / 86_400_000)
+}
+
+/** One roster line for `token list`; the state column mirrors the web UI's badges (ADR-0010). */
+function formatToken(t: TokenView, now = new Date()): string {
+  const status = tokenStatus(t, now)
+  let state: string
+  if (status === 'revoked') state = `REVOKED ${t.revokedAt}`
+  else if (status === 'expired') state = `EXPIRED ${t.expiresAt}`
+  else if (status === 'expiring') state = `expiring ${t.expiresAt} (${daysLeft(t.expiresAt as string, now)}d left)`
+  else state = 'active'
   return `${t.id}  ${t.role.padEnd(5)}  ${t.prefix}...  ${t.name}  (created ${t.createdAt} by ${t.createdBy})  ${state}`
 }
 
-/** `token create|list|revoke` — issue and manage named tokens (ADR-0009). */
+/** Build the `token update` patch from CLI flags; throws when there is nothing to change. */
+function patchFromFlags(flags: Record<string, string>): { name?: string; role?: 'admin' | 'read'; expiresAt?: string | null } {
+  try {
+    if (flags['clear-expires'] === 'true' && flags['expires-at'] !== undefined) {
+      throw new Error('--expires-at and --clear-expires are mutually exclusive')
+    }
+    const patch: { name?: string; role?: 'admin' | 'read'; expiresAt?: string | null } = {}
+    if (flags.name !== undefined) patch.name = parseTokenName(flags.name)
+    if (flags.role !== undefined) patch.role = parseTokenRole(flags.role)
+    if (flags['clear-expires'] === 'true') patch.expiresAt = null
+    else if (flags['expires-at'] !== undefined) patch.expiresAt = parseExpiresAtPatch(flags['expires-at']) ?? null
+    if (patch.name === undefined && patch.role === undefined && patch.expiresAt === undefined) {
+      throw new Error('nothing to change (use --name, --role, --expires-at or --clear-expires)')
+    }
+    return patch
+  } catch (err) {
+    throw new Error(`token update: ${(err as Error).message}`)
+  }
+}
+
+/** Edit one token in an offline store (the caller saves when something changed). */
+function updateTokenInStore(store: HubStore, id: string, patch: { name?: string; role?: 'admin' | 'read'; expiresAt?: string | null }): TokenChange[] {
+  let updated
+  try {
+    updated = store.updateToken(id, patch)
+  } catch (err) {
+    throw new Error(`token update: ${(err as Error).message}`)
+  }
+  if (!updated) throw new Error(`token update: token ${id} not found`)
+  return updated.changes
+}
+
+/** `token create|list|update|revoke` — issue and manage named tokens (ADR-0009/0010). */
 async function tokenCmd(args: ParsedArgs): Promise<void> {
   const { positional, flags } = args
   const action = positional[1]
-  if (action !== 'create' && action !== 'list' && action !== 'revoke') {
-    throw new Error('token: expected one of create | list | revoke')
+  if (action !== 'create' && action !== 'list' && action !== 'update' && action !== 'revoke') {
+    throw new Error('token: expected one of create | list | update | revoke')
   }
   const { hubUrl, adminToken, dataDir } = resolveTarget(flags, `token ${action}`)
   const store = dataDir === undefined ? undefined : await openStore(flags, dataDir)
@@ -188,7 +237,19 @@ async function tokenCmd(args: ParsedArgs): Promise<void> {
   }
 
   const id = flags.id
-  if (!id) throw new Error('token revoke: missing --id <id>')
+  if (!id) throw new Error(`token ${action}: missing --id <id>`)
+
+  if (action === 'update') {
+    const patch = patchFromFlags(flags)
+    const changes = store
+      ? updateTokenInStore(store, id, patch)
+      : ((await hubRequest(hubUrl!, adminToken!, `/tokens/${encodeURIComponent(id)}`, { method: 'PATCH', body: patch })) as { changes: TokenChange[] }).changes
+    // A no-op patch must not rewrite (and re-encrypt) the whole document.
+    if (store && changes.length > 0) await store.save()
+    console.log(changes.length === 0 ? `token ${id}: already up to date` : `updated token ${id}: ${changes.join(', ')}`)
+    return
+  }
+
   if (store) {
     const token = store.getToken(id)
     if (!token) throw new Error(`token revoke: token ${id} not found`)

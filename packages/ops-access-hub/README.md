@@ -9,9 +9,9 @@ Standalone credential hub for the dsh ops suite — **not a dsh plugin**. A smal
 - **Encrypted-at-rest storage.** The whole dataset is one JSON document (`<data-dir>/hub-data.json.enc`), AES-256-GCM with a random nonce per write, atomic write-temp-then-rename, mode 0600. The master key comes from env `ACCESS_HUB_KEY` (base64/hex) or a key file (default `<data-dir>/hub.key`, generated 0600 on first start). File fields hold their *content*, not paths.
 - **Token-authenticated HTTP API** (bare `node:http`, default bind `127.0.0.1:3090`), compared with `crypto.timingSafeEqual`, 401/403 distinguished. Two kinds of Bearer token:
   - **Static bootstrap tokens** — one admin (everything), one read (resolving, case writes, the requests list), from CLI flag / env. Always accepted and impossible to revoke: the break-glass path.
-  - **Named tokens** (ADR-0009) — issue one per person with `POST /tokens` (or the CLI / web UI): a label, a role and an optional expiry. The plaintext is returned **once**; only its SHA-256 digest is stored. Revoke any single holder with `DELETE /tokens/:id` (terminal, effective immediately) without touching anyone else's credential.
-- **Append-only audit log** (`<data-dir>/audit.log`, JSONL): every successful resolve/put/delete with the token role — and, for named tokens, the holder label as `actor`, so multi-person usage is attributable. Never field values.
-- **Single-file web UI** (`GET /`, Chinese): token input (localStorage, shows what it resolves to via `/whoami`), entry list with probe badges, create/edit/delete, a token roster (issue with one-time plaintext display, revoke) and an audit viewer with the actor column. The page itself holds no secrets.
+  - **Named tokens** (ADR-0009) — issue one per person with `POST /tokens` (or the CLI / web UI): a label, a role and an optional expiry. The plaintext is returned **once**; only its SHA-256 digest is stored. Revoke any single holder with `DELETE /tokens/:id` (terminal, effective immediately) without touching anyone else's credential. Edit a live record in place with `PATCH /tokens/:id` (ADR-0010): rename, change the role, extend or clear the expiry — the secret is untouched, so the holder never has to reconfigure.
+- **Append-only audit log** (`<data-dir>/audit.log`, JSONL): every successful resolve/put/delete with the token role — and, for named tokens, the holder label as `actor`, so multi-person usage is attributable. `token-update` lines also carry `changes` (the field names an edit touched, never values). Never field values.
+- **Single-file web UI** (`GET /`, Chinese): token input (localStorage, shows what it resolves to via `/whoami`), entry list with probe badges, create/edit/delete, a token roster and an audit viewer with the actor column. The page itself holds no secrets. The roster is the fine-grained control surface: a live/expiring/expired/revoked badge per record, search plus status/role filters with counts, local-time created/expires columns, issue with one-time plaintext, in-place edit, revoke.
 
 ## Usage
 
@@ -25,6 +25,9 @@ dsh-ops-access-hub import <access.yaml> \
 dsh-ops-access-hub token create --name <name> --role <admin|read> [--expires-at <ISO>] \
   (--url <hubUrl> --admin-token <token> | --data-dir <dir>) [--key-file <file>]
 dsh-ops-access-hub token list   (--url <hubUrl> --admin-token <token> | --data-dir <dir>) [--key-file <file>]
+dsh-ops-access-hub token update --id <id> [--name <name>] [--role <admin|read>] \
+  [--expires-at <ISO> | --clear-expires] \
+  (--url <hubUrl> --admin-token <token> | --data-dir <dir>) [--key-file <file>]
 dsh-ops-access-hub token revoke --id <id> (--url <hubUrl> --admin-token <token> | --data-dir <dir>) [--key-file <file>]
 ```
 
@@ -32,7 +35,7 @@ Every `serve` flag has an env counterpart (`ACCESS_HUB_PORT`, `ACCESS_HUB_HOST`,
 
 `import` converts an existing ops-access YAML registry: a single-line field value starting with `/`, `~/`, `./` or `../` that points at a readable file is replaced by the file's content (relative paths resolve against the registry file's directory); everything else passes through unchanged. Push into a running hub with `--url`, or write the data file directly with `--data-dir`.
 
-`token create` prints the new plaintext exactly once — hand it to its holder out of band; the hub cannot show it again. The static `--admin-token` is the issuing credential (and stays valid as break-glass afterwards).
+`token create` prints the new plaintext exactly once — hand it to its holder out of band; the hub cannot show it again. The static `--admin-token` is the issuing credential (and stays valid as break-glass afterwards). `token update` edits a live record in place and prints only the field names it changed (nothing when the patch matched the current values); `token revoke` is terminal, so a token that should work again gets a new one. `token list` marks each record `active` / `expiring <date> (<N>d left)` / `EXPIRED <date>` / `REVOKED <date>`.
 
 ## API overview
 
@@ -53,6 +56,7 @@ Every `serve` flag has an env counterpart (`ACCESS_HUB_PORT`, `ACCESS_HUB_HOST`,
 | `DELETE /cases/:id` | admin | remove a case |
 | `POST /tokens` | admin | issue a named token `{name,role,expiresAt?}` — **plaintext in this response only**; 409 on a duplicate live label |
 | `GET /tokens` | admin | the roster, metadata only — never the digest nor the plaintext |
+| `PATCH /tokens/:id` | admin | edit a live token `{name?,role?,expiresAt?}` — absent keeps, `null`/`''` clears the expiry; the secret is untouched (404 unknown, 409 revoked or label taken, 400 invalid/empty) |
 | `DELETE /tokens/:id` | admin | revoke one named token (terminal; 404 unknown, 409 already revoked) |
 
 ## Security notes
@@ -61,6 +65,7 @@ Every `serve` flag has an env counterpart (`ACCESS_HUB_PORT`, `ACCESS_HUB_HOST`,
 - The hub is a single point of custody: **back up both the data file and the master key.** Without the key the data file is unrecoverable.
 - Keep tokens out of logs and shell history (prefer env injection); the read token suffices for consumers — only writers need the admin token.
 - Named tokens are stored as SHA-256 digests, not secrets: leaking the data file (or a backup) does not hand out working credentials. The static bootstrap tokens are the exception — they live in env/flag config, are the break-glass path, and cannot be revoked through the API.
+- An edit never touches the secret (same digest, same prefix): "wrong label" or "needs three more months" is not a reason to make a holder reconfigure. Making a credential stop working is revocation's job, and revocation stays terminal — a record is never un-revoked.
 
 ## Testing
 
@@ -70,5 +75,7 @@ npx vitest run    # crypto round-trip, key-file generation and permissions,
                   # API auth (401/403), CRUD, last-tier cascade delete,
                   # probe write-back, audit append, import path→content,
                   # named tokens (issue / one-time plaintext / role / revoke /
-                  # expiry / actor attribution), web-shell inline-script compile
+                  # expiry / actor attribution), fine-grained token admin
+                  # (status buckets, in-place PATCH edit, renewal, no-op
+                  # patches, audit changes), web-shell inline-script compile
 ```

@@ -102,6 +102,56 @@ export function isTokenActive(token: Pick<HubToken, 'revokedAt' | 'expiresAt'>, 
   return true
 }
 
+/**
+ * How the roster surfaces one token. `active` and `expiring` both still
+ * authenticate; the split exists so an operator can renew *before* a holder is
+ * locked out (ADR-0010). `expired`/`revoked` are the two ways a record stops
+ * working.
+ */
+export type TokenStatus = 'active' | 'expiring' | 'expired' | 'revoked'
+
+/** A token whose expiry is at most this far out is reported as `expiring`. */
+export const EXPIRING_SOON_MS = 7 * 24 * 60 * 60 * 1000
+
+/**
+ * Classify a token for the roster and the CLI. Survives a hand-edited data
+ * file: an unparseable `expiresAt` reads as expired instead of crashing.
+ */
+export function tokenStatus(token: Pick<HubToken, 'revokedAt' | 'expiresAt'>, now = new Date()): TokenStatus {
+  if (token.revokedAt !== undefined) return 'revoked'
+  if (token.expiresAt !== undefined) {
+    const expiry = Date.parse(token.expiresAt)
+    if (!Number.isFinite(expiry) || expiry <= now.getTime()) return 'expired'
+    if (expiry - now.getTime() <= EXPIRING_SOON_MS) return 'expiring'
+  }
+  return 'active'
+}
+
+/**
+ * An edit applied through `PATCH /tokens/:id` / `token update`. An absent field
+ * means "leave it alone"; `expiresAt: null` is the explicit "clear the expiry" —
+ * with `undefined` already spoken for, clearing needs its own value.
+ */
+export interface TokenPatch {
+  name?: string
+  role?: TokenRole
+  expiresAt?: string | null
+}
+
+/** The patch fields that actually differ from the record; audit `changes` verbatim. */
+export type TokenChange = 'name' | 'role' | 'expiresAt'
+
+/**
+ * Normalize the `expiresAt` half of a patch body: absent → keep, `null`/`''` →
+ * clear, anything else → a validated future ISO timestamp (throws when past).
+ */
+export function parseExpiresAtPatch(raw: unknown, now = new Date()): string | null | undefined {
+  if (raw === undefined) return undefined
+  if (raw === null || raw === '') return null
+  // parseExpiresAt rejects the past/unparseable and never returns undefined here.
+  return parseExpiresAt(raw, now) ?? null
+}
+
 /** Drop the digest before a token record leaves the process. */
 export function toTokenView(token: HubToken): TokenView {
   const { hash: _hash, ...view } = token

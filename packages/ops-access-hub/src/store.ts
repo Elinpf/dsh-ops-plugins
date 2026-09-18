@@ -53,7 +53,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { decryptDoc, encryptDoc, loadMasterKey } from './crypto.js'
 import { hashEqual, isTokenActive, MAX_TOKENS } from './tokens.js'
-import type { HubToken, TokenRole } from './tokens.js'
+import type { HubToken, TokenChange, TokenPatch, TokenRole } from './tokens.js'
 
 export type TierName = 'ro' | 'rw'
 
@@ -159,6 +159,7 @@ export interface AuditRecord {
     | 'case-hit'
     | 'case-delete'
     | 'token-create'
+    | 'token-update'
     | 'token-revoke'
   kind: string
   name: string
@@ -172,6 +173,11 @@ export interface AuditRecord {
    * to know about them.
    */
   actor?: string
+  /**
+   * Which token fields an edit touched (`token-update` only) — the field
+   * names, never the values, so the line stays a metadata-only record.
+   */
+  changes?: TokenChange[]
 }
 
 export interface HubStoreOptions {
@@ -461,8 +467,48 @@ export class HubStore {
     return true
   }
 
+  /**
+   * Apply an operator edit to a live token (ADR-0010). Returns the record plus
+   * the fields that actually changed — an empty list means the patch matched
+   * the current values, so the caller can skip both the save and the audit
+   * line. Throws on a revoked record or a label clash; `null` when the id is
+   * unknown. Validation of the patch values is the caller's job.
+   */
+  updateToken(id: string, patch: TokenPatch): { token: HubToken; changes: TokenChange[] } | null {
+    const token = this.tokens()[id]
+    if (!token) return null
+    if (token.revokedAt !== undefined) throw new Error('token is revoked and can no longer be edited')
+    const changes: TokenChange[] = []
+    if (patch.name !== undefined && patch.name !== token.name) {
+      const clash = Object.values(this.tokens()).find((t) => t.id !== id && t.revokedAt === undefined && t.name === patch.name)
+      if (clash) throw new Error(`token name '${patch.name}' is already in use`)
+      token.name = patch.name
+      changes.push('name')
+    }
+    if (patch.role !== undefined && patch.role !== token.role) {
+      token.role = patch.role
+      changes.push('role')
+    }
+    if (patch.expiresAt !== undefined) {
+      // null = clear the expiry (back to a never-expiring token).
+      const next = patch.expiresAt ?? undefined
+      if (next !== token.expiresAt) {
+        if (next === undefined) delete token.expiresAt
+        else token.expiresAt = next
+        changes.push('expiresAt')
+      }
+    }
+    return { token, changes }
+  }
+
   /** Append one audit line for a token-roster action (kind fixed to 'token', name = token label). */
-  async auditToken(role: AuditRecord['role'], action: 'token-create' | 'token-revoke', token: { id: string; name: string }, actor?: string): Promise<void> {
+  async auditToken(
+    role: AuditRecord['role'],
+    action: 'token-create' | 'token-update' | 'token-revoke',
+    token: { id: string; name: string },
+    actor?: string,
+    changes?: TokenChange[],
+  ): Promise<void> {
     await this.appendAudit({
       ts: new Date().toISOString(),
       role,
@@ -470,6 +516,7 @@ export class HubStore {
       kind: 'token',
       name: token.name,
       ...(actor !== undefined ? { actor } : {}),
+      ...(changes !== undefined ? { changes } : {}),
     })
   }
 

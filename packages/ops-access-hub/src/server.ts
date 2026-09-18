@@ -34,6 +34,9 @@
  *                                          the plaintext is in this response only (admin)
  * - `GET /tokens`                        → issued-token roster, metadata only — never
  *                                          the digest or the plaintext (admin)
+ * - `PATCH /tokens/:id`                  → edit a live token's `{name?,role?,expiresAt?}`
+ *                                          (`null`/`''` clears the expiry); 404 unknown,
+ *                                          409 revoked or label taken (admin)
  * - `DELETE /tokens/:id`                 → revoke a named token; 404 unknown, 409 already
  *                                          revoked (admin)
  *
@@ -58,12 +61,13 @@ import {
   generateToken,
   hashToken,
   parseExpiresAt,
+  parseExpiresAtPatch,
   parseTokenName,
   parseTokenRole,
   toTokenView,
   tokenPrefix,
 } from './tokens.js'
-import type { TokenRole } from './tokens.js'
+import type { TokenPatch, TokenRole } from './tokens.js'
 import { WEB_UI_HTML } from './web.js'
 
 export { NAME_PATTERN }
@@ -260,6 +264,25 @@ function sanitizeCaseInput(raw: unknown, partial: boolean): CaseInput {
   return out as CaseInput
 }
 
+/**
+ * Validate a `PATCH /tokens/:id` body into a `TokenPatch` (ADR-0010). Keeps
+ * "field absent" (keep) distinct from `expiresAt: null`/`''` (clear) and
+ * refuses an empty patch — a body with nothing to change is a caller error,
+ * not a silent 200. Label clashes are a conflict (409), so they are checked by
+ * the route, not here (which maps everything to 400).
+ */
+function parseTokenPatch(raw: unknown): TokenPatch {
+  if (!isPlainObject(raw)) throw new Error('request body must be a JSON object')
+  const patch: TokenPatch = {}
+  if (raw.name !== undefined) patch.name = parseTokenName(raw.name)
+  if (raw.role !== undefined) patch.role = parseTokenRole(raw.role)
+  if (raw.expiresAt !== undefined) patch.expiresAt = parseExpiresAtPatch(raw.expiresAt) ?? null
+  if (patch.name === undefined && patch.role === undefined && patch.expiresAt === undefined) {
+    throw new Error('no updatable fields (name, role, expiresAt)')
+  }
+  return patch
+}
+
 export function createHubServer(opts: HubServerOptions): Server {
   const { store } = opts
 
@@ -366,8 +389,44 @@ export function createHubServer(opts: HubServerOptions): Server {
 
     if (parts[0] === 'tokens' && parts.length === 2) {
       if (principal.role !== 'admin') throw new HttpError(403, 'read role cannot access admin endpoints')
-      if (method !== 'DELETE') throw new HttpError(405, 'method not allowed')
       const token = store.getToken(parts[1])
+
+      if (method === 'PATCH') {
+        // Edit in place (ADR-0010): a holder whose label, role or expiry is
+        // wrong gets a correction, not a revoke-and-reissue.
+        if (!token) throw new HttpError(404, 'token not found')
+        if (token.revokedAt !== undefined) {
+          throw new HttpError(409, 'token is revoked and can no longer be edited; issue a new one')
+        }
+        const body = await readBody(req)
+        let patch: TokenPatch
+        try {
+          patch = parseTokenPatch(body)
+        } catch (err) {
+          throw new HttpError(400, (err as Error).message)
+        }
+        // A label another live token holds is a conflict, not a bad request.
+        const holder = patch.name === undefined ? undefined : store.findTokenByName(patch.name)
+        if (holder && holder.id !== token.id) {
+          throw new HttpError(409, `token name '${patch.name}' is already in use`)
+        }
+        let updated
+        try {
+          updated = store.updateToken(token.id, patch)
+        } catch (err) {
+          throw new HttpError(409, (err as Error).message)
+        }
+        if (!updated) throw new HttpError(404, 'token not found')
+        // A patch that matched the current values is a no-op: no write, no
+        // audit noise (the roster rewrite costs a full re-encrypt).
+        if (updated.changes.length > 0) {
+          await store.save()
+          await store.auditToken(principal.role, 'token-update', updated.token, actor, updated.changes)
+        }
+        return send(res, 200, { ok: true, ...toTokenView(updated.token), changes: updated.changes })
+      }
+
+      if (method !== 'DELETE') throw new HttpError(405, 'method not allowed')
       if (!token) throw new HttpError(404, 'token not found')
       if (!store.revokeToken(parts[1])) throw new HttpError(409, 'token already revoked')
       await store.save()

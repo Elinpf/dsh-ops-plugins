@@ -26,11 +26,27 @@ describe('web UI shell', () => {
       expect(WEB_UI_HTML).toContain(`id="${id}"`)
     }
     // Endpoints the roster view drives.
-    for (const call of ["'/tokens'", "'/whoami'", "'/tokens/' + encodeURIComponent(p[0])"]) {
+    for (const call of ["'/tokens'", "'/whoami'", "'/tokens/' + encodeURIComponent(revokeId)"]) {
       expect(script).toContain(call)
     }
     // The audit table renders the actor attribution column.
     expect(script).toContain("esc(a.actor || '—')")
+  })
+
+  it('carries the fine-grained roster controls (status badges, filters, in-place edit)', () => {
+    const script = inlineScript()
+    for (const id of ['tokenFilter', 'tokenStatusFilter', 'tokenRoleFilter', 'tokenSummary', 'tokenEdit', 'eName', 'eRole', 'eExpires', 'eClearExpires', 'saveTokenEdit', 'cancelTokenEdit']) {
+      expect(WEB_UI_HTML).toContain(`id="${id}"`)
+    }
+    // Every status the roster can badge, plus the four filter options.
+    for (const status of ["'revoked'", "'expired'", "'expiring'", "'active'"]) {
+      expect(script).toContain(status)
+    }
+    // The edit dialog patches in place and reports which fields it touched.
+    expect(script).toContain("method: 'PATCH'")
+    expect(script).toContain("'/tokens/' + encodeURIComponent(editingTokenId)")
+    expect(script).toContain('data-edit-token')
+    expect(script).toContain('r.body.changes')
   })
 
   it('keeps the UI free of the template-literal syntax that would break the HTML string', () => {

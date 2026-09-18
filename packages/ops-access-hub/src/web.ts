@@ -4,9 +4,14 @@
  * the page itself prompts for a Bearer token (kept in localStorage) and all
  * data fetches carry it, so no secret material is embedded in the HTML.
  *
- * Admin views: entry list/editor, the named-token roster (issue, one-time
- * plaintext display, revoke — ADR-0009) and the audit log with its actor
- * column. The token input reports what it resolves to via `/whoami`.
+ * Admin views: entry list/editor, the named-token roster and the audit log with
+ * its actor column. The token input reports what it resolves to via `/whoami`.
+ *
+ * The roster is the fine-grained control surface (ADR-0010): a status badge
+ * per record (active / expiring / expired / revoked), a search box plus status
+ * and role filters over the roster, and an edit dialog that patches a live
+ * token's label, role or expiry in place — the secret never changes, so a
+ * correction never forces the holder to reconfigure.
  *
  * UI copy is Chinese per repo convention for operator-facing surfaces.
  * NOTE: this string must not contain backticks or `${` sequences — the
@@ -39,6 +44,8 @@ export const WEB_UI_HTML = `<!DOCTYPE html>
   .badge.verified { border-color: #2f7d4f; color: #7fd6a4; }
   .badge.mismatch { border-color: #a33; color: #f0a0a0; }
   .badge.unverifiable { border-color: #8a6d1d; color: #e6c96a; }
+  .badge.expired { border-color: #a33; color: #f0a0a0; }
+  .badge.revoked { border-color: #4a5666; color: #8b98a9; }
   .muted { color: #8b98a9; }
   #msg { margin: 8px 0; min-height: 20px; color: #f0a0a0; white-space: pre-wrap; }
   #msg.ok { color: #7fd6a4; }
@@ -78,13 +85,29 @@ export const WEB_UI_HTML = `<!DOCTYPE html>
       <div><button id="newToken">新建 token</button></div>
       <div class="muted">明文只在创建时显示一次,请立即交付持有人;服务端只存摘要</div>
     </div>
+    <div class="row" style="align-items:center;margin-bottom:8px">
+      <div><input id="tokenFilter" placeholder="搜索 名称 / 前缀 / 创建者" style="width:100%"></div>
+      <div><select id="tokenStatusFilter">
+        <option value="">全部状态</option>
+        <option value="active">有效</option>
+        <option value="expiring">即将过期</option>
+        <option value="expired">已过期</option>
+        <option value="revoked">已吊销</option>
+      </select></div>
+      <div><select id="tokenRoleFilter">
+        <option value="">全部角色</option>
+        <option value="admin">admin</option>
+        <option value="read">read</option>
+      </select></div>
+    </div>
+    <div id="tokenSummary" class="muted"></div>
     <div id="issuedBox" style="display:none;border:1px solid #8a6d1d;border-radius:6px;padding:8px;margin:8px 0">
       <div class="muted">新 token 明文(只显示这一次,关闭或刷新后无法再次查看):</div>
       <code id="issuedToken" style="word-break:break-all"></code>
       <button id="copyIssued">复制</button>
     </div>
     <table>
-      <thead><tr><th>名称(持有人)</th><th>角色</th><th>前缀</th><th>创建者</th><th>创建时间</th><th>状态</th><th>操作</th></tr></thead>
+      <thead><tr><th>名称(持有人)</th><th>角色</th><th>前缀</th><th>创建者</th><th>创建时间</th><th>到期时间</th><th>状态</th><th>操作</th></tr></thead>
       <tbody id="tokens"></tbody>
     </table>
   </section>
@@ -107,6 +130,21 @@ export const WEB_UI_HTML = `<!DOCTYPE html>
   <div style="margin-top:12px;text-align:right">
     <button id="cancelToken">取消</button>
     <button id="createToken">签发</button>
+  </div>
+</dialog>
+<dialog id="tokenEdit">
+  <h2>编辑 token</h2>
+  <div class="muted">只改标签 / 角色 / 有效期:token 明文不变,持有人无需重新配置</div>
+  <label>持有人名称(审计中的操作者)</label><input id="eName">
+  <div class="row">
+    <div><label>角色</label><select id="eRole"><option value="read">read</option><option value="admin">admin</option></select></div>
+    <div><label>有效期(ISO 时间)</label><input id="eExpires" placeholder="2026-12-31T00:00:00Z"></div>
+  </div>
+  <label style="margin-top:8px"><input type="checkbox" id="eClearExpires" style="width:auto"> 清除有效期(改为长期有效)</label>
+  <div id="tokenEditErr" style="color:#f0a0a0;min-height:18px;margin-top:4px"></div>
+  <div style="margin-top:12px;text-align:right">
+    <button id="cancelTokenEdit">取消</button>
+    <button id="saveTokenEdit">保存修改</button>
   </div>
 </dialog>
 <dialog id="editor">
@@ -144,6 +182,11 @@ export const WEB_UI_HTML = `<!DOCTYPE html>
   var issuedToken = document.getElementById('issuedToken');
   var tokenEditor = document.getElementById('tokenEditor');
   var tokenErr = document.getElementById('tokenErr');
+  var tokenEdit = document.getElementById('tokenEdit');
+  var tokenEditErr = document.getElementById('tokenEditErr');
+  var tokenSummary = document.getElementById('tokenSummary');
+  var tokensCache = [];
+  var editingTokenId = '';
   var whoami = document.getElementById('whoami');
   var editor = document.getElementById('editor');
   var formErr = document.getElementById('formErr');
@@ -279,33 +322,82 @@ export const WEB_UI_HTML = `<!DOCTYPE html>
       if (r.status !== 200) { say('审计加载失败:' + (r.body && r.body.error || r.status)); return; }
       auditBody.innerHTML = r.body.map(function (a) {
         return '<tr><td class="muted">' + esc(a.ts) + '</td><td>' + esc(a.role) + '</td><td>' + esc(a.actor || '—') +
-          '</td><td>' + esc(a.action) +
+          '</td><td>' + esc(a.action + (a.changes && a.changes.length ? ' (' + a.changes.join(', ') + ')' : '')) +
           '</td><td>' + esc(a.kind) + ' / ' + esc(a.name) + '</td><td>' + esc(a.tier) + '</td></tr>';
       }).join('') || '<tr><td colspan="6" class="muted">(空)</td></tr>';
     });
   };
-  function tokenState(t) {
-    if (t.revokedAt) return '<span class="badge mismatch">已吊销</span>';
-    if (t.expiresAt) return '<span class="badge unverifiable">至 ' + esc(t.expiresAt) + '</span>';
+  // Mirrors tokenStatus() in tokens.ts: active and expiring both still
+  // authenticate; the split is what lets an operator renew in time.
+  var EXPIRING_SOON_MS = 7 * 24 * 60 * 60 * 1000;
+  function tokenStatus(t) {
+    if (t.revokedAt) return 'revoked';
+    if (t.expiresAt) {
+      var ms = Date.parse(t.expiresAt);
+      if (!isFinite(ms) || ms <= Date.now()) return 'expired';
+      if (ms - Date.now() <= EXPIRING_SOON_MS) return 'expiring';
+    }
+    return 'active';
+  }
+  function daysLeft(iso) {
+    return Math.ceil((Date.parse(iso) - Date.now()) / 86400000);
+  }
+  function localTime(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    return isNaN(d.getTime()) ? String(iso) : d.toLocaleString();
+  }
+  function statusCell(t) {
+    var s = tokenStatus(t);
+    if (s === 'revoked') return '<span class="badge revoked">已吊销</span>';
+    if (s === 'expired') return '<span class="badge expired">已过期</span>';
+    if (s === 'expiring') return '<span class="badge unverifiable">' + daysLeft(t.expiresAt) + ' 天后过期</span>';
     return '<span class="badge verified">有效</span>';
   }
-  function renderTokens(list) {
-    tokenBody.innerHTML = list.map(function (t) {
+  function findToken(id) {
+    for (var i = 0; i < tokensCache.length; i++) if (tokensCache[i].id === id) return tokensCache[i];
+    return null;
+  }
+  function renderTokens() {
+    var q = document.getElementById('tokenFilter').value.trim().toLowerCase();
+    var statusFilter = document.getElementById('tokenStatusFilter').value;
+    var roleFilter = document.getElementById('tokenRoleFilter').value;
+    var counts = { active: 0, expiring: 0, expired: 0, revoked: 0 };
+    tokensCache.forEach(function (t) { counts[tokenStatus(t)] += 1; });
+    var rows = tokensCache.filter(function (t) {
+      if (roleFilter && t.role !== roleFilter) return false;
+      if (statusFilter && tokenStatus(t) !== statusFilter) return false;
+      if (!q) return true;
+      return (t.name + ' ' + t.prefix + ' ' + t.createdBy).toLowerCase().indexOf(q) !== -1;
+    });
+    tokenSummary.textContent = '共 ' + tokensCache.length + ' 条:有效 ' + counts.active + ' · 即将过期 ' +
+      counts.expiring + ' · 已过期 ' + counts.expired + ' · 已吊销 ' + counts.revoked +
+      (rows.length === tokensCache.length ? '' : ' — 当前筛选命中 ' + rows.length + ' 条');
+    tokenBody.innerHTML = rows.map(function (t) {
+      var actions = t.revokedAt ? '<span class="muted">—</span>' :
+        '<button data-edit-token="' + esc(t.id) + '">编辑</button> ' +
+        '<button class="danger" data-revoke="' + esc(t.id) + '">吊销</button>';
       return '<tr><td><b>' + esc(t.name) + '</b></td><td>' + esc(t.role) + '</td><td class="muted">' + esc(t.prefix) +
-        '...</td><td class="muted">' + esc(t.createdBy) + '</td><td class="muted">' + esc(t.createdAt) + '</td><td>' +
-        tokenState(t) + '</td><td>' + (t.revokedAt ? '' :
-        '<button class="danger" data-revoke="' + esc(t.id) + '|' + esc(t.name) + '">吊销</button>') + '</td></tr>';
-    }).join('') || '<tr><td colspan="7" class="muted">(尚无具名 token — 静态 bootstrap token 不在此列)</td></tr>';
+        '...</td><td class="muted">' + esc(t.createdBy) + '</td><td class="muted">' + esc(localTime(t.createdAt)) +
+        '</td><td class="muted">' + esc(t.expiresAt ? localTime(t.expiresAt) : '长期') + '</td><td>' + statusCell(t) +
+        '</td><td>' + actions + '</td></tr>';
+    }).join('') || '<tr><td colspan="8" class="muted">(没有匹配的 token)</td></tr>';
   }
   function loadTokens() {
     api('/tokens').then(function (r) {
       if (r.status !== 200) {
-        tokenBody.innerHTML = '<tr><td colspan="7" class="muted">加载失败(需要 admin token):' + esc(r.body && r.body.error || r.status) + '</td></tr>';
+        tokensCache = [];
+        tokenSummary.textContent = '';
+        tokenBody.innerHTML = '<tr><td colspan="8" class="muted">加载失败(需要 admin token):' + esc(r.body && r.body.error || r.status) + '</td></tr>';
         return;
       }
-      renderTokens(r.body);
+      tokensCache = r.body;
+      renderTokens();
     });
   }
+  document.getElementById('tokenFilter').oninput = renderTokens;
+  document.getElementById('tokenStatusFilter').onchange = renderTokens;
+  document.getElementById('tokenRoleFilter').onchange = renderTokens;
   document.getElementById('showTokens').onclick = function () {
     tokenSection.style.display = tokenSection.style.display === 'none' ? '' : 'none';
     if (tokenSection.style.display === 'none') { issuedBox.style.display = 'none'; return; }
@@ -337,16 +429,55 @@ export const WEB_UI_HTML = `<!DOCTYPE html>
   document.getElementById('copyIssued').onclick = function () {
     if (navigator.clipboard) navigator.clipboard.writeText(issuedToken.textContent || '');
   };
+  document.getElementById('eClearExpires').onchange = function () {
+    var box = document.getElementById('eExpires');
+    box.disabled = this.checked;
+    if (this.checked) box.value = '';
+  };
+  function openTokenEditor(id) {
+    var t = findToken(id);
+    if (!t) return;
+    editingTokenId = id;
+    document.getElementById('eName').value = t.name;
+    document.getElementById('eRole').value = t.role;
+    document.getElementById('eExpires').value = t.expiresAt || '';
+    document.getElementById('eExpires').disabled = false;
+    document.getElementById('eClearExpires').checked = false;
+    tokenEditErr.textContent = '';
+    tokenEdit.showModal();
+  }
+  document.getElementById('cancelTokenEdit').onclick = function () { tokenEdit.close(); };
+  document.getElementById('saveTokenEdit').onclick = function () {
+    var patch = {
+      name: document.getElementById('eName').value,
+      role: document.getElementById('eRole').value,
+    };
+    if (document.getElementById('eClearExpires').checked) patch.expiresAt = null;
+    else {
+      var exp = document.getElementById('eExpires').value.trim();
+      if (exp) patch.expiresAt = exp;
+    }
+    api('/tokens/' + encodeURIComponent(editingTokenId), { method: 'PATCH', body: JSON.stringify(patch) }).then(function (r) {
+      if (r.status !== 200) { tokenEditErr.textContent = '保存失败:' + (r.body && r.body.error || r.status); return; }
+      tokenEdit.close();
+      var changed = r.body.changes || [];
+      say(changed.length ? '已更新 ' + r.body.name + ':' + changed.join(', ') : '与当前值一致,无需修改', true);
+      loadTokens();
+    });
+  };
   tokenBody.addEventListener('click', function (ev) {
     var t = ev.target;
     if (!(t instanceof HTMLElement)) return;
-    var revoke = t.getAttribute('data-revoke');
-    if (!revoke) return;
-    var p = revoke.split('|');
-    if (!confirm('确认吊销 ' + p[1] + ' 的 token?持有人将立即失去访问权限')) return;
-    api('/tokens/' + encodeURIComponent(p[0]), { method: 'DELETE' }).then(function (r) {
+    var editId = t.getAttribute('data-edit-token');
+    if (editId) { openTokenEditor(editId); return; }
+    var revokeId = t.getAttribute('data-revoke');
+    if (!revokeId) return;
+    var token = findToken(revokeId);
+    var label = token ? token.name : revokeId;
+    if (!confirm('确认吊销 ' + label + ' 的 token?持有人将立即失去访问权限,且不可恢复')) return;
+    api('/tokens/' + encodeURIComponent(revokeId), { method: 'DELETE' }).then(function (r) {
       if (r.status !== 200) { say('吊销失败:' + (r.body && r.body.error || r.status)); return; }
-      say('已吊销 ' + p[1], true);
+      say('已吊销 ' + label, true);
       loadTokens();
     });
   });

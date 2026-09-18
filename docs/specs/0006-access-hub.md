@@ -62,6 +62,7 @@ interface AccessBackend {
 | `GET /whoami` | read+ | — | `{ok,role,actor,source}`——当前 token 解析出的角色/标签/来源（`static`=静态 bootstrap，`named`=具名） |
 | `POST /tokens` | admin | `{name,role,expiresAt?}` | `{ok:true,id,name,role,prefix,createdAt,createdBy,expiresAt?,token}`——**明文 token 只在这个响应里出现一次**；重名 409、校验失败 400、名册已满 400 |
 | `GET /tokens` | admin | — | 名册元数据数组 `[{id,name,role,prefix,createdAt,createdBy,expiresAt?,revokedAt?}]`——**永不含摘要与明文** |
+| `PATCH /tokens/:id` | admin | `{name?,role?,expiresAt?}`（缺席=不改；`null`/`''`=清除有效期） | `{ok:true,…TokenView,changes:[…]}`——就地改标签/角色/有效期,**秘密不变**（ADR-0010）；未知 id 404、已吊销 409、活标签冲突 409、空补丁与非法值 400、过期时间只收未来 |
 | `DELETE /tokens/:id` | admin | — | `{ok:true}` 吊销（终态，立即失效）；404 不存在、409 已吊销 |
 
 - **kind/name 字符集**：`/^[a-zA-Z0-9][a-zA-Z0-9._@-]*$/`（与 access 侧 profile id 规则同源）；tier 只收 `ro`/`rw`。token 标签另有一条更宽的规则：`/^[\p{L}\p{N}][\p{L}\p{N}._@+ -]{0,63}$/u`（unicode 字母数字开头，1..64 字符）——标签是**人**的名字（中文名要能过），只出现在 JSON body 与审计里，不进 URL 路径。
@@ -69,7 +70,7 @@ interface AccessBackend {
   - **静态 bootstrap token**：CLI flag / env（`ACCESS_HUB_ADMIN_TOKEN` / `ACCESS_HUB_READ_TOKEN`）注入，始终有效、不可吊销——break-glass 路径；未配置的首启生成随机 token 并打印一次，无找回途径。审计不记 `actor`（共享凭据，role 已足够）。
   - **具名 token**：`POST /tokens` 签发，`{name,role,expiresAt?}`；落库只存 sha256 摘要 + 前 8 字符前缀，明文只在签发响应里出现一次。可按人吊销（终态）、可设有效期；认证成功时审计记 `actor = name`；吊销/过期/未知一律 401（吊销/过期给 `token revoked or expired` 以便持有人自查）。
   - 角色仍只有 admin / read 两种。admin 触全部端点，read 触 `GET /entries*`、`GET /requests`、`/cases` 读写、`GET /whoami`；read 触管理端点 403。
-- **审计**：append-only JSONL `<data-dir>/audit.log`（0600），每行 `{ts,role,action,kind,name,tier?,title?,actor?}`，action ∈ `resolve|put|delete|request|approve|reject|case-put|case-hit|case-delete|token-create|token-revoke`，只记成功操作，**永不记字段值**；`actor` 只在具名 token 操作时出现。`token-*` 动作的 `kind` 固定为 `token`、`name` 为 token 标签（不记明文、不记摘要）。
+- **审计**：append-only JSONL `<data-dir>/audit.log`（0600），每行 `{ts,role,action,kind,name,tier?,title?,actor?,changes?}`，action ∈ `resolve|put|delete|request|approve|reject|case-put|case-hit|case-delete|token-create|token-update|token-revoke`，只记成功操作，**永不记字段值**；`actor` 只在具名 token 操作时出现。`token-*` 动作的 `kind` 固定为 `token`、`name` 为 token 标签（不记明文、不记摘要）；`changes` 只在 `token-update` 上出现，是被改动的**字段名**列表（`name`/`role`/`expiresAt`），不是值。
 
 ## 数据模型与加密存储
 
@@ -121,13 +122,15 @@ interface AccessBackend {
 ## CLI 契约（`dsh-ops-access-hub` bin）
 
 - **`serve`**：flag / env / 默认——`--port` `ACCESS_HUB_PORT` `3090`；`--host` `ACCESS_HUB_HOST` `127.0.0.1`；`--data-dir` `ACCESS_HUB_DATA_DIR` `~/.dsh-ops-hub`；`--key-file` `ACCESS_HUB_KEY_FILE` `<data-dir>/hub.key`；`--admin-token` / `--read-token`（env 同上，未配置首启生成打印一次）。
-- **`token create|list|revoke`**（ADR-0009）：签发/查看/吊销具名 token。落点与 `import` 同纪律——`--url` + `--admin-token` 在线（走 `/tokens` API），或 `--data-dir` 离线直写数据文件（需要 master key，`createdBy` 记为 `cli`）。`create` 收 `--name` `--role <admin|read>` `[--expires-at <ISO>]`，打印明文一次；`list` 打印 `id / role / prefix / name / 创建者 / 状态`；`revoke` 收 `--id`。
+- **`token create|list|update|revoke`**（ADR-0009 / ADR-0010）：签发/查看/编辑/吊销具名 token。落点与 `import` 同纪律——`--url` + `--admin-token` 在线（走 `/tokens` API），或 `--data-dir` 离线直写数据文件（需要 master key，`createdBy` 记为 `cli`）。`create` 收 `--name` `--role <admin|read>` `[--expires-at <ISO>]`，打印明文一次；`list` 打印 `id / role / prefix / name / 创建者 / 状态`，状态为 `active` / `expiring <时间> (<N>d left)` / `EXPIRED <时间>` / `REVOKED <时间>`；`update` 收 `--id` 与 `--name` / `--role` / `--expires-at <ISO>` / `--clear-expires`（后两者互斥，全部缺席报错），只打印实际改动的字段名；`revoke` 收 `--id`。
 - **`import <access.yaml>`**：把现有 YAML registry 搬进 hub。转换规则——tier 内**单行**且以 `/`、`~/`、`./`、`../` 开头的字段值视为路径，指向可读文件则替换为文件内容（`./`/`../` 相对 registry 文件目录，`~` 展开 $HOME）；路径形态但读不到 → 报错点名条目与字段、中止导入；其余值原样通过。落点二选一：`--url` + `--admin-token` 在线推送（每 tier 一个 PUT），或 `--data-dir` 离线直写数据文件（需要 master key；与 `--url` 互斥）。结束打印统计（条目/tier/内联文件字段数）。
 - 手搓极简 argv 解析（`--flag value` / `--flag=value`），不引 commander 系——依赖底线。
 
 ## Web UI
 
 `GET /` 单文件中文界面（内联 vanilla JS，无构建链）：token 输入（存 localStorage，旁边显示 `/whoami` 解析出的角色与标签）、条目列表（envelope + tier 存在性 + probe 徽标）、新建/编辑/删除（envelope + fields JSON 编辑）、**token 名册**（签发 `{name,role,expiresAt?}`、明文一次性高亮展示 + 复制、逐行吊销、状态徽标）、审计查看（含「操作者」列）。无鉴权静态壳——所有数据请求都带 token。
+
+**token 名册的精细控制（ADR-0010）**：名册上方的控制栏提供关键字搜索（标签 / 前缀 / 创建者）、状态筛选（有效 / 即将过期 / 已过期 / 已吊销）与角色筛选，并显示"共 N 条:有效 x · 即将过期 y · 已过期 z · 已吊销 w"的汇总；每行给出**本地时区**的创建时间与到期时间（无到期显示"长期"）、四态徽标（`有效` / `N 天后过期` / `已过期` / `已吊销`），以及"编辑"/"吊销"两个动作——编辑对话框就地改标签 / 角色 / 有效期（勾选"清除有效期"即发 `expiresAt: null`），保存走 `PATCH /tokens/:id`，成功提示带上 `changes` 字段名。筛选在前端完成（名册上限 200）。
 
 ## TLS 与部署
 
@@ -137,8 +140,9 @@ v1 明文 HTTP，默认只绑 loopback。远程部署套 TLS 反向代理（终�
 
 - hub 包单测：加解密往返、key 文件首启生成与 0600、API 鉴权（401/403）、CRUD、最后-tier 连锁删除、probe 回写、审计追加、import 路径→内容转换。
 - hub 具名 token 单测（ADR-0009）：摘要/前缀/标签/角色/有效期解析与 active 窗口；名册持久化、活标签唯一、吊销终态、名册上限；HTTP 侧签发（明文只出现一次、列表与数据文件不含明文/摘要）、按角色授权、吊销与过期 401、`createdBy` 归属、`/whoami`、审计 `actor`；Web UI 内联脚本可编译（防字符串里的语法错误）。
+- hub token 精细管理单测（ADR-0010，`tests/token-admin.spec.ts`）：`tokenStatus` 四态与 7 天边界、损坏 `expiresAt` 归为已过期；`parseExpiresAtPatch` 的"缺席 / 清除 / 未来 / 过去"四路;`updateToken` 的 changes 明细、标签冲突、已吊销终态、未知 id、重载后持久化;HTTP 侧 `PATCH` 往返（同一明文、新标签）、角色变更**下一个请求即生效**、清除有效期与**续期让过期 token 复活**、无操作补丁不写盘不写审计、400/404/409/401/403 全覆盖、审计 `actor` + `changes`。Web UI spec 断言控制栏/编辑框元素与 `PATCH` 调用存在。
 - core 单测：HubBackend 用 mock fetch（resolve 物化的路径/权限/内容相同不重写、putTier 读文件上传、listEntries、deleteTier、envelope 合并）；既有 `ops-access.spec.ts` 全部不动通过（yaml 回归，125 个测试）。
-- behavioral 验证：`.dsh-target` 把 core 配为 hub 模式，本机起 hub，走 `import` → @ 提及 resolve → kubectl/ssh → gate ro/rw 申请流 → register_access / admin UI 写删 → 审计落行；再切回 yaml 验证回归（票 0004）。具名 token 部分：CLI `token create` 签发 → 换发后 resolve 正常 → `token revoke` 后该 token 401（离线与在线两种落点各走一遍）。
+- 行为验证：`.dsh-target` 把 core 配为 hub 模式，本机起 hub，走 `import` → @ 提及 resolve → kubectl/ssh → gate ro/rw 申请流 → register_access / admin UI 写删 → 审计落行；再切回 yaml 验证回归（票 0004）。具名 token 部分：CLI `token create` 签发 → 换发后 resolve 正常 → `token revoke` 后该 token 401（离线与在线两种落点各走一遍）。token 精细管理部分：CLI `token update`（改角色 / 延期 / `--clear-expires` / 无操作 / 各类报错）在离线与在线两种落点各走一遍；Web UI 在浏览器里过一遍筛选 → 编辑 → 吊销。
 
 ## Out of Scope
 
