@@ -1,5 +1,12 @@
 # @elinpf/dsh-ops-tool-prometheus
 
+## 0.4.1
+
+### Patch Changes
+
+- @elinpf/dsh-ops-access@0.4.1
+  - @elinpf/dsh-ops-shell-tool@0.4.1
+
 ## 0.4.0
 
 ### Patch Changes

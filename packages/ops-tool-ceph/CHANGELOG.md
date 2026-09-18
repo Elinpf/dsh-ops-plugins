@@ -1,5 +1,11 @@
 # @elinpf/dsh-ops-tool-ceph
 
+## 0.4.1
+
+### Patch Changes
+
+- @elinpf/dsh-ops-shell-tool@0.4.1
+
 ## 0.4.0
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # @elinpf/dsh-ops-knowledge
 
+## 0.4.1
+
+### Patch Changes
+
+- @elinpf/dsh-ops-prompts@0.4.1
+
 ## 0.4.0
 
 ### Minor Changes
