@@ -19,7 +19,10 @@
  *   "requests": { "<uuid>": { "kind": "...", "name": "...", "tier": "rw",
  *     "fields": { ... }, "status": "pending", ... } },
  *   "cases": { "<uuid>": { "title": "...", "symptoms": [...],
- *     "rootCause": "...", "fix": "...", "hitCount": 0, ... } } }
+ *     "rootCause": "...", "fix": "...", "hitCount": 0, ... } },
+ *   "tokens": { "<uuid>": { "name": "alice", "role": "read",
+ *     "hash": "<sha256 hex>", "prefix": "AbCdEfGh", "createdAt": "<ISO>",
+ *     "createdBy": "admin", "expiresAt": "<ISO>" } } }
  * ```
  *
  * `requests` is the agent-registration approval queue (see server.ts
@@ -29,6 +32,11 @@
  * `cases` is the troubleshooting knowledge base (see server.ts `/cases`
  * routes): distilled postmortems an agent records after an investigation
  * resolves, searchable by later sessions. Cases hold no secret material.
+ *
+ * `tokens` is the named-token roster (ADR-0009, see tokens.ts): every issued
+ * credential keeps its label, role, digest and lifecycle timestamps — never
+ * the plaintext, which exists only in the create response. The static
+ * bootstrap tokens are env/flag configuration and have no record here.
  *
  * The hub is dumb storage: file fields hold their *content* (inlined at
  * import time) and no kind-specific schema validation happens here.
@@ -44,6 +52,8 @@ import { appendFile, chmod, mkdir, open, readFile, rename } from 'node:fs/promis
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { decryptDoc, encryptDoc, loadMasterKey } from './crypto.js'
+import { hashEqual, isTokenActive, MAX_TOKENS } from './tokens.js'
+import type { HubToken, TokenRole } from './tokens.js'
 
 export type TierName = 'ro' | 'rw'
 
@@ -102,6 +112,8 @@ interface HubDoc {
   requests?: Record<string, RegistrationRequest>
   /** Absent in data files written before the knowledge base existed. */
   cases?: Record<string, CaseRecord>
+  /** Absent in data files written before named tokens existed (ADR-0009). */
+  tokens?: Record<string, HubToken>
 }
 
 /** Hard caps on the knowledge base, enforced by the store (it owns the doc). */
@@ -136,13 +148,30 @@ export type CaseInput = Partial<Omit<CaseRecord, 'id' | 'hitCount' | 'createdAt'
 export interface AuditRecord {
   ts: string
   role: 'admin' | 'read'
-  action: 'resolve' | 'put' | 'delete' | 'request' | 'approve' | 'reject' | 'case-put' | 'case-hit' | 'case-delete'
+  action:
+    | 'resolve'
+    | 'put'
+    | 'delete'
+    | 'request'
+    | 'approve'
+    | 'reject'
+    | 'case-put'
+    | 'case-hit'
+    | 'case-delete'
+    | 'token-create'
+    | 'token-revoke'
   kind: string
   name: string
   /** Absent on `case-*` actions (cases have no tiers). */
   tier?: TierName
   /** Case title, recorded on `case-*` actions only. */
   title?: string
+  /**
+   * Label of the named token that performed the action (ADR-0009). Absent for
+   * the static bootstrap tokens — their `role` field already says all there is
+   * to know about them.
+   */
+  actor?: string
 }
 
 export interface HubStoreOptions {
@@ -362,14 +391,104 @@ export class HubStore {
     return true
   }
 
-  /** Append one audit line for a case action (kind fixed to 'case', name = case id). */
-  async auditCase(role: AuditRecord['role'], action: 'case-put' | 'case-hit' | 'case-delete', record: { id: string; title: string }): Promise<void> {
-    await this.appendAudit({ ts: new Date().toISOString(), role, action, kind: 'case', name: record.id, title: record.title })
+  /** The tokens map, created lazily (old data files predate named tokens). */
+  private tokens(): Record<string, HubToken> {
+    return (this.doc.tokens ??= {})
   }
 
-  /** Append one audit line. Field values are never recorded. */
-  async audit(role: AuditRecord['role'], action: AuditRecord['action'], kind: string, name: string, tier: TierName): Promise<void> {
-    await this.appendAudit({ ts: new Date().toISOString(), role, action, kind, name, tier })
+  /** Every issued token record, revoked ones included (callers project to `TokenView`). */
+  listTokens(): HubToken[] {
+    return Object.values(this.tokens())
+  }
+
+  getToken(id: string): HubToken | undefined {
+    return this.tokens()[id]
+  }
+
+  /**
+   * The first *non-revoked* token carrying this label, for uniqueness checks.
+   * A revoked label is reusable — the person it named is gone.
+   */
+  findTokenByName(name: string): HubToken | undefined {
+    return Object.values(this.tokens()).find((t) => t.revokedAt === undefined && t.name === name)
+  }
+
+  /**
+   * The token a presented digest authenticates as, or undefined when no live
+   * token matches. Callers must reject the request either way — a digest that
+   * matches only revoked/expired records is an authentication failure.
+   */
+  findActiveTokenByHash(hash: string, now?: string): HubToken | undefined {
+    return Object.values(this.tokens()).find((t) => isTokenActive(t, now) && hashEqual(t.hash, hash))
+  }
+
+  /** Whether a digest belongs to any record at all (live or not), for error wording only. */
+  hasTokenHash(hash: string): boolean {
+    return Object.values(this.tokens()).some((t) => hashEqual(t.hash, hash))
+  }
+
+  /**
+   * Record one issued token. The caller mints the plaintext and passes only
+   * its digest + prefix; uniqueness of `name` and validation of the parsed
+   * inputs are the caller's job. Throws when the roster is at MAX_TOKENS.
+   */
+  putToken(data: { name: string; role: TokenRole; hash: string; prefix: string; createdBy: string; expiresAt?: string }): HubToken {
+    if (Object.keys(this.tokens()).length >= MAX_TOKENS) {
+      throw new Error(`token roster is full (${MAX_TOKENS} tokens); revoke stale tokens first`)
+    }
+    const token: HubToken = {
+      id: randomUUID(),
+      name: data.name,
+      role: data.role,
+      hash: data.hash,
+      prefix: data.prefix,
+      createdAt: new Date().toISOString(),
+      createdBy: data.createdBy,
+      ...(data.expiresAt !== undefined ? { expiresAt: data.expiresAt } : {}),
+    }
+    this.tokens()[token.id] = token
+    return token
+  }
+
+  /**
+   * Revoke one token. Returns false when the id is unknown or the token is
+   * already revoked — revocation is a one-way, terminal state.
+   */
+  revokeToken(id: string): boolean {
+    const token = this.tokens()[id]
+    if (!token || token.revokedAt !== undefined) return false
+    token.revokedAt = new Date().toISOString()
+    return true
+  }
+
+  /** Append one audit line for a token-roster action (kind fixed to 'token', name = token label). */
+  async auditToken(role: AuditRecord['role'], action: 'token-create' | 'token-revoke', token: { id: string; name: string }, actor?: string): Promise<void> {
+    await this.appendAudit({
+      ts: new Date().toISOString(),
+      role,
+      action,
+      kind: 'token',
+      name: token.name,
+      ...(actor !== undefined ? { actor } : {}),
+    })
+  }
+
+  /** Append one audit line for a case action (kind fixed to 'case', name = case id). */
+  async auditCase(role: AuditRecord['role'], action: 'case-put' | 'case-hit' | 'case-delete', record: { id: string; title: string }, actor?: string): Promise<void> {
+    await this.appendAudit({
+      ts: new Date().toISOString(),
+      role,
+      action,
+      kind: 'case',
+      name: record.id,
+      title: record.title,
+      ...(actor !== undefined ? { actor } : {}),
+    })
+  }
+
+  /** Append one audit line. Field values are never recorded; `actor` names the (named) token used. */
+  async audit(role: AuditRecord['role'], action: AuditRecord['action'], kind: string, name: string, tier: TierName, actor?: string): Promise<void> {
+    await this.appendAudit({ ts: new Date().toISOString(), role, action, kind, name, tier, ...(actor !== undefined ? { actor } : {}) })
   }
 
   private async appendAudit(record: AuditRecord): Promise<void> {
