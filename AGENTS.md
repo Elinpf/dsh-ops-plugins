@@ -86,7 +86,7 @@ The test instance lives at `../../.dsh-target` (profile `dev-target`), which dep
 
 ## Release (changesets, fixed lockstep)
 
-All 18 fixed-group packages share one version number (`fixed` group in `.changeset/config.json`) — the suite ships as "插件集 vX". `ops-access-hub` stays outside the group and versions independently. Flow:
+All 19 fixed-group packages share one version number (`fixed` group in `.changeset/config.json`) — the suite ships as "插件集 vX". `ops-access-hub` stays outside the group and versions independently. Flow:
 
 1. With any user-facing change, run `pnpm changeset` and commit the generated `.changeset/*.md` file.
 2. On push to `master`, `.github/workflows/release.yml` (changesets/action) opens or updates a "chore: version packages" PR.
