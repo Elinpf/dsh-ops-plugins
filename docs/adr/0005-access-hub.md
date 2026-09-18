@@ -1,6 +1,6 @@
 # ADR-0005: access-hub —— 集中凭证平台与 core 双后端
 
-- 状态：已接受（已实现 — hub 服务包与 core HubBackend 均已落地，单测全绿；yaml 来源 125 个原测试未改动通过）
+- 状态：已接受（已实现 — hub 服务包与 core HubBackend 均已落地，单测全绿；yaml 来源 125 个原测试未改动通过）；认证模型 2026-09-17 由 ADR-0009 扩展（双静态 token → 静态 bootstrap + 具名 token）
 - 日期：2026-09-04
 - 背景会话：access-hub 特性规划（票见 `.scratch/access-hub/issues/`）；前身是 ADR-0001 决策 8 的"二期中心服务"
 
@@ -45,6 +45,7 @@ hub 不是 dsh 插件（无 cordis.patch.yml、不进 preset、package.json 无 
 | 秘密集中存储，hub 成单点 | AES-256-GCM 加密落盘（单一 JSON 文档，tmp+rename 原子写）；master key 独立于数据（env `ACCESS_HUB_KEY` 或 0600 key 文件）；**数据文件 + key 都要备份**——这是运维纪律，代码兜不了 |
 | 秘密在传输中（resolve/写入时经 HTTP） | v1 明文 HTTP 只绑 loopback；远程部署必须套 TLS 反代（TLS 终结明确不做，见下）。token 比较用 `crypto.timingSafeEqual` |
 | 认证从零变有 | 双 Bearer token：read（列表 + 解析）与 admin（写删 + 审计）分离，core 默认只配 read token、写入路径才要 admin；未配置的首启生成随机 token 打印一次。401（无/错 token）与 403（read 触管理端点）区分 |
+| 多人共享同一把 key（**2026-09-17 补**） | 具名 token（ADR-0009）：按人签发、只存 sha256 摘要、明文只出现一次、逐条吊销（终态）、可选有效期；审计行记 `actor` 归属到人。静态 token 保留为不可吊销的 break-glass |
 | 物化文件是新的秘密落点 | 0600、原子写、内容相同不重写（不刷 mtime）；元数据读不落盘；目录与 yaml 模式共用 credentialsDir，同一套纪律 |
 | 集中后的操作可见性需求 | append-only JSONL 审计（resolve/put/delete，含 token 角色，**永不记字段值**）；`GET /audit` 仅 admin |
 | token 泄露面 | token 不进日志、不进错误消息；core Config 的 token 字段有 env 回退，可不落配置文件 |
@@ -61,13 +62,13 @@ hub 不是 dsh 插件（无 cordis.patch.yml、不进 preset、package.json 无 
 | 按 tier 拆分来源（ro 本地、rw 上收，ADR-0001 决策 8 原案） | 双来源并存 = 两套读取纪律同时维护；整库切换 + yaml 随时可回退已覆盖 break-glass 需求 |
 | 来源抽象穿透到 provider 缝 | provider 职责是 schema/字段加工；让它知道 HTTP 来源是职责越界，backend 缝在 core 内部即可 |
 | hub 内嵌 TLS | 证书管理是部署题不是代码题；loopback 默认 + 反代文档指引覆盖真实需求 |
-| 多用户 / RBAC | 双 token 已覆盖"消费方只读、管理员可写"的全部现实角色；用户体系是另一个数量级 |
+| 多用户 / RBAC | 当时双 token 已覆盖"消费方只读、管理员可写"的角色；用户体系是另一个数量级。**2026-09-17 修正**（ADR-0009）：多人协作暴露了共享双 token 的痛点（无法按人分发/单独吊销、审计无归属），已加"具名 token"——`name` + admin/read 角色 + 可选有效期，只存摘要、可逐条吊销。仍然不做用户体系与细粒度 RBAC，见 ADR-0009 |
 | 短期凭证签发（hub 动态派生 ro 账号） | 派生留在 agent 侧的 register_access 流程（provider derivationDoc），hub 只做存储 |
 
 ## 明确不做
 
 - TLS 终结（文档指引套反代）
-- 多用户 / RBAC
+- 用户体系 / 细粒度 RBAC（**2026-09-17**：按人分发/吊销/审计归属已由 ADR-0009 的具名 token 覆盖，登录体系与按 kind/tier 授权仍不做）
 - 短期凭证签发
 - HA / 集群（单实例 + 备份）
 
